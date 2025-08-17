@@ -82,10 +82,10 @@ esac
 
 echo
 echo "Starting agent with configuration:"
-echo "$AGENT_BINARY -id $AGENT_ID -relay-url $AGENT_RELAY_URL $ALLOW_PORTS -token $TUNNEL_TOKEN"
+echo "$AGENT_BINARY -id $AGENT_ID -relay-url $AGENT_RELAY_URL $ALLOW_PORTS -token $TUNNEL_TOKEN -insecure"
 echo
 echo "Press Ctrl+C to stop the agent"
 echo "========================================"
 
-# Start agent
-exec $AGENT_BINARY -id "$AGENT_ID" -relay-url "$AGENT_RELAY_URL" $ALLOW_PORTS -token "$TUNNEL_TOKEN"
+# Start agent with insecure flag for self-signed certificates
+exec $AGENT_BINARY -id "$AGENT_ID" -relay-url "$AGENT_RELAY_URL" $ALLOW_PORTS -token "$TUNNEL_TOKEN" -insecure

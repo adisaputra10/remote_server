@@ -22,6 +22,7 @@ type Client struct {
 	listener   net.Listener
 	ctx        context.Context
 	cancel     context.CancelFunc
+	insecure   bool
 }
 
 func NewClient(localAddr, relayURL, agentID, targetAddr, token string) *Client {
@@ -34,7 +35,12 @@ func NewClient(localAddr, relayURL, agentID, targetAddr, token string) *Client {
 		token:      token,
 		ctx:        ctx,
 		cancel:     cancel,
+		insecure:   false,
 	}
+}
+
+func (c *Client) SetInsecure(insecure bool) {
+	c.insecure = insecure
 }
 
 func (c *Client) Run() error {
@@ -63,7 +69,7 @@ func (c *Client) Run() error {
 func (c *Client) connectToRelay() error {
 	log.Printf("Connecting to relay: %s", c.relayURL)
 
-	wsConn, err := transport.DialWS(c.ctx, c.relayURL, c.token)
+	wsConn, err := transport.DialWSInsecure(c.ctx, c.relayURL, c.token, c.insecure)
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}

@@ -172,7 +172,7 @@ sudo make install
 ./start-agent.sh
 
 # Connect from remote machine
-./bin/client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+./bin/client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN -insecure
 ```
 
 #### **Traditional Production Deployment (Linux)**

@@ -129,7 +129,7 @@ start-agent.bat
 ./start-agent.sh
 
 # Or manual command
-./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token your-token
+./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token your-token -insecure
 ```
 
 ## Step 3: Connect from Remote Client
@@ -145,10 +145,10 @@ go build -o client ./cmd/client
 ### 3.2 Create Tunnel
 ```bash
 # SSH tunnel (access laptop's SSH via port 2222)
-./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token your-token
+./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token your-token -insecure
 
 # Web server tunnel (access laptop's web server via port 8080)
-./client -L :8080 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:8080 -token your-token
+./client -L :8080 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:8080 -token your-token -insecure
 ```
 
 ### 3.3 Use the Tunnel

@@ -20,6 +20,7 @@ type Agent struct {
 	session     *transport.MuxSession
 	ctx         context.Context
 	cancel      context.CancelFunc
+	insecure    bool
 }
 
 func NewAgent(id, relayURL, token string, allowedHosts []string) *Agent {
@@ -31,7 +32,12 @@ func NewAgent(id, relayURL, token string, allowedHosts []string) *Agent {
 		allowedHosts: allowedHosts,
 		ctx:          ctx,
 		cancel:       cancel,
+		insecure:     false,
 	}
+}
+
+func (a *Agent) SetInsecure(insecure bool) {
+	a.insecure = insecure
 }
 
 func (a *Agent) Run() error {
@@ -60,7 +66,7 @@ func (a *Agent) Run() error {
 func (a *Agent) connect() error {
 	log.Printf("Connecting to relay: %s", a.relayURL)
 
-	wsConn, err := transport.DialWS(a.ctx, a.relayURL, a.token)
+	wsConn, err := transport.DialWSInsecure(a.ctx, a.relayURL, a.token, a.insecure)
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}

@@ -48,10 +48,26 @@ func (w *WSConn) Close() error {
 
 // DialWS connects to WebSocket server with auth token
 func DialWS(ctx context.Context, url, token string) (*WSConn, error) {
+	return DialWSInsecure(ctx, url, token, false)
+}
+
+// DialWSInsecure connects to WebSocket server with optional TLS skip verification
+func DialWSInsecure(ctx context.Context, url, token string, insecure bool) (*WSConn, error) {
 	opts := &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"X-Tunnel-Token": []string{token},
 		},
+	}
+	
+	// Skip TLS verification if insecure mode is enabled
+	if insecure {
+		opts.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
 	}
 	
 	ws, _, err := websocket.Dial(ctx, url, opts)

@@ -18,13 +18,11 @@ echo "Local port: $LOCAL_WEB_PORT -> Remote port: $TARGET_WEB_PORT"
 
 # On the remote server (where web server is running)
 echo "1. On remote server, run:"
-echo "   ./agent -id $AGENT_ID -relay-url $RELAY_URL/agent -allow 127.0.0.1:$TARGET_WEB_PORT -token $TUNNEL_TOKEN"
+echo "   ./agent -id $AGENT_ID -relay-url $RELAY_URL/agent -allow 127.0.0.1:$TARGET_WEB_PORT -token $TUNNEL_TOKEN -insecure"
 
 # On your local machine
 echo "2. On local machine, run:"
-echo "   ./client -L :$LOCAL_WEB_PORT -relay-url $RELAY_URL/client -agent $AGENT_ID -target 127.0.0.1:$TARGET_WEB_PORT -token $TUNNEL_TOKEN"
-
-echo "3. Access web server:"
+echo "   ./client -L :$LOCAL_WEB_PORT -relay-url $RELAY_URL/client -agent $AGENT_ID -target 127.0.0.1:$TARGET_WEB_PORT -token $TUNNEL_TOKEN -insecure"echo "3. Access web server:"
 echo "   curl http://localhost:$LOCAL_WEB_PORT"
 echo "   # Or open http://localhost:$LOCAL_WEB_PORT in browser"
 

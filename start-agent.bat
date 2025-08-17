@@ -70,12 +70,12 @@ if "%choice%"=="1" (
 
 echo.
 echo Starting agent with configuration:
-echo bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN%
+echo bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure
 echo.
 echo Press Ctrl+C to stop the agent
 echo ========================================
 
-bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN%
+bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure
 
 echo.
 echo Agent stopped.

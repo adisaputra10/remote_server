@@ -58,7 +58,7 @@ start-agent.bat
 ./start-agent.sh
 
 # Or manual command for SSH only
-./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token YOUR_TOKEN
+./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token YOUR_TOKEN -insecure
 ```
 
 #### 5. **Setup Relay Server (sh.adisaputra.online)**
@@ -90,7 +90,7 @@ sudo ./start-relay.sh
 go build -o client ./cmd/client
 
 # Create SSH tunnel (laptop SSH accessible via local port 2222)
-./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN -insecure
 
 # In another terminal, test SSH connection
 ssh -p 2222 your-username@localhost
@@ -103,10 +103,10 @@ ssh -p 2222 your-username@localhost
 #### **SSH Access to Laptop**
 ```bash
 # Agent (laptop)
-./agent -id laptop-ssh -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token TOKEN
+./agent -id laptop-ssh -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token TOKEN -insecure
 
 # Client (remote)
-./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-ssh -target 127.0.0.1:22 -token TOKEN
+./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-ssh -target 127.0.0.1:22 -token TOKEN -insecure
 
 # Connect
 ssh -p 2222 user@localhost
@@ -115,10 +115,10 @@ ssh -p 2222 user@localhost
 #### **Web Development Server Access**
 ```bash
 # Agent (laptop running dev server on port 3000)
-./agent -id laptop-dev -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:3000 -token TOKEN
+./agent -id laptop-dev -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:3000 -token TOKEN -insecure
 
 # Client (remote)
-./client -L :3000 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-dev -target 127.0.0.1:3000 -token TOKEN
+./client -L :3000 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-dev -target 127.0.0.1:3000 -token TOKEN -insecure
 
 # Access
 curl http://localhost:3000
@@ -127,10 +127,10 @@ curl http://localhost:3000
 #### **Database Access**
 ```bash
 # Agent (laptop running PostgreSQL)
-./agent -id laptop-db -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:5432 -token TOKEN
+./agent -id laptop-db -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:5432 -token TOKEN -insecure
 
 # Client (remote)
-./client -L :5432 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-db -target 127.0.0.1:5432 -token TOKEN
+./client -L :5432 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-db -target 127.0.0.1:5432 -token TOKEN -insecure
 
 # Connect
 psql -h localhost -p 5432 -U username dbname

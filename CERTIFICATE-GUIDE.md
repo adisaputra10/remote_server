@@ -53,13 +53,19 @@ Clients need to accept self-signed certificates:
 curl -k https://sh.adisaputra.online:8443/health
 ```
 
-#### WebSocket Clients
+#### Agent connects normally (WebSocket handles self-signed)
 ```bash
-# Agent connects normally (WebSocket handles self-signed)
+# Agent connects with -insecure flag
 ./start-agent.sh
 
-# Client connects normally
-./bin/client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+# Or manually:
+./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token YOUR_TOKEN -insecure
+```
+
+#### Client connects normally
+```bash
+# Client connects with -insecure flag  
+./bin/client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN -insecure
 ```
 
 #### Browsers
