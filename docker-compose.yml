@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  relay:
+    build: .
+    command: ./relay -addr :443 -token demo-token
+    ports:
+      - "8443:443"
+    environment:
+      - TUNNEL_TOKEN=demo-token
+    volumes:
+      - ./certs:/certs
+    
+  agent:
+    build: .
+    command: ./agent -id test-agent -relay-url wss://relay:443/ws/agent -allow 127.0.0.1:22 -token demo-token
+    depends_on:
+      - relay
+    environment:
+      - TUNNEL_TOKEN=demo-token
+      
+  ssh-server:
+    image: linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD=password
+      - USER_NAME=testuser
+    ports:
+      - "2222:2222"
+    restart: unless-stopped
