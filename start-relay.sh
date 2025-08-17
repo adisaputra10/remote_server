@@ -81,8 +81,23 @@ else
 fi
 
 echo
+echo "Compression options:"
+echo "[1] No compression support (faster processing)"
+echo "[2] Enable compression support (better bandwidth utilization)"
+read -p "Select compression option (1-2) [1]: " compression_choice
+compression_choice=${compression_choice:-1}
+
+if [ "$compression_choice" = "2" ]; then
+    COMPRESSION_FLAG="-compress"
+    echo "Selected: Compression support enabled"
+else
+    COMPRESSION_FLAG=""
+    echo "Selected: No compression support"
+fi
+
+echo
 echo "Starting relay server..."
-echo "Command: ./bin/relay -addr $RELAY_ADDR $CERT_ARGS -token $TUNNEL_TOKEN"
+echo "Command: ./bin/relay -addr $RELAY_ADDR $CERT_ARGS -token $TUNNEL_TOKEN $COMPRESSION_FLAG"
 echo
 echo "Endpoints:"
 echo "- Agent: wss://sh.adisaputra.online:8443/ws/agent"
@@ -93,4 +108,4 @@ echo "Press Ctrl+C to stop"
 echo "========================================"
 
 # Start relay server
-./bin/relay -addr "$RELAY_ADDR" $CERT_ARGS -token "$TUNNEL_TOKEN"
+./bin/relay -addr "$RELAY_ADDR" $CERT_ARGS -token "$TUNNEL_TOKEN" $COMPRESSION_FLAG
