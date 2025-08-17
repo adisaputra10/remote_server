@@ -127,9 +127,24 @@ make build-arm64    # Linux ARM64 (Raspberry Pi, etc.)
 ### Examples
 
 See the `examples/` directory for common use cases:
-- `ssh-tunnel.sh` - SSH tunneling setup
-- `web-tunnel.sh` - Web server tunneling  
+- `ssh-tunnel.sh` - SSH tunneling setup (updated for sh.adisaputra.online)
+- `web-tunnel.sh` - Web server tunneling (updated for sh.adisaputra.online)
 - `docker-compose.prod.yml` - Production Docker deployment
+
+#### **Production Setup with Domain (sh.adisaputra.online)**
+```bash
+# Quick setup for domain deployment
+./setup-domain.sh  # Linux/Mac
+setup-domain.bat   # Windows
+
+# Test domain connectivity
+./test-domain.sh   # Linux/Mac
+test-domain.bat    # Windows
+
+# Monitor connection status
+./monitor-connection.sh  # Linux/Mac
+monitor-connection.bat   # Windows
+```
 
 #### **Build from Source**
 ```bash
@@ -144,7 +159,19 @@ make build
 sudo make install
 ```
 
-#### **Production Deployment (Linux)**
+#### **Production Deployment (Linux with Domain)**
+```bash
+# Deploy to sh.adisaputra.online
+./deploy/deploy-domain.sh
+
+# Start agent on laptop
+./start-agent.sh
+
+# Connect from remote machine
+./bin/client -L :2222 -relay-url wss://sh.adisaputra.online/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+```
+
+#### **Traditional Production Deployment (Linux)**
 ```bash
 # Install as systemd services
 sudo ./deploy/install.sh

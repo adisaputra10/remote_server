@@ -5,7 +5,7 @@
 # from your local machine to a remote server through the relay
 
 # Configuration
-RELAY_URL="wss://your-relay-server.com/ws"
+RELAY_URL="wss://sh.adisaputra.online/ws"
 TUNNEL_TOKEN="your-secure-token"
 AGENT_ID="ssh-server"
 LOCAL_SSH_PORT="2222"
@@ -28,5 +28,5 @@ echo "3. Connect via SSH:"
 echo "   ssh -p $LOCAL_SSH_PORT user@localhost"
 
 echo
-echo "Note: Replace 'your-relay-server.com' with your actual relay server address"
+echo "Note: Replace 'sh.adisaputra.online' with your actual relay server address"
 echo "      and 'your-secure-token' with your actual authentication token"

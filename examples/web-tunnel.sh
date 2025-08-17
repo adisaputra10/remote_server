@@ -5,7 +5,7 @@
 # through the tunnel for remote access
 
 # Configuration
-RELAY_URL="wss://your-relay-server.com/ws"
+RELAY_URL="wss://sh.adisaputra.online/ws"
 TUNNEL_TOKEN="your-secure-token"
 AGENT_ID="web-server"
 LOCAL_WEB_PORT="8080"
