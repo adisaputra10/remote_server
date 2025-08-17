@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"remote-tunnel/internal/proto"
+	streamutil "remote-tunnel/internal/stream"
 	"remote-tunnel/internal/transport"
 )
 
@@ -162,11 +163,28 @@ func (a *Agent) handleDial(msg *proto.Control) {
 
 	log.Printf("Connected to target %s, bridging with stream %s", targetAddr, streamID)
 
-	// Bridge connections
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create stream processor with compression if enabled  
+	streamOpts := streamutil.DefaultStreamOptions()
+	streamOpts.EnableCompression = a.compress
+	processor := streamutil.NewStreamProcessor(streamOpts)
 
-	err = transport.Bridge(ctx, stream, conn)
+	// Bridge connections with optional compression
+	errCh := make(chan error, 2)
+
+	// Copy stream -> conn
+	go func() {
+		_, err := processor.CopyWithCompression(conn, stream)
+		errCh <- err
+	}()
+
+	// Copy conn -> stream
+	go func() {
+		_, err := processor.CopyWithCompression(stream, conn)
+		errCh <- err
+	}()
+
+	// Wait for first error or completion
+	err = <-errCh
 	if err != nil {
 		log.Printf("Bridge error: %v", err)
 	}

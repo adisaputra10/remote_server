@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"remote-tunnel/internal/proto"
+	streamutil "remote-tunnel/internal/stream"
 	"remote-tunnel/internal/transport"
 )
 
@@ -327,11 +328,28 @@ func (c *Client) handleConnection(localConn net.Conn) {
 
 	log.Printf("Bridging local connection with relay stream %s", streamID)
 
-	// Bridge connections
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create stream processor with compression if enabled  
+	streamOpts := streamutil.DefaultStreamOptions()
+	streamOpts.EnableCompression = c.compress
+	processor := streamutil.NewStreamProcessor(streamOpts)
 
-	err = transport.Bridge(ctx, localConn, relayStream)
+	// Bridge connections with optional compression
+	errCh := make(chan error, 2)
+
+	// Copy local -> relay
+	go func() {
+		_, err := processor.CopyWithCompression(relayStream, localConn)
+		errCh <- err
+	}()
+
+	// Copy relay -> local
+	go func() {
+		_, err := processor.CopyWithCompression(localConn, relayStream)
+		errCh <- err
+	}()
+
+	// Wait for first error or completion
+	err = <-errCh
 	if err != nil {
 		log.Printf("Bridge error: %v", err)
 	}

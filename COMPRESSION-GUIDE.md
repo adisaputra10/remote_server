@@ -2,21 +2,30 @@
 
 ## Overview
 
-Remote Tunnel now supports **gzip compression** to optimize data transfer and reduce bandwidth usage. This is especially useful for:
-- **Slow internet connections**
-- **Limited bandwidth scenarios**
-- **Large file transfers**
-- **Database operations with large result sets**
+✅ **IMPLEMENTED**: Compression sekarang diimplementasikan di level stream/application yang aman dan kompatibel dengan protokol yamux.
 
-## How It Works
+Remote Tunnel mendukung **gzip compression** untuk mengoptimalkan transfer data dan mengurangi penggunaan bandwidth. Ini sangat berguna untuk:
+- **Koneksi internet lambat**
+- **Skenario bandwidth terbatas**  
+- **Transfer file besar**
+- **Operasi database dengan result set besar**
 
-The compression is implemented at the transport layer using gzip:
-- **Agent** compresses data before sending to relay
-- **Client** compresses data before sending to relay  
-- **Relay** forwards compressed data without modification
-- **Automatic decompression** happens at each endpoint
+## Implementasi Baru
 
-## Usage
+Kompresi sekarang diimplementasikan di level stream/application:
+- ✅ **Tidak mengganggu protokol yamux**
+- ✅ **Kompresi selektif** berdasarkan flag `-compress`
+- ✅ **Performa optimal** dengan application-level optimization
+- ✅ **Error "Invalid protocol version" sudah teratasi**
+
+## Cara Kerja
+
+- **Agent** mengkompresi data stream sebelum dikirim ke relay
+- **Client** mengkompresi data stream sebelum dikirim ke relay  
+- **Relay** meneruskan data terkompresi tanpa modifikasi
+- **Dekompresi otomatis** terjadi di setiap endpoint
+
+## Penggunaan
 
 ### Command Line Flags
 

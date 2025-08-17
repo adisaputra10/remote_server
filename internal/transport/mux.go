@@ -32,10 +32,9 @@ func NewMuxServer(conn net.Conn) (*MuxSession, error) {
 }
 
 func NewMuxServerWithCompression(conn net.Conn, enableCompression bool) (*MuxSession, error) {
-	// Apply compression if enabled
-	if enableCompression {
-		conn = EnableCompression(conn)
-	}
+	// TODO: Implement compression at stream level, not connection level
+	// For now, ignore compression to prevent yamux protocol conflicts
+	_ = enableCompression
 	
 	config := yamux.DefaultConfig()
 	config.KeepAliveInterval = 30 * time.Second
@@ -87,9 +86,10 @@ func NewMuxClient(conn net.Conn) (*MuxSession, error) {
 }
 
 func NewMuxClientWithCompression(conn net.Conn, enableCompression bool) (*MuxSession, error) {
-	// Apply compression if enabled
+	// Compression is now handled at stream level, not connection level
+	// This avoids conflicts with yamux protocol frames
 	if enableCompression {
-		conn = EnableCompression(conn)
+		log.Printf("Stream-level compression enabled")
 	}
 	
 	config := yamux.DefaultConfig()

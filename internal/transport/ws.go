@@ -46,11 +46,9 @@ func NewWSConnWithCompression(ctx context.Context, ws *websocket.Conn, enableCom
 		compressed: enableCompression,
 	}
 	
-	if enableCompression {
-		wsConn.Conn = EnableCompression(netConn)
-	} else {
-		wsConn.Conn = netConn
-	}
+	// TODO: Implement compression at application level, not transport level
+	// For now, ignore compression to prevent protocol conflicts
+	wsConn.Conn = netConn
 	
 	return wsConn
 }
