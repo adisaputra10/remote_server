@@ -14,7 +14,15 @@ echo "========================================"
 # Load configuration
 if [ -f ".env.production" ]; then
     echo "Loading production configuration..."
-    export $(grep -v '^#' .env.production | xargs)
+    set -a  # automatically export all variables
+    source .env.production
+    set +a  # stop auto-export
+    
+    # Ensure RELAY_ADDR is set
+    if [ -z "$RELAY_ADDR" ]; then
+        export RELAY_ADDR=":8443"
+        echo "Warning: RELAY_ADDR not set, using default :8443"
+    fi
 else
     echo "Warning: .env.production not found, using defaults"
     export TUNNEL_TOKEN="change-this-token"
