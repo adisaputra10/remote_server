@@ -17,6 +17,7 @@ func main() {
 		agentID   = flag.String("agent", "", "Target agent ID")
 		target    = flag.String("target", "", "Target address (e.g., 127.0.0.1:22)")
 		token     = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
+		insecure  = flag.Bool("insecure", false, "Skip TLS certificate verification (for self-signed certificates)")
 	)
 	flag.Parse()
 
@@ -47,9 +48,15 @@ func main() {
 	log.Printf("Relay URL: %s", *relayURL)
 	log.Printf("Agent ID: %s", *agentID)
 	log.Printf("Target: %s", *target)
+	if *insecure {
+		log.Printf("TLS certificate verification disabled (insecure mode)")
+	}
 
 	// Create client
 	client := tunnel.NewClient(*localAddr, *relayURL, *agentID, *target, *token)
+	if *insecure {
+		client.SetInsecure(true)
+	}
 
 	// Handle graceful shutdown
 	go func() {

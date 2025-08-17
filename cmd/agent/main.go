@@ -24,10 +24,11 @@ func (i *arrayFlags) Set(value string) error {
 
 func main() {
 	var (
-		id       = flag.String("id", "", "Agent ID")
-		relayURL = flag.String("relay-url", "", "Relay WebSocket URL (e.g., wss://relay.example.com/ws/agent)")
-		token    = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
-		allowed  arrayFlags
+		id            = flag.String("id", "", "Agent ID")
+		relayURL      = flag.String("relay-url", "", "Relay WebSocket URL (e.g., wss://relay.example.com/ws/agent)")
+		token         = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
+		insecure      = flag.Bool("insecure", false, "Skip TLS certificate verification (for self-signed certificates)")
+		allowed       arrayFlags
 	)
 	flag.Var(&allowed, "allow", "Allowed target addresses (can be specified multiple times)")
 	flag.Parse()
@@ -56,10 +57,16 @@ func main() {
 
 	log.Printf("Starting agent with ID: %s", *id)
 	log.Printf("Relay URL: %s", *relayURL)
-	log.Printf("Allowed targets: %v", allowed)
+	log.Printf("Allowed targets: %v", []string(allowed))
+	if *insecure {
+		log.Printf("TLS certificate verification disabled (insecure mode)")
+	}
 
 	// Create agent
 	agent := tunnel.NewAgent(*id, *relayURL, *token, []string(allowed))
+	if *insecure {
+		agent.SetInsecure(true)
+	}
 
 	// Handle graceful shutdown
 	go func() {
