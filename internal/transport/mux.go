@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -30,17 +31,40 @@ func NewMuxServer(conn net.Conn) (*MuxSession, error) {
 	config := yamux.DefaultConfig()
 	config.KeepAliveInterval = 30 * time.Second
 	config.ConnectionWriteTimeout = 10 * time.Second
+	config.EnableKeepAlive = true
+	config.MaxStreamWindowSize = 256 * 1024
+	config.StreamOpenTimeout = 10 * time.Second
+	config.StreamCloseTimeout = 5 * time.Second
 	
 	session, err := yamux.Server(conn, config)
 	if err != nil {
 		return nil, fmt.Errorf("yamux server: %w", err)
 	}
 	
-	// Accept control stream
-	controlConn, err := session.Accept()
-	if err != nil {
+	// Accept control stream with timeout
+	acceptTimeout := time.After(10 * time.Second)
+	acceptChan := make(chan net.Conn, 1)
+	errChan := make(chan error, 1)
+	
+	go func() {
+		conn, err := session.Accept()
+		if err != nil {
+			errChan <- err
+		} else {
+			acceptChan <- conn
+		}
+	}()
+	
+	var controlConn net.Conn
+	select {
+	case controlConn = <-acceptChan:
+		// Success
+	case err := <-errChan:
 		session.Close()
 		return nil, fmt.Errorf("accept control stream: %w", err)
+	case <-acceptTimeout:
+		session.Close()
+		return nil, fmt.Errorf("timeout accepting control stream")
 	}
 	
 	return &MuxSession{
@@ -53,17 +77,33 @@ func NewMuxClient(conn net.Conn) (*MuxSession, error) {
 	config := yamux.DefaultConfig()
 	config.KeepAliveInterval = 30 * time.Second
 	config.ConnectionWriteTimeout = 10 * time.Second
+	config.EnableKeepAlive = true
+	config.MaxStreamWindowSize = 256 * 1024
+	config.StreamOpenTimeout = 10 * time.Second
+	config.StreamCloseTimeout = 5 * time.Second
 	
 	session, err := yamux.Client(conn, config)
 	if err != nil {
 		return nil, fmt.Errorf("yamux client: %w", err)
 	}
 	
-	// Open control stream
-	controlConn, err := session.Open()
+	// Add a small delay to avoid race conditions
+	time.Sleep(100 * time.Millisecond)
+	
+	// Open control stream with retry
+	var controlConn net.Conn
+	for i := 0; i < 3; i++ {
+		controlConn, err = session.Open()
+		if err == nil {
+			break
+		}
+		log.Printf("Failed to open control stream (attempt %d/3): %v", i+1, err)
+		time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+	}
+	
 	if err != nil {
 		session.Close()
-		return nil, fmt.Errorf("open control stream: %w", err)
+		return nil, fmt.Errorf("open control stream after retries: %w", err)
 	}
 	
 	return &MuxSession{

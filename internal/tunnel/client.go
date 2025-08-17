@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,11 @@ type Client struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	insecure   bool
+
+	controlMutex   sync.RWMutex
+	connected      bool
+	responses      map[string]chan *proto.Control
+	responsesMutex sync.RWMutex
 }
 
 func NewClient(localAddr, relayURL, agentID, targetAddr, token string) *Client {
@@ -36,6 +42,7 @@ func NewClient(localAddr, relayURL, agentID, targetAddr, token string) *Client {
 		ctx:        ctx,
 		cancel:     cancel,
 		insecure:   false,
+		responses:  make(map[string]chan *proto.Control),
 	}
 }
 
@@ -44,15 +51,8 @@ func (c *Client) SetInsecure(insecure bool) {
 }
 
 func (c *Client) Run() error {
-	// Connect to relay
-	err := c.connectToRelay()
-	if err != nil {
-		return fmt.Errorf("connect to relay: %w", err)
-	}
-	defer c.session.Close()
-
 	// Start local listener
-	err = c.startListener()
+	err := c.startListener()
 	if err != nil {
 		return fmt.Errorf("start listener: %w", err)
 	}
@@ -61,13 +61,27 @@ func (c *Client) Run() error {
 	log.Printf("Client listening on %s, forwarding to agent %s target %s", 
 		c.localAddr, c.agentID, c.targetAddr)
 
+	// Start connection and message handling
+	go c.connectionLoop()
+
 	// Wait for context cancellation
 	<-c.ctx.Done()
 	return c.ctx.Err()
 }
 
 func (c *Client) connectToRelay() error {
-	log.Printf("Connecting to relay: %s", c.relayURL)
+	log.Printf("Connecting to relay: %s (goroutine starting)", c.relayURL)
+
+	// Close any existing session first
+	c.controlMutex.Lock()
+	if c.session != nil {
+		c.session.Close()
+		c.session = nil
+	}
+	c.controlMutex.Unlock()
+
+	// Add a small delay to ensure cleanup
+	time.Sleep(200 * time.Millisecond)
 
 	wsConn, err := transport.DialWSInsecure(c.ctx, c.relayURL, c.token, c.insecure)
 	if err != nil {
@@ -75,6 +89,9 @@ func (c *Client) connectToRelay() error {
 	}
 
 	wsConn.StartPingPong()
+
+	// Add delay before creating mux session
+	time.Sleep(100 * time.Millisecond)
 
 	session, err := transport.NewMuxClient(wsConn)
 	if err != nil {
@@ -84,8 +101,111 @@ func (c *Client) connectToRelay() error {
 
 	c.session = session
 
-	log.Printf("Connected to relay")
+	log.Printf("Connected to relay (goroutine completed)")
 	return nil
+}
+
+func (c *Client) connectionLoop() {
+	log.Printf("Starting connection loop")
+	backoff := 1 * time.Second
+	maxBackoff := 30 * time.Second
+	
+	for {
+		select {
+		case <-c.ctx.Done():
+			log.Printf("Connection loop exiting due to context cancellation")
+			return
+		default:
+		}
+
+		// Connect to relay
+		log.Printf("Attempting connection to relay...")
+		err := c.connectToRelay()
+		if err != nil {
+			log.Printf("Failed to connect to relay: %v", err)
+			log.Printf("Retrying in %v...", backoff)
+			time.Sleep(backoff)
+			
+			// Exponential backoff
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+
+		// Reset backoff on successful connection
+		backoff = 1 * time.Second
+
+		c.controlMutex.Lock()
+		c.connected = true
+		session := c.session
+		c.controlMutex.Unlock()
+
+		log.Printf("Control message handler started")
+
+		// Handle control messages until connection fails
+		c.handleControlMessages(session)
+
+		// Connection failed, mark as disconnected
+		c.markDisconnected()
+		log.Printf("Disconnected from relay, will retry...")
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (c *Client) handleControlMessages(session *transport.MuxSession) {
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		default:
+		}
+
+		msg, err := session.ReceiveControl()
+		if err != nil {
+			log.Printf("Control message receive error: %v", err)
+			return
+		}
+
+		// Handle control messages
+		switch msg.Type {
+		case proto.MsgPing:
+			session.SendControl(&proto.Control{Type: proto.MsgPong})
+		case proto.MsgPong:
+			// Ignore pong messages
+		case proto.MsgAccept, proto.MsgRefuse:
+			// Route to waiting handler
+			c.responsesMutex.RLock()
+			respChan, exists := c.responses[msg.StreamID]
+			c.responsesMutex.RUnlock()
+			
+			if exists {
+				select {
+				case respChan <- msg:
+				default:
+					log.Printf("Response channel full for stream %s", msg.StreamID)
+				}
+			} else {
+				log.Printf("No waiting handler for stream %s", msg.StreamID)
+			}
+		default:
+			log.Printf("Unknown control message type: %s", msg.Type)
+		}
+	}
+}
+
+func (c *Client) markDisconnected() {
+	c.controlMutex.Lock()
+	defer c.controlMutex.Unlock()
+	
+	if c.connected {
+		c.connected = false
+		if c.session != nil {
+			c.session.Close()
+			c.session = nil
+		}
+	}
 }
 
 func (c *Client) startListener() error {
@@ -123,8 +243,41 @@ func (c *Client) handleConnection(localConn net.Conn) {
 	streamID := uuid.New().String()
 	log.Printf("New connection, stream ID: %s", streamID)
 
+	// Wait for connection to be established
+	var session *transport.MuxSession
+	for i := 0; i < 10; i++ { // Wait up to 10 seconds
+		c.controlMutex.RLock()
+		if c.connected && c.session != nil {
+			session = c.session
+			c.controlMutex.RUnlock()
+			break
+		}
+		c.controlMutex.RUnlock()
+		
+		log.Printf("Waiting for relay connection... (%d/10)", i+1)
+		time.Sleep(1 * time.Second)
+	}
+
+	if session == nil {
+		log.Printf("No connection to relay available, dropping connection")
+		return
+	}
+
+	// Create response channel
+	respChan := make(chan *proto.Control, 1)
+	c.responsesMutex.Lock()
+	c.responses[streamID] = respChan
+	c.responsesMutex.Unlock()
+
+	defer func() {
+		c.responsesMutex.Lock()
+		delete(c.responses, streamID)
+		c.responsesMutex.Unlock()
+		close(respChan)
+	}()
+
 	// Send DIAL request
-	err := c.session.SendControl(&proto.Control{
+	err := session.SendControl(&proto.Control{
 		Type:       proto.MsgDial,
 		AgentID:    c.agentID,
 		StreamID:   streamID,
@@ -136,9 +289,13 @@ func (c *Client) handleConnection(localConn net.Conn) {
 	}
 
 	// Wait for ACCEPT/REFUSE
-	response, err := c.waitForResponse(streamID)
-	if err != nil {
-		log.Printf("Failed to get response: %v", err)
+	var response *proto.Control
+	select {
+	case response = <-respChan:
+	case <-time.After(30 * time.Second):
+		log.Printf("Timeout waiting for response for stream %s", streamID)
+		return
+	case <-c.ctx.Done():
 		return
 	}
 
@@ -155,7 +312,7 @@ func (c *Client) handleConnection(localConn net.Conn) {
 	log.Printf("Dial accepted for stream %s", streamID)
 
 	// Accept stream from relay
-	relayStream, err := c.session.AcceptStream()
+	relayStream, err := session.AcceptStream()
 	if err != nil {
 		log.Printf("Failed to accept relay stream: %v", err)
 		return
@@ -174,42 +331,6 @@ func (c *Client) handleConnection(localConn net.Conn) {
 	}
 
 	log.Printf("Connection closed for stream %s", streamID)
-}
-
-func (c *Client) waitForResponse(streamID string) (*proto.Control, error) {
-	timeout := time.After(30 * time.Second)
-	
-	for {
-		select {
-		case <-timeout:
-			return nil, fmt.Errorf("timeout waiting for response")
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		default:
-		}
-
-		msg, err := c.session.ReceiveControl()
-		if err != nil {
-			return nil, fmt.Errorf("receive control: %w", err)
-		}
-
-		// Handle keep-alive messages
-		switch msg.Type {
-		case proto.MsgPing:
-			c.session.SendControl(&proto.Control{Type: proto.MsgPong})
-			continue
-		case proto.MsgPong:
-			continue
-		}
-
-		// Check if this is the response we're waiting for
-		if msg.StreamID == streamID {
-			return msg, nil
-		}
-
-		// Handle other messages
-		log.Printf("Received message for different stream: %s (waiting for %s)", msg.StreamID, streamID)
-	}
 }
 
 func (c *Client) Close() error {

@@ -60,12 +60,12 @@ echo.
 echo Starting client tunnel:
 echo Local port %LOCAL_PORT% -> Agent %target_agent% -> Target %TARGET_ADDR%
 echo.
-echo Command: bin\client.exe -L :%LOCAL_PORT% -relay-url %CLIENT_RELAY_URL% -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
+echo Command: bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
 echo.
 echo Press Ctrl+C to stop
 echo ========================================
 
-bin\client.exe -L :%LOCAL_PORT% -relay-url %CLIENT_RELAY_URL% -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
+bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
 
 echo.
 echo Client stopped.
