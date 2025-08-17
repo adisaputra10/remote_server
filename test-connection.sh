@@ -8,7 +8,7 @@ echo "Remote Tunnel - Connection Test"
 echo "========================================"
 
 RELAY_HOST="sh.adisaputra.online"
-RELAY_PORT="443"
+RELAY_PORT="8443"
 
 echo "Testing connection to relay server..."
 echo "Host: $RELAY_HOST"

@@ -6,7 +6,7 @@ echo "Remote Tunnel - Connection Monitor"
 echo "========================================"
 
 DOMAIN="sh.adisaputra.online"
-RELAY_URL="wss://$DOMAIN/ws"
+RELAY_URL="wss://$DOMAIN:8443/ws"
 
 echo "Monitoring connection to $DOMAIN..."
 echo "Press Ctrl+C to stop monitoring"
@@ -23,14 +23,14 @@ while true; do
     fi
     
     # Test HTTPS port
-    if timeout 5 bash -c "</dev/tcp/$DOMAIN/443" 2>/dev/null; then
-        echo "✅ [$(date '+%H:%M:%S')] Port 443 is accessible"
+    if timeout 5 bash -c "</dev/tcp/$DOMAIN/8443" 2>/dev/null; then
+        echo "✅ [$(date '+%H:%M:%S')] Port 8443 is accessible"
     else
-        echo "❌ [$(date '+%H:%M:%S')] Port 443 is not accessible"
+        echo "❌ [$(date '+%H:%M:%S')] Port 8443 is not accessible"
     fi
     
     # Test relay health endpoint
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN/health" --connect-timeout 5 2>/dev/null)
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN:8443/health" --connect-timeout 5 2>/dev/null)
     if [ "$HTTP_CODE" = "200" ]; then
         echo "✅ [$(date '+%H:%M:%S')] Relay server is healthy"
     else

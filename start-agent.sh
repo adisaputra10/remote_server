@@ -19,7 +19,7 @@ else
     echo "Warning: .env.production not found, using defaults"
     export TUNNEL_TOKEN="change-this-token"
     export AGENT_ID="laptop-agent"
-    export AGENT_RELAY_URL="wss://sh.adisaputra.online/ws/agent"
+    export AGENT_RELAY_URL="wss://sh.adisaputra.online:8443/ws/agent"
 fi
 
 echo

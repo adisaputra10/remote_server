@@ -6,7 +6,7 @@ echo Remote Tunnel - Domain Connection Test
 echo ========================================
 
 set DOMAIN=sh.adisaputra.online
-set RELAY_PORT=443
+set RELAY_PORT=8443
 
 echo Testing connection to relay server...
 echo Domain: %DOMAIN%
@@ -38,11 +38,11 @@ powershell -Command "try { $result = Test-NetConnection -ComputerName '%DOMAIN%'
 
 echo.
 echo [4/5] TLS Certificate Test...
-powershell -Command "try { $request = [System.Net.WebRequest]::Create('https://%DOMAIN%/'); $request.Timeout = 10000; $response = $request.GetResponse(); Write-Host '✅ PASS: TLS connection successful'; $response.Close() } catch { Write-Host '❌ FAIL: TLS connection failed -' $_.Exception.Message }"
+powershell -Command "try { $request = [System.Net.WebRequest]::Create('https://%DOMAIN%:%RELAY_PORT%/'); $request.Timeout = 10000; $response = $request.GetResponse(); Write-Host '✅ PASS: TLS connection successful'; $response.Close() } catch { Write-Host '❌ FAIL: TLS connection failed -' $_.Exception.Message }"
 
 echo.
 echo [5/5] Relay Server Health Test...
-powershell -Command "try { $response = Invoke-WebRequest -Uri 'https://%DOMAIN%/health' -TimeoutSec 10; if($response.StatusCode -eq 200) { Write-Host '✅ PASS: Relay server health endpoint responding' } else { Write-Host '❌ FAIL: Relay server health check failed' } } catch { Write-Host '❌ FAIL: Cannot reach relay server health endpoint -' $_.Exception.Message }"
+powershell -Command "try { $response = Invoke-WebRequest -Uri 'https://%DOMAIN%:%RELAY_PORT%/health' -TimeoutSec 10; if($response.StatusCode -eq 200) { Write-Host '✅ PASS: Relay server health endpoint responding' } else { Write-Host '❌ FAIL: Relay server health check failed' } } catch { Write-Host '❌ FAIL: Cannot reach relay server health endpoint -' $_.Exception.Message }"
 
 echo.
 echo [Bonus] Agent Binary Check...
@@ -66,7 +66,7 @@ echo 2. Start agent on this laptop:
 echo    start-agent.bat
 echo.
 echo 3. From remote machine, create client connection:
-echo    bin\client.exe -L :2222 -relay-url wss://%DOMAIN%/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+echo    bin\client.exe -L :2222 -relay-url wss://%DOMAIN%:%RELAY_PORT%/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
 echo.
 echo 4. Test SSH connection:
 echo    ssh -p 2222 user@localhost

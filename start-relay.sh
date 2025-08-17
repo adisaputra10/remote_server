@@ -8,7 +8,7 @@ echo "========================================"
 echo "Remote Tunnel - Relay Server Setup"
 echo "========================================"
 echo "Server Domain: sh.adisaputra.online"
-echo "Listening on: Port 443 (HTTPS/WSS)"
+echo "Listening on: Port 8443 (HTTPS/WSS)"
 echo "========================================"
 
 # Load configuration
@@ -18,7 +18,7 @@ if [ -f ".env.production" ]; then
 else
     echo "Warning: .env.production not found, using defaults"
     export TUNNEL_TOKEN="change-this-token"
-    export RELAY_ADDR=":443"
+    export RELAY_ADDR=":8443"
 fi
 
 echo
@@ -28,9 +28,9 @@ echo "- Listen Address: $RELAY_ADDR"
 echo "- Certificate: ${RELAY_CERT_FILE:-auto-generated}"
 echo
 
-# Check if running as root (needed for port 443)
+# Check if running as root (needed for port 8443)
 if [ "$EUID" -ne 0 ]; then
-    echo "Warning: Not running as root. Port 443 may not be accessible."
+    echo "Warning: Not running as root. Port 8443 may not be accessible."
     echo "Consider running with sudo or use a different port."
 fi
 
@@ -61,9 +61,9 @@ echo "Starting relay server..."
 echo "Command: ./bin/relay -addr $RELAY_ADDR $CERT_ARGS -token $TUNNEL_TOKEN"
 echo
 echo "Endpoints:"
-echo "- Agent: wss://sh.adisaputra.online/ws/agent"
-echo "- Client: wss://sh.adisaputra.online/ws/client"
-echo "- Health: https://sh.adisaputra.online/health"
+echo "- Agent: wss://sh.adisaputra.online:8443/ws/agent"
+echo "- Client: wss://sh.adisaputra.online:8443/ws/client"
+echo "- Health: https://sh.adisaputra.online:8443/health"
 echo
 echo "Press Ctrl+C to stop"
 echo "========================================"

@@ -6,7 +6,7 @@ echo Remote Tunnel - Connection Monitor
 echo ========================================
 
 set DOMAIN=sh.adisaputra.online
-set RELAY_URL=wss://%DOMAIN%/ws
+set RELAY_URL=wss://%DOMAIN%:8443/ws
 
 echo Monitoring connection to %DOMAIN%...
 echo Press Ctrl+C to stop monitoring
@@ -23,10 +23,10 @@ if errorlevel 1 (
 )
 
 REM Test HTTPS port
-powershell -Command "try { $result = Test-NetConnection -ComputerName '%DOMAIN%' -Port 443 -InformationLevel Quiet; if($result) { Write-Host '✅ [%time%] Port 443 is accessible' } else { Write-Host '❌ [%time%] Port 443 is not accessible' } } catch { Write-Host '❌ [%time%] Cannot test port 443' }" 2>nul
+powershell -Command "try { $result = Test-NetConnection -ComputerName '%DOMAIN%' -Port 8443 -InformationLevel Quiet; if($result) { Write-Host '✅ [%time%] Port 8443 is accessible' } else { Write-Host '❌ [%time%] Port 8443 is not accessible' } } catch { Write-Host '❌ [%time%] Cannot test port 8443' }" 2>nul
 
 REM Test relay health endpoint
-powershell -Command "try { $response = Invoke-WebRequest -Uri 'https://%DOMAIN%/health' -TimeoutSec 5; if($response.StatusCode -eq 200) { Write-Host '✅ [%time%] Relay server is healthy' } else { Write-Host '❌ [%time%] Relay server health check failed' } } catch { Write-Host '❌ [%time%] Relay server is not responding' }" 2>nul
+powershell -Command "try { $response = Invoke-WebRequest -Uri 'https://%DOMAIN%:8443/health' -TimeoutSec 5; if($response.StatusCode -eq 200) { Write-Host '✅ [%time%] Relay server is healthy' } else { Write-Host '❌ [%time%] Relay server health check failed' } } catch { Write-Host '❌ [%time%] Relay server is not responding' }" 2>nul
 
 REM Check if agent process is running
 tasklist /FI "IMAGENAME eq agent.exe" 2>nul | find /I "agent.exe" >nul

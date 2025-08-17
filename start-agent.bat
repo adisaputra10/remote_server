@@ -21,7 +21,7 @@ if exist .env.production (
     echo Warning: .env.production not found, using defaults
     set TUNNEL_TOKEN=change-this-token
     set AGENT_ID=laptop-agent
-    set AGENT_RELAY_URL=wss://sh.adisaputra.online/ws/agent
+    set AGENT_RELAY_URL=wss://sh.adisaputra.online:8443/ws/agent
 )
 
 echo.

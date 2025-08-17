@@ -6,7 +6,7 @@ echo Remote Tunnel - Connection Test
 echo ========================================
 
 set RELAY_HOST=sh.adisaputra.online
-set RELAY_PORT=443
+set RELAY_PORT=8443
 
 echo Testing connection to relay server...
 echo Host: %RELAY_HOST%

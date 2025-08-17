@@ -6,7 +6,7 @@ echo "Remote Tunnel - Domain Connection Test"
 echo "========================================"
 
 DOMAIN="sh.adisaputra.online"
-RELAY_PORT="443"
+RELAY_PORT="8443"
 
 echo "Testing connection to relay server..."
 echo "Domain: $DOMAIN"
@@ -48,7 +48,7 @@ fi
 
 echo
 echo "[5/5] Relay Server Health Test..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN/health" --connect-timeout 10 2>/dev/null)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN:$RELAY_PORT/health" --connect-timeout 10 2>/dev/null)
 if [ "$HTTP_CODE" = "200" ]; then
     echo "✅ PASS: Relay server health endpoint responding"
 else
@@ -77,7 +77,7 @@ echo "2. Start agent on this laptop:"
 echo "   ./start-agent.sh"
 echo
 echo "3. From remote machine, create client connection:"
-echo "   ./bin/client -L :2222 -relay-url wss://$DOMAIN/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN"
+echo "   ./bin/client -L :2222 -relay-url wss://$DOMAIN:$RELAY_PORT/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN"
 echo
 echo "4. Test SSH connection:"
 echo "   ssh -p 2222 user@localhost"
