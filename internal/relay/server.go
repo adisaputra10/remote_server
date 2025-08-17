@@ -126,9 +126,9 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	wsConn.StartPingPong()
 
-	session, err := transport.NewMuxClient(wsConn)
+	session, err := transport.NewMuxServer(wsConn)
 	if err != nil {
-		log.Printf("Client mux client failed: %v", err)
+		log.Printf("Client mux server failed: %v", err)
 		return
 	}
 	defer session.Close()
