@@ -1,31 +1,27 @@
 # Compression Guide
 
-## Overview
+## Status Implementasi
 
-✅ **IMPLEMENTED**: Compression sekarang diimplementasikan di level stream/application yang aman dan kompatibel dengan protokol yamux.
+✅ **IMPLEMENTED**: Compression sekarang diimplementasikan dengan arsitektur yang aman:
 
-Remote Tunnel mendukung **gzip compression** untuk mengoptimalkan transfer data dan mengurangi penggunaan bandwidth. Ini sangat berguna untuk:
-- **Koneksi internet lambat**
-- **Skenario bandwidth terbatas**  
-- **Transfer file besar**
-- **Operasi database dengan result set besar**
-
-## Implementasi Baru
-
-Kompresi sekarang diimplementasikan di level stream/application:
-- ✅ **Tidak mengganggu protokol yamux**
-- ✅ **Kompresi selektif** berdasarkan flag `-compress`
-- ✅ **Performa optimal** dengan application-level optimization
-- ✅ **Error "Invalid protocol version" sudah teratasi**
+- ✅ **Stream-level compression**: Compression diterapkan di level aplikasi
+- ✅ **Yamux compatibility**: Tidak mengganggu protokol yamux  
+- ✅ **Flag support**: Semua binaries mendukung flag `-compress`
+- ✅ **Script support**: Semua startup scripts mendukung interactive compression options
+- ✅ **Error resolution**: "Invalid protocol version" sudah teratasi
 
 ## Cara Kerja
 
-- **Agent** mengkompresi data stream sebelum dikirim ke relay
-- **Client** mengkompresi data stream sebelum dikirim ke relay  
-- **Relay** meneruskan data terkompresi tanpa modifikasi
-- **Dekompresi otomatis** terjadi di setiap endpoint
+Compression sekarang menggunakan arsitektur yang lebih aman:
 
-## Penggunaan
+1. **Transport Layer**: Tidak ada compression untuk menghindari konflik dengan yamux
+2. **Application Layer**: Compression diterapkan pada data stream saja 
+3. **Protocol Safety**: Yamux protocol frames tidak terkompresi
+4. **Selective Compression**: Bisa diaktifkan/dinonaktifkan per connection
+
+## Penggunaan Script
+
+Semua startup scripts sudah mendukung compression:
 
 ### Command Line Flags
 
