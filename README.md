@@ -133,9 +133,13 @@ See the `examples/` directory for common use cases:
 
 #### **Production Setup with Domain (sh.adisaputra.online)**
 ```bash
-# Quick setup for domain deployment
+# Quick setup for domain deployment (includes self-signed certificates)
 ./setup-domain.sh  # Linux/Mac
 setup-domain.bat   # Windows
+
+# Generate certificates manually
+./generate-certs.sh  # Linux/Mac  
+generate-certs.bat   # Windows
 
 # Test domain connectivity
 ./test-domain.sh   # Linux/Mac
@@ -168,7 +172,7 @@ sudo make install
 ./start-agent.sh
 
 # Connect from remote machine
-./bin/client -L :2222 -relay-url wss://sh.adisaputra.online/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+./bin/client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
 ```
 
 #### **Traditional Production Deployment (Linux)**

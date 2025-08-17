@@ -5,7 +5,7 @@
 # from your local machine to a remote server through the relay
 
 # Configuration
-RELAY_URL="wss://sh.adisaputra.online/ws"
+RELAY_URL="wss://sh.adisaputra.online:8443/ws"
 TUNNEL_TOKEN="your-secure-token"
 AGENT_ID="ssh-server"
 LOCAL_SSH_PORT="2222"

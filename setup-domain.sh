@@ -32,8 +32,8 @@ if [ ! -f ".env.production" ]; then
     echo "Creating .env.production..."
     cat > .env.production << EOF
 RELAY_HOST=$DOMAIN
-RELAY_PORT=443
-RELAY_URL=wss://$DOMAIN/ws
+RELAY_PORT=8443
+RELAY_URL=wss://$DOMAIN:8443/ws
 TLS_ENABLED=true
 CERT_FILE=certs/server.crt
 KEY_FILE=certs/server.key
@@ -49,6 +49,21 @@ fi
 echo
 echo "[5/6] Setting up certificates directory..."
 mkdir -p certs
+if [ ! -f "certs/server.crt" ] || [ ! -f "certs/server.key" ]; then
+    echo "Generating self-signed certificates..."
+    if [ -f "generate-certs.sh" ]; then
+        ./generate-certs.sh
+    else
+        echo "Manual certificate generation..."
+        openssl req -x509 -newkey rsa:2048 -keyout certs/server.key -out certs/server.crt -days 365 -nodes \
+            -subj "/C=ID/ST=Jakarta/L=Jakarta/O=RemoteTunnel/OU=IT/CN=$DOMAIN"
+        chmod 600 certs/server.key
+        chmod 644 certs/server.crt
+    fi
+    echo "✅ Self-signed certificates generated"
+else
+    echo "✅ Certificates already exist"
+fi
 echo "✅ Certificates directory ready"
 
 echo
@@ -59,7 +74,7 @@ mkdir -p config
 cat > config/agent.yaml << EOF
 # Agent Configuration for $DOMAIN
 agent_id: "laptop-agent"
-relay_url: "wss://$DOMAIN/ws/agent"
+relay_url: "wss://$DOMAIN:8443/ws/agent"
 token: "your-secure-token-here"
 log_level: "info"
 services:
@@ -87,7 +102,7 @@ echo "   deploy/deploy-domain.sh (on server)"
 echo "4. Start agent on this laptop:"
 echo "   ./start-agent.sh"
 echo "5. Connect from remote machine:"
-echo "   ./bin/client -L :2222 -relay-url wss://$DOMAIN/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN"
+echo "   ./bin/client -L :2222 -relay-url wss://$DOMAIN:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN"
 echo
 echo "Security Notes:"
 echo "- Use a strong, unique token (minimum 32 characters)"

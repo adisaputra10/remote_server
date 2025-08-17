@@ -38,11 +38,11 @@ powershell -Command "try { $result = Test-NetConnection -ComputerName '%DOMAIN%'
 
 echo.
 echo [4/5] TLS Certificate Test...
-powershell -Command "try { $request = [System.Net.WebRequest]::Create('https://%DOMAIN%:%RELAY_PORT%/'); $request.Timeout = 10000; $response = $request.GetResponse(); Write-Host '✅ PASS: TLS connection successful'; $response.Close() } catch { Write-Host '❌ FAIL: TLS connection failed -' $_.Exception.Message }"
+powershell -Command "try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; $request = [System.Net.WebRequest]::Create('https://%DOMAIN%:%RELAY_PORT%/'); $request.Timeout = 10000; $response = $request.GetResponse(); Write-Host '✅ PASS: TLS connection successful (self-signed cert accepted)'; $response.Close() } catch { Write-Host '❌ FAIL: TLS connection failed -' $_.Exception.Message }"
 
 echo.
 echo [5/5] Relay Server Health Test...
-powershell -Command "try { $response = Invoke-WebRequest -Uri 'https://%DOMAIN%:%RELAY_PORT%/health' -TimeoutSec 10; if($response.StatusCode -eq 200) { Write-Host '✅ PASS: Relay server health endpoint responding' } else { Write-Host '❌ FAIL: Relay server health check failed' } } catch { Write-Host '❌ FAIL: Cannot reach relay server health endpoint -' $_.Exception.Message }"
+powershell -Command "try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; $response = Invoke-WebRequest -Uri 'https://%DOMAIN%:%RELAY_PORT%/health' -TimeoutSec 10; if($response.StatusCode -eq 200) { Write-Host '✅ PASS: Relay server health endpoint responding' } else { Write-Host '❌ FAIL: Relay server health check failed' } } catch { Write-Host '❌ FAIL: Cannot reach relay server health endpoint -' $_.Exception.Message }"
 
 echo.
 echo [Bonus] Agent Binary Check...

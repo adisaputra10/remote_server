@@ -8,7 +8,7 @@ echo "Remote Tunnel Deployment to sh.adisaputra.online"
 echo "================================================"
 
 DOMAIN="sh.adisaputra.online"
-RELAY_PORT=443
+RELAY_PORT=8443
 
 echo "This script will help deploy relay server to $DOMAIN"
 echo
@@ -72,42 +72,44 @@ fi
 echo "✅ Build successful"
 
 echo
-echo "🔐 Setting up TLS certificates..."
+echo "🔐 Setting up self-signed TLS certificates..."
 
-# Check if certbot is installed
-if ! command -v certbot >/dev/null 2>&1; then
-    echo "Installing certbot..."
-    sudo apt update
-    sudo apt install -y certbot
-fi
-
-# Check if certificates already exist
-if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    echo "✅ Let's Encrypt certificates already exist for $DOMAIN"
-    CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-    KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-else
-    echo "Obtaining Let's Encrypt certificate for $DOMAIN..."
-    echo "Note: This requires the domain to point to this server"
+# Generate self-signed certificates
+if [ ! -f "certs/server.crt" ] || [ ! -f "certs/server.key" ]; then
+    echo "Generating self-signed certificates for $DOMAIN..."
     
-    read -p "Proceed with Let's Encrypt certificate? (y/n): " get_cert
-    if [[ $get_cert =~ ^[Yy]$ ]]; then
-        sudo certbot certonly --standalone -d "$DOMAIN"
+    if [ -f "generate-certs.sh" ]; then
+        ./generate-certs.sh
         if [ $? -eq 0 ]; then
-            echo "✅ Certificate obtained successfully"
-            CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-            KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+            echo "✅ Self-signed certificates generated successfully"
+            CERT_PATH="$(pwd)/certs/server.crt"
+            KEY_PATH="$(pwd)/certs/server.key"
         else
-            echo "❌ Failed to obtain certificate. Using self-signed instead."
-            CERT_PATH=""
-            KEY_PATH=""
+            echo "❌ Certificate generation failed"
+            exit 1
         fi
     else
-        echo "Using self-signed certificates (development only)"
-        CERT_PATH=""
-        KEY_PATH=""
+        echo "Manual certificate generation..."
+        mkdir -p certs
+        openssl req -x509 -newkey rsa:2048 -keyout certs/server.key -out certs/server.crt -days 365 -nodes \
+            -subj "/C=ID/ST=Jakarta/L=Jakarta/O=RemoteTunnel/OU=IT/CN=$DOMAIN" \
+            -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN,DNS:localhost,IP:127.0.0.1"
+        
+        chmod 600 certs/server.key
+        chmod 644 certs/server.crt
+        echo "✅ Self-signed certificates generated"
+        CERT_PATH="$(pwd)/certs/server.crt"
+        KEY_PATH="$(pwd)/certs/server.key"
     fi
+else
+    echo "✅ Self-signed certificates already exist"
+    CERT_PATH="$(pwd)/certs/server.crt"
+    KEY_PATH="$(pwd)/certs/server.key"
 fi
+
+echo "Certificate files:"
+echo "- Certificate: $CERT_PATH"
+echo "- Private Key: $KEY_PATH"
 
 echo
 echo "⚙️  Creating production configuration..."

@@ -45,6 +45,7 @@ nano .env.production
 # Set secure token (IMPORTANT!)
 TUNNEL_TOKEN=your-very-secure-random-token-here
 RELAY_HOST=sh.adisaputra.online
+RELAY_PORT=8443
 RELAY_PORT=443
 ```
 
@@ -107,7 +108,7 @@ Edit `.env.production`:
 ```ini
 TUNNEL_TOKEN=your-very-secure-random-token-here
 AGENT_ID=laptop-agent
-AGENT_RELAY_URL=wss://sh.adisaputra.online/ws/agent
+AGENT_RELAY_URL=wss://sh.adisaputra.online:8443/ws/agent
 ```
 
 ### 2.3 Test Connection
@@ -128,7 +129,7 @@ start-agent.bat
 ./start-agent.sh
 
 # Or manual command
-./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online/ws/agent -allow 127.0.0.1:22 -token your-token
+./bin/agent -id laptop-agent -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:22 -token your-token
 ```
 
 ## Step 3: Connect from Remote Client
@@ -144,10 +145,10 @@ go build -o client ./cmd/client
 ### 3.2 Create Tunnel
 ```bash
 # SSH tunnel (access laptop's SSH via port 2222)
-./client -L :2222 -relay-url wss://sh.adisaputra.online/ws/client -agent laptop-agent -target 127.0.0.1:22 -token your-token
+./client -L :2222 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token your-token
 
 # Web server tunnel (access laptop's web server via port 8080)
-./client -L :8080 -relay-url wss://sh.adisaputra.online/ws/client -agent laptop-agent -target 127.0.0.1:8080 -token your-token
+./client -L :8080 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent laptop-agent -target 127.0.0.1:8080 -token your-token
 ```
 
 ### 3.3 Use the Tunnel
@@ -210,7 +211,7 @@ Configure agent to only allow specific services:
 ### Health Checks
 ```bash
 # Relay server health
-curl https://sh.adisaputra.online/health
+curl https://sh.adisaputra.online:8443/health
 
 # Check logs
 sudo journalctl -u relay -f

@@ -30,7 +30,7 @@ while true; do
     fi
     
     # Test relay health endpoint
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN:8443/health" --connect-timeout 5 2>/dev/null)
+    HTTP_CODE=$(curl -k -s -o /dev/null -w "%{http_code}" "https://$DOMAIN:8443/health" --connect-timeout 5 2>/dev/null)
     if [ "$HTTP_CODE" = "200" ]; then
         echo "✅ [$(date '+%H:%M:%S')] Relay server is healthy"
     else

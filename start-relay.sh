@@ -45,15 +45,31 @@ if [ ! -f "bin/relay" ]; then
 fi
 
 # Create certificate directory
-mkdir -p /etc/ssl/tunnel 2>/dev/null || mkdir -p ./certs
+mkdir -p ./certs
+
+# Generate self-signed certificates if they don't exist
+if [ ! -f "certs/server.crt" ] || [ ! -f "certs/server.key" ]; then
+    echo "Self-signed certificates not found. Generating..."
+    if [ -f "generate-certs.sh" ]; then
+        ./generate-certs.sh
+    else
+        echo "Manual certificate generation..."
+        openssl req -x509 -newkey rsa:2048 -keyout certs/server.key -out certs/server.crt -days 365 -nodes \
+            -subj "/C=ID/ST=Jakarta/L=Jakarta/O=RemoteTunnel/OU=IT/CN=sh.adisaputra.online" \
+            -addext "subjectAltName=DNS:sh.adisaputra.online,DNS:*.sh.adisaputra.online,DNS:localhost,IP:127.0.0.1"
+        chmod 600 certs/server.key
+        chmod 644 certs/server.crt
+    fi
+    echo "✅ Self-signed certificates generated"
+fi
 
 # Set certificate paths
-if [ -n "$RELAY_CERT_FILE" ] && [ -n "$RELAY_KEY_FILE" ]; then
-    CERT_ARGS="-cert $RELAY_CERT_FILE -key $RELAY_KEY_FILE"
-    echo "Using provided certificates"
+if [ -f "certs/server.crt" ] && [ -f "certs/server.key" ]; then
+    CERT_ARGS="-cert certs/server.crt -key certs/server.key"
+    echo "Using self-signed certificates"
 else
     CERT_ARGS=""
-    echo "Will auto-generate self-signed certificates"
+    echo "No certificates found - relay will auto-generate basic ones"
 fi
 
 echo

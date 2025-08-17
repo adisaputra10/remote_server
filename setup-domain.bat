@@ -31,8 +31,8 @@ echo [4/6] Configuring environment for %DOMAIN%...
 if not exist ".env.production" (
     echo Creating .env.production...
     echo RELAY_HOST=%DOMAIN%> .env.production
-    echo RELAY_PORT=443>> .env.production
-    echo RELAY_URL=wss://%DOMAIN%/ws>> .env.production
+    echo RELAY_PORT=8443>> .env.production
+    echo RELAY_URL=wss://%DOMAIN%:8443/ws>> .env.production
     echo TLS_ENABLED=true>> .env.production
     echo CERT_FILE=certs/server.crt>> .env.production
     echo KEY_FILE=certs/server.key>> .env.production
@@ -47,6 +47,20 @@ if not exist ".env.production" (
 echo.
 echo [5/6] Setting up certificates directory...
 if not exist "certs" mkdir certs
+
+if not exist "certs\server.crt" (
+    echo Generating self-signed certificates...
+    if exist "generate-certs.bat" (
+        call generate-certs.bat
+    ) else (
+        echo Manual certificate generation requires OpenSSL
+        echo Please run: generate-certs.bat
+        echo Or install OpenSSL and run this script again
+    )
+    echo ✅ Self-signed certificates setup initiated
+) else (
+    echo ✅ Certificates already exist
+)
 echo ✅ Certificates directory ready
 
 echo.
@@ -57,7 +71,7 @@ if not exist "config" mkdir config
 (
 echo # Agent Configuration for %DOMAIN%
 echo agent_id: "laptop-agent"
-echo relay_url: "wss://%DOMAIN%/ws/agent"
+echo relay_url: "wss://%DOMAIN%:8443/ws/agent"
 echo token: "your-secure-token-here"
 echo log_level: "info"
 echo services:
@@ -85,7 +99,7 @@ echo    deploy\deploy-domain.sh (on server)
 echo 4. Start agent on this laptop:
 echo    start-agent.bat
 echo 5. Connect from remote machine:
-echo    bin\client.exe -L :2222 -relay-url wss://%DOMAIN%/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
+echo    bin\client.exe -L :2222 -relay-url wss://%DOMAIN%:8443/ws/client -agent laptop-agent -target 127.0.0.1:22 -token YOUR_TOKEN
 echo.
 echo Security Notes:
 echo - Use a strong, unique token (minimum 32 characters)
