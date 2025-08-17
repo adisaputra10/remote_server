@@ -45,7 +45,12 @@ Thumbs.db
 
 # Logs
 *.log
+/tmp/tunnel-*.log
+/tmp/test-*.log
 
 # Build artifacts
 dist/
 build/
+
+# Docker volumes
+docker-volumes/

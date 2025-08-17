@@ -4,25 +4,53 @@ A simple remote tunnel implementation in Go, similar to Teleport, that allows se
 
 ## Quick Start
 
-1. **Install Go 1.22+** (if not already installed)
-2. **Build the project**:
-   ```bash
-   # Windows
-   build.bat
-   
-   # Linux/Mac  
-   make build
-   ```
-3. **Run the demo**:
-   ```bash
-   # Windows
-   demo.bat
-   
-   # Linux/Mac
-   make run-relay  # Terminal 1
-   make run-agent  # Terminal 2  
-   make run-client # Terminal 3
-   ```
+### Prerequisites
+- **Go 1.22+** (download from https://golang.org/dl/)
+- **Linux/Windows/macOS** supported
+
+### Build & Run
+
+#### **Windows**
+```bash
+# Build
+build.bat
+
+# Run demo  
+demo.bat
+```
+
+#### **Linux/macOS**
+```bash
+# Make scripts executable
+chmod +x build.sh demo.sh
+
+# Build
+./build.sh
+
+# Run demo
+./demo.sh
+
+# Or use Makefile
+make build
+make run-demo
+```
+
+#### **Using Docker (All Platforms)**
+```bash
+# Quick test with docker-compose
+docker-compose up --build
+
+# Or build and run manually
+docker build -t remote-tunnel .
+docker run -p 8443:443 -e TUNNEL_TOKEN=demo-token remote-tunnel
+```
+
+## Documentation
+
+- 📚 **[Platform Support](PLATFORMS.md)** - Detailed platform-specific instructions
+- 🔧 **[Examples](examples/)** - Common use cases and configurations  
+- 🐳 **[Docker](docker-compose.yml)** - Container deployment
+- ⚙️ **[Systemd](deploy/)** - Linux service configuration
 
 ## Architecture
 
@@ -34,13 +62,16 @@ The system uses WebSocket over TLS (WSS) for transport with yamux multiplexing f
 
 ## Features
 
-- Reverse tunnel topology (agents connect outbound)
-- Multiple agent support with unique IDs
-- WebSocket transport over TLS (port 443)
-- Connection multiplexing with yamux
-- Automatic reconnection with backoff
-- Keep-alive and health checks
-- Simple token-based authentication
+- ✅ **Cross-Platform**: Windows, Linux, macOS, Docker, ARM64
+- ✅ **Reverse Tunnel**: Agents connect outbound, no firewall changes needed
+- ✅ **Secure Transport**: WebSocket over TLS (WSS) on port 443  
+- ✅ **Multiplexing**: Multiple concurrent connections via yamux
+- ✅ **Multiple Agents**: Support many agents with unique IDs
+- ✅ **Auto-Reconnect**: Automatic reconnection with exponential backoff
+- ✅ **Keep-Alive**: Built-in ping/pong and health checks
+- ✅ **Simple Auth**: Token-based authentication
+- ✅ **Production Ready**: systemd services, Docker deployment
+- ✅ **Self-Signed TLS**: Automatic certificate generation for development
 
 ## Building
 
@@ -52,6 +83,87 @@ go build -o client.exe ./cmd/client
 ```
 
 ## Usage
+
+### Development Testing
+
+#### **Quick Test (All Platforms)**
+```bash
+# Windows
+demo.bat
+
+# Linux/macOS  
+./demo.sh
+# Or: make run-demo
+
+# Docker
+docker-compose up --build
+```
+
+#### **End-to-End Testing (Linux/macOS)**
+```bash
+# Automated E2E test
+make test-e2e
+# Or: ./test-e2e.sh
+
+# Unit tests
+make test
+```
+
+### Cross-Platform Building
+
+The project supports building for multiple platforms:
+
+```bash
+# Build for all platforms
+make build-all
+
+# Build specific platforms
+make build-linux    # Linux AMD64
+make build-windows  # Windows AMD64  
+make build-mac      # macOS AMD64
+make build-arm64    # Linux ARM64 (Raspberry Pi, etc.)
+```
+
+### Examples
+
+See the `examples/` directory for common use cases:
+- `ssh-tunnel.sh` - SSH tunneling setup
+- `web-tunnel.sh` - Web server tunneling  
+- `docker-compose.prod.yml` - Production Docker deployment
+
+#### **Build from Source**
+```bash
+# Clone repository
+git clone <repository-url>
+cd remote-tunnel
+
+# Build binaries
+make build
+
+# Optional: Install system-wide
+sudo make install
+```
+
+#### **Production Deployment (Linux)**
+```bash
+# Install as systemd services
+sudo ./deploy/install.sh
+
+# Configure
+sudo nano /etc/default/remote-tunnel
+
+# Start relay server
+sudo systemctl enable relay
+sudo systemctl start relay
+
+# Start agent (replace 'myagent' with your agent ID)
+sudo systemctl enable agent@myagent
+sudo systemctl start agent@myagent
+
+# Check status
+sudo systemctl status relay
+sudo systemctl status agent@myagent
+```
 
 ### 1. Start Relay Server
 

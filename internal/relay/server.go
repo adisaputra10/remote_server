@@ -2,12 +2,9 @@ package relay
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"remote-tunnel/internal/proto"

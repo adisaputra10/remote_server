@@ -1,0 +1,77 @@
+# Docker Compose Production Example
+# Copy this file to docker-compose.prod.yml and modify as needed
+
+version: '3.8'
+
+services:
+  relay:
+    build: .
+    command: ./relay -addr :443 -cert /app/certs/server.crt -key /app/certs/server.key -token ${TUNNEL_TOKEN}
+    ports:
+      - "443:443"
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    volumes:
+      - ./prod-certs:/app/certs:ro
+      - relay_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - tunnel-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "https://localhost:443/health", "--no-check-certificate"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Multiple agents can be deployed
+  agent-web:
+    build: .
+    command: ./agent -id web-server -relay-url wss://relay:443/ws/agent -allow 127.0.0.1:80 -allow 127.0.0.1:443 -token ${TUNNEL_TOKEN}
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    volumes:
+      - agent_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - tunnel-network
+    network_mode: host
+
+  agent-db:
+    build: .
+    command: ./agent -id database -relay-url wss://relay:443/ws/agent -allow 127.0.0.1:5432 -allow 127.0.0.1:3306 -token ${TUNNEL_TOKEN}
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    volumes:
+      - agent_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - tunnel-network
+    network_mode: host
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - relay
+    restart: unless-stopped
+    networks:
+      - tunnel-network
+
+networks:
+  tunnel-network:
+    driver: bridge
+
+volumes:
+  relay_logs:
+  agent_logs:

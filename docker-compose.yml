@@ -3,31 +3,70 @@ version: '3.8'
 services:
   relay:
     build: .
-    command: ./relay -addr :443 -token demo-token
+    command: ./relay -addr :443 -token ${TUNNEL_TOKEN:-demo-token}
     ports:
       - "8443:443"
     environment:
-      - TUNNEL_TOKEN=demo-token
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-demo-token}
     volumes:
-      - ./certs:/certs
+      - ./certs:/app/certs:ro
+      - tunnel_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "https://localhost:443/health", "--no-check-certificate"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     
   agent:
     build: .
-    command: ./agent -id test-agent -relay-url wss://relay:443/ws/agent -allow 127.0.0.1:22 -token demo-token
+    command: ./agent -id ${AGENT_ID:-test-agent} -relay-url wss://relay:443/ws/agent -allow 127.0.0.1:22 -allow 127.0.0.1:80 -token ${TUNNEL_TOKEN:-demo-token}
     depends_on:
-      - relay
+      relay:
+        condition: service_healthy
     environment:
-      - TUNNEL_TOKEN=demo-token
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-demo-token}
+      - AGENT_ID=${AGENT_ID:-test-agent}
+    volumes:
+      - tunnel_logs:/app/logs
+    restart: unless-stopped
+    network_mode: host  # To access host services
       
   ssh-server:
-    image: linuxserver/openssh-server
+    image: linuxserver/openssh-server:latest
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=UTC
       - PASSWORD_ACCESS=true
-      - USER_PASSWORD=password
-      - USER_NAME=testuser
+      - USER_PASSWORD=${SSH_PASSWORD:-password}
+      - USER_NAME=${SSH_USER:-testuser}
+      - SUDO_ACCESS=false
     ports:
       - "2222:2222"
+    volumes:
+      - ssh_config:/config
     restart: unless-stopped
+
+  # Test client (optional, for testing)
+  client:
+    build: .
+    command: ./client -L :3333 -relay-url wss://relay:443/ws/client -agent ${AGENT_ID:-test-agent} -target 127.0.0.1:2222 -token ${TUNNEL_TOKEN:-demo-token}
+    depends_on:
+      - relay
+      - agent
+      - ssh-server
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-demo-token}
+      - AGENT_ID=${AGENT_ID:-test-agent}
+    ports:
+      - "3333:3333"
+    volumes:
+      - tunnel_logs:/app/logs
+    restart: unless-stopped
+    profiles:
+      - testing
+
+volumes:
+  tunnel_logs:
+  ssh_config:

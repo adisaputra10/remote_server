@@ -1,0 +1,27 @@
+[Unit]
+Description=Remote Tunnel Agent
+Documentation=https://github.com/your-repo/remote-tunnel
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=tunnel
+Group=tunnel
+WorkingDirectory=/opt/remote-tunnel
+ExecStart=/usr/local/bin/agent -id %i -relay-url wss://your-relay-server.com/ws/agent -allow 127.0.0.1:22 -allow 127.0.0.1:80 -allow 127.0.0.1:443
+Environment=TUNNEL_TOKEN=your-production-token-here
+EnvironmentFile=-/etc/default/remote-tunnel
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
