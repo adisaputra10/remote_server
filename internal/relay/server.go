@@ -12,11 +12,12 @@ import (
 )
 
 type Server struct {
-	token   string
-	agents  map[string]*AgentSession
-	mu      sync.RWMutex
-	ctx     context.Context
-	cancel  context.CancelFunc
+	token    string
+	agents   map[string]*AgentSession
+	mu       sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	compress bool
 }
 
 type AgentSession struct {
@@ -35,15 +36,27 @@ type ClientSession struct {
 func NewServer(token string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		token:  token,
-		agents: make(map[string]*AgentSession),
-		ctx:    ctx,
-		cancel: cancel,
+		token:    token,
+		agents:   make(map[string]*AgentSession),
+		ctx:      ctx,
+		cancel:   cancel,
+		compress: false,
+	}
+}
+
+func NewServerWithCompression(token string, compress bool) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Server{
+		token:    token,
+		agents:   make(map[string]*AgentSession),
+		ctx:      ctx,
+		cancel:   cancel,
+		compress: compress,
 	}
 }
 
 func (s *Server) HandleAgent(w http.ResponseWriter, r *http.Request) {
-	wsConn, err := transport.AcceptWS(w, r, s.token)
+	wsConn, err := transport.AcceptWSWithCompression(w, r, s.token, s.compress)
 	if err != nil {
 		log.Printf("Agent websocket accept failed: %v", err)
 		return
@@ -52,7 +65,7 @@ func (s *Server) HandleAgent(w http.ResponseWriter, r *http.Request) {
 
 	wsConn.StartPingPong()
 
-	session, err := transport.NewMuxServer(wsConn)
+	session, err := transport.NewMuxServerWithCompression(wsConn, s.compress)
 	if err != nil {
 		log.Printf("Agent mux server failed: %v", err)
 		return
@@ -117,7 +130,7 @@ func (s *Server) HandleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
-	wsConn, err := transport.AcceptWS(w, r, s.token)
+	wsConn, err := transport.AcceptWSWithCompression(w, r, s.token, s.compress)
 	if err != nil {
 		log.Printf("Client websocket accept failed: %v", err)
 		return
@@ -126,7 +139,7 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	wsConn.StartPingPong()
 
-	session, err := transport.NewMuxServer(wsConn)
+	session, err := transport.NewMuxServerWithCompression(wsConn, s.compress)
 	if err != nil {
 		log.Printf("Client mux server failed: %v", err)
 		return

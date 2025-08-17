@@ -73,13 +73,23 @@ if "%choice%"=="1" (
 )
 
 echo.
+set /p use_compression="Enable compression? (y/n) [n]: "
+if /i "%use_compression%"=="y" (
+    set COMPRESSION_FLAG=-compress
+    echo Compression enabled
+) else (
+    set COMPRESSION_FLAG=
+    echo Compression disabled
+)
+
+echo.
 echo Starting agent with configuration:
-echo bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure
+echo bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure %COMPRESSION_FLAG%
 echo.
 echo Press Ctrl+C to stop the agent
 echo ========================================
 
-bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure
+bin\agent.exe -id %AGENT_ID% -relay-url %AGENT_RELAY_URL% %ALLOW_PORTS% -token %TUNNEL_TOKEN% -insecure %COMPRESSION_FLAG%
 
 echo.
 echo Agent stopped.

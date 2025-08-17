@@ -21,6 +21,7 @@ type Agent struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	insecure    bool
+	compress    bool
 }
 
 func NewAgent(id, relayURL, token string, allowedHosts []string) *Agent {
@@ -33,11 +34,16 @@ func NewAgent(id, relayURL, token string, allowedHosts []string) *Agent {
 		ctx:          ctx,
 		cancel:       cancel,
 		insecure:     false,
+		compress:     false,
 	}
 }
 
 func (a *Agent) SetInsecure(insecure bool) {
 	a.insecure = insecure
+}
+
+func (a *Agent) SetCompression(compress bool) {
+	a.compress = compress
 }
 
 func (a *Agent) Run() error {
@@ -66,7 +72,7 @@ func (a *Agent) Run() error {
 func (a *Agent) connect() error {
 	log.Printf("Connecting to relay: %s", a.relayURL)
 
-	wsConn, err := transport.DialWSInsecure(a.ctx, a.relayURL, a.token, a.insecure)
+	wsConn, err := transport.DialWSInsecureWithCompression(a.ctx, a.relayURL, a.token, a.insecure, a.compress)
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}
@@ -74,7 +80,7 @@ func (a *Agent) connect() error {
 
 	wsConn.StartPingPong()
 
-	session, err := transport.NewMuxClient(wsConn)
+	session, err := transport.NewMuxClientWithCompression(wsConn, a.compress)
 	if err != nil {
 		return fmt.Errorf("mux client: %w", err)
 	}

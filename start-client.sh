@@ -67,15 +67,30 @@ case $service_choice in
 esac
 
 echo
+echo "Compression options:"
+echo "[1] No compression (faster for local networks)"
+echo "[2] Enable gzip compression (slower but saves bandwidth)"
+read -p "Select compression option (1-2) [1]: " compression_choice
+compression_choice=${compression_choice:-1}
+
+if [ "$compression_choice" = "2" ]; then
+    COMPRESSION_FLAG="-compress"
+    echo "Selected: Gzip compression enabled"
+else
+    COMPRESSION_FLAG=""
+    echo "Selected: No compression"
+fi
+
+echo
 echo "Starting client tunnel:"
 echo "Local port $LOCAL_PORT -> Agent $target_agent -> Target $TARGET_ADDR"
 echo
-echo "Command: bin/client -L :$LOCAL_PORT -relay-url wss://sh.adisaputra.online:8443/ws/client -agent $target_agent -target $TARGET_ADDR -token $TUNNEL_TOKEN -insecure"
+echo "Command: bin/client -L :$LOCAL_PORT -relay-url wss://sh.adisaputra.online:8443/ws/client -agent $target_agent -target $TARGET_ADDR -token $TUNNEL_TOKEN -insecure $COMPRESSION_FLAG"
 echo
 echo "Press Ctrl+C to stop"
 echo "========================================"
 
-bin/client -L :$LOCAL_PORT -relay-url wss://sh.adisaputra.online:8443/ws/client -agent $target_agent -target $TARGET_ADDR -token $TUNNEL_TOKEN -insecure
+bin/client -L :$LOCAL_PORT -relay-url wss://sh.adisaputra.online:8443/ws/client -agent $target_agent -target $TARGET_ADDR -token $TUNNEL_TOKEN -insecure $COMPRESSION_FLAG
 
 echo
 echo "Client stopped."

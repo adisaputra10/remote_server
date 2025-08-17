@@ -28,6 +28,15 @@ type MuxSession struct {
 }
 
 func NewMuxServer(conn net.Conn) (*MuxSession, error) {
+	return NewMuxServerWithCompression(conn, false)
+}
+
+func NewMuxServerWithCompression(conn net.Conn, enableCompression bool) (*MuxSession, error) {
+	// Apply compression if enabled
+	if enableCompression {
+		conn = EnableCompression(conn)
+	}
+	
 	config := yamux.DefaultConfig()
 	config.KeepAliveInterval = 30 * time.Second
 	config.ConnectionWriteTimeout = 10 * time.Second
@@ -74,6 +83,15 @@ func NewMuxServer(conn net.Conn) (*MuxSession, error) {
 }
 
 func NewMuxClient(conn net.Conn) (*MuxSession, error) {
+	return NewMuxClientWithCompression(conn, false)
+}
+
+func NewMuxClientWithCompression(conn net.Conn, enableCompression bool) (*MuxSession, error) {
+	// Apply compression if enabled
+	if enableCompression {
+		conn = EnableCompression(conn)
+	}
+	
 	config := yamux.DefaultConfig()
 	config.KeepAliveInterval = 30 * time.Second
 	config.ConnectionWriteTimeout = 10 * time.Second

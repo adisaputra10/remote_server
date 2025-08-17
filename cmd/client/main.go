@@ -18,6 +18,7 @@ func main() {
 		target    = flag.String("target", "", "Target address (e.g., 127.0.0.1:22)")
 		token     = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
 		insecure  = flag.Bool("insecure", false, "Skip TLS certificate verification (for self-signed certificates)")
+		compress  = flag.Bool("compress", false, "Enable gzip compression for data transfer")
 	)
 	flag.Parse()
 
@@ -51,11 +52,17 @@ func main() {
 	if *insecure {
 		log.Printf("TLS certificate verification disabled (insecure mode)")
 	}
+	if *compress {
+		log.Printf("Gzip compression enabled")
+	}
 
 	// Create client
 	client := tunnel.NewClient(*localAddr, *relayURL, *agentID, *target, *token)
 	if *insecure {
 		client.SetInsecure(true)
+	}
+	if *compress {
+		client.SetCompression(true)
 	}
 
 	// Handle graceful shutdown

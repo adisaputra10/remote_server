@@ -86,11 +86,26 @@ case $choice in
 esac
 
 echo
+echo "Compression options:"
+echo "[1] No compression (faster for local networks)"
+echo "[2] Enable gzip compression (slower but saves bandwidth)"
+read -p "Select compression option (1-2) [1]: " compression_choice
+compression_choice=${compression_choice:-1}
+
+if [ "$compression_choice" = "2" ]; then
+    COMPRESSION_FLAG="-compress"
+    echo "Selected: Gzip compression enabled"
+else
+    COMPRESSION_FLAG=""
+    echo "Selected: No compression"
+fi
+
+echo
 echo "Starting agent with configuration:"
-echo "$AGENT_BINARY -id $AGENT_ID -relay-url $AGENT_RELAY_URL $ALLOW_PORTS -token $TUNNEL_TOKEN -insecure"
+echo "$AGENT_BINARY -id $AGENT_ID -relay-url $AGENT_RELAY_URL $ALLOW_PORTS -token $TUNNEL_TOKEN -insecure $COMPRESSION_FLAG"
 echo
 echo "Press Ctrl+C to stop the agent"
 echo "========================================"
 
 # Start agent with insecure flag for self-signed certificates
-exec $AGENT_BINARY -id "$AGENT_ID" -relay-url "$AGENT_RELAY_URL" $ALLOW_PORTS -token "$TUNNEL_TOKEN" -insecure
+exec $AGENT_BINARY -id "$AGENT_ID" -relay-url "$AGENT_RELAY_URL" $ALLOW_PORTS -token "$TUNNEL_TOKEN" -insecure $COMPRESSION_FLAG

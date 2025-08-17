@@ -63,15 +63,25 @@ if "%service_choice%"=="1" (
 )
 
 echo.
+set /p use_compression="Enable compression? (y/n) [n]: "
+if /i "%use_compression%"=="y" (
+    set COMPRESSION_FLAG=-compress
+    echo Compression enabled
+) else (
+    set COMPRESSION_FLAG=
+    echo Compression disabled
+)
+
+echo.
 echo Starting client tunnel:
 echo Local port %LOCAL_PORT% -> Agent %target_agent% -> Target %TARGET_ADDR%
 echo.
-echo Command: bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
+echo Command: bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure %COMPRESSION_FLAG%
 echo.
 echo Press Ctrl+C to stop
 echo ========================================
 
-bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure
+bin\client.exe -L :%LOCAL_PORT% -relay-url wss://sh.adisaputra.online:8443/ws/client  -agent %target_agent% -target %TARGET_ADDR% -token %TUNNEL_TOKEN% -insecure %COMPRESSION_FLAG%
 
 echo.
 echo Client stopped.

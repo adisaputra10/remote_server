@@ -26,6 +26,7 @@ func main() {
 		certFile = flag.String("cert", "server.crt", "TLS certificate file")
 		keyFile  = flag.String("key", "server.key", "TLS private key file")
 		token    = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
+		compress = flag.Bool("compress", false, "Enable gzip compression for data transfer")
 	)
 	flag.Parse()
 
@@ -53,7 +54,13 @@ func main() {
 	}
 
 	// Create relay server
-	server := relay.NewServer(*token)
+	var server *relay.Server
+	if *compress {
+		log.Printf("Gzip compression enabled")
+		server = relay.NewServerWithCompression(*token, true)
+	} else {
+		server = relay.NewServer(*token)
+	}
 
 	// Setup HTTP routes
 	mux := http.NewServeMux()

@@ -24,6 +24,7 @@ type Client struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	insecure   bool
+	compress   bool
 
 	controlMutex   sync.RWMutex
 	connected      bool
@@ -42,12 +43,17 @@ func NewClient(localAddr, relayURL, agentID, targetAddr, token string) *Client {
 		ctx:        ctx,
 		cancel:     cancel,
 		insecure:   false,
+		compress:   false,
 		responses:  make(map[string]chan *proto.Control),
 	}
 }
 
 func (c *Client) SetInsecure(insecure bool) {
 	c.insecure = insecure
+}
+
+func (c *Client) SetCompression(compress bool) {
+	c.compress = compress
 }
 
 func (c *Client) Run() error {
@@ -83,7 +89,7 @@ func (c *Client) connectToRelay() error {
 	// Add a small delay to ensure cleanup
 	time.Sleep(200 * time.Millisecond)
 
-	wsConn, err := transport.DialWSInsecure(c.ctx, c.relayURL, c.token, c.insecure)
+	wsConn, err := transport.DialWSInsecureWithCompression(c.ctx, c.relayURL, c.token, c.insecure, c.compress)
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}
@@ -93,7 +99,7 @@ func (c *Client) connectToRelay() error {
 	// Add delay before creating mux session
 	time.Sleep(100 * time.Millisecond)
 
-	session, err := transport.NewMuxClient(wsConn)
+	session, err := transport.NewMuxClientWithCompression(wsConn, c.compress)
 	if err != nil {
 		wsConn.Close()
 		return fmt.Errorf("mux client: %w", err)

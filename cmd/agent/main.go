@@ -28,6 +28,7 @@ func main() {
 		relayURL      = flag.String("relay-url", "", "Relay WebSocket URL (e.g., wss://relay.example.com/ws/agent)")
 		token         = flag.String("token", "", "Auth token (or set TUNNEL_TOKEN env)")
 		insecure      = flag.Bool("insecure", false, "Skip TLS certificate verification (for self-signed certificates)")
+		compress      = flag.Bool("compress", false, "Enable gzip compression for data transfer")
 		allowed       arrayFlags
 	)
 	flag.Var(&allowed, "allow", "Allowed target addresses (can be specified multiple times)")
@@ -61,11 +62,17 @@ func main() {
 	if *insecure {
 		log.Printf("TLS certificate verification disabled (insecure mode)")
 	}
+	if *compress {
+		log.Printf("Gzip compression enabled")
+	}
 
 	// Create agent
 	agent := tunnel.NewAgent(*id, *relayURL, *token, []string(allowed))
 	if *insecure {
 		agent.SetInsecure(true)
+	}
+	if *compress {
+		agent.SetCompression(true)
 	}
 
 	// Handle graceful shutdown
