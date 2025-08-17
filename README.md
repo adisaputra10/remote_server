@@ -49,7 +49,8 @@ docker run -p 8443:443 -e TUNNEL_TOKEN=demo-token remote-tunnel
 
 - 📚 **[Platform Support](PLATFORMS.md)** - Detailed platform-specific instructions
 - 🔧 **[Examples](examples/)** - Common use cases and configurations  
-- 🐳 **[Docker](docker-compose.yml)** - Container deployment
+- �️ **[MySQL/MariaDB Guide](MYSQL-GUIDE.md)** - Database tunneling setup
+- �🐳 **[Docker](docker-compose.yml)** - Container deployment
 - ⚙️ **[Systemd](deploy/)** - Linux service configuration
 
 ## Architecture
@@ -129,6 +130,7 @@ make build-arm64    # Linux ARM64 (Raspberry Pi, etc.)
 See the `examples/` directory for common use cases:
 - `ssh-tunnel.sh` - SSH tunneling setup (updated for sh.adisaputra.online)
 - `web-tunnel.sh` - Web server tunneling (updated for sh.adisaputra.online)
+- `start-mysql-tunnel.sh/.bat` - MySQL/MariaDB database tunneling
 - `docker-compose.prod.yml` - Production Docker deployment
 
 #### **Production Setup with Domain (sh.adisaputra.online)**
@@ -323,6 +325,22 @@ client.exe -L :8080 -relay-url wss://relay.example.com/ws/client -agent web-serv
 
 # Access
 curl http://127.0.0.1:8080
+```
+
+### MySQL/MariaDB Database Tunnel
+```bash
+# Agent (on server with MySQL/MariaDB)
+agent.exe -id db-server -relay-url wss://sh.adisaputra.online:8443/ws/agent -allow 127.0.0.1:3306 -insecure
+
+# Client (easy way using script)
+start-mysql-tunnel.bat    # Windows
+./start-mysql-tunnel.sh   # Linux
+
+# Or manually
+client.exe -L :3306 -relay-url wss://sh.adisaputra.online:8443/ws/client -agent db-server -target 127.0.0.1:3306 -insecure
+
+# Connect to MySQL
+mysql -h localhost -P 3306 -u username -p
 ```
 
 ### Multiple Services

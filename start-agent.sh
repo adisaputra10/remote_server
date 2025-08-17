@@ -51,10 +51,11 @@ echo
 echo "Services to expose:"
 echo "[1] SSH Server (port 22)"
 echo "[2] Web Server (port 8080)"
-echo "[3] Database (port 5432)"
-echo "[4] Custom ports"
-echo "[5] All common services"
-read -p "Select option (1-5): " choice
+echo "[3] PostgreSQL (port 5432)"
+echo "[4] MySQL/MariaDB (port 3306)"
+echo "[5] Custom ports"
+echo "[6] All common services"
+read -p "Select option (1-6): " choice
 
 case $choice in
     1)
@@ -67,15 +68,19 @@ case $choice in
         ;;
     3)
         ALLOW_PORTS="-allow 127.0.0.1:5432"
-        echo "Selected: Database only"
+        echo "Selected: PostgreSQL only"
         ;;
     4)
+        ALLOW_PORTS="-allow 127.0.0.1:3306"
+        echo "Selected: MySQL/MariaDB only"
+        ;;
+    5)
         read -p "Enter ports (e.g., 127.0.0.1:3000 127.0.0.1:8000): " custom_ports
         ALLOW_PORTS="-allow ${custom_ports// / -allow }"
         echo "Selected: Custom ports"
         ;;
     *)
-        ALLOW_PORTS="-allow 127.0.0.1:22 -allow 127.0.0.1:80 -allow 127.0.0.1:443 -allow 127.0.0.1:3000 -allow 127.0.0.1:8080 -allow 127.0.0.1:5432"
+        ALLOW_PORTS="-allow 127.0.0.1:22 -allow 127.0.0.1:80 -allow 127.0.0.1:443 -allow 127.0.0.1:3000 -allow 127.0.0.1:8080 -allow 127.0.0.1:5432 -allow 127.0.0.1:3306"
         echo "Selected: All common services"
         ;;
 esac

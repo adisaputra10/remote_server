@@ -34,9 +34,10 @@ echo.
 echo Common target services:
 echo [1] SSH (port 22)
 echo [2] Web Server (port 8080)
-echo [3] Database (port 5432)
-echo [4] Custom
-set /p service_choice="Select service (1-4): "
+echo [3] PostgreSQL (port 5432)
+echo [4] MySQL/MariaDB (port 3306)
+echo [5] Custom
+set /p service_choice="Select service (1-5): "
 
 if "%service_choice%"=="1" (
     set TARGET_ADDR=127.0.0.1:22
@@ -49,7 +50,12 @@ if "%service_choice%"=="1" (
 ) else if "%service_choice%"=="3" (
     set TARGET_ADDR=127.0.0.1:5432
     set LOCAL_PORT=5432
-    echo Selected: Database - Access via localhost:5432
+    echo Selected: PostgreSQL - Access via localhost:5432
+) else if "%service_choice%"=="4" (
+    set TARGET_ADDR=127.0.0.1:3306
+    set LOCAL_PORT=3306
+    echo Selected: MySQL/MariaDB - Access via localhost:3306
+    echo Example: mysql -h localhost -P 3306 -u username -p
 ) else (
     set /p TARGET_ADDR="Enter target address (e.g., 127.0.0.1:3000): "
     set /p LOCAL_PORT="Enter local port (e.g., 3000): "

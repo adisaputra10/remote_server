@@ -45,10 +45,11 @@ if not exist "bin\agent.exe" (
 echo Services to expose:
 echo [1] SSH Server (port 22)
 echo [2] Web Server (port 8080)  
-echo [3] Database (port 5432)
-echo [4] Custom ports
-echo [5] All common services
-set /p choice="Select option (1-5): "
+echo [3] PostgreSQL (port 5432)
+echo [4] MySQL/MariaDB (port 3306)
+echo [5] Custom ports
+echo [6] All common services
+set /p choice="Select option (1-6): "
 
 if "%choice%"=="1" (
     set ALLOW_PORTS=-allow 127.0.0.1:22
@@ -58,13 +59,16 @@ if "%choice%"=="1" (
     echo Selected: Web Server only
 ) else if "%choice%"=="3" (
     set ALLOW_PORTS=-allow 127.0.0.1:5432
-    echo Selected: Database only
+    echo Selected: PostgreSQL only
 ) else if "%choice%"=="4" (
+    set ALLOW_PORTS=-allow 127.0.0.1:3306
+    echo Selected: MySQL/MariaDB only
+) else if "%choice%"=="5" (
     set /p custom_ports="Enter ports (e.g., 127.0.0.1:3000 127.0.0.1:8000): "
     set ALLOW_PORTS=-allow %custom_ports%
     echo Selected: Custom ports
 ) else (
-    set ALLOW_PORTS=-allow 127.0.0.1:22 -allow 127.0.0.1:80 -allow 127.0.0.1:443 -allow 127.0.0.1:3000 -allow 127.0.0.1:8080 -allow 127.0.0.1:5432
+    set ALLOW_PORTS=-allow 127.0.0.1:22 -allow 127.0.0.1:80 -allow 127.0.0.1:443 -allow 127.0.0.1:3000 -allow 127.0.0.1:8080 -allow 127.0.0.1:5432 -allow 127.0.0.1:3306
     echo Selected: All common services
 )
 
