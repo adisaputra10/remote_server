@@ -81,7 +81,6 @@ func DialWSInsecure(ctx context.Context, url, token string, insecure bool) (*WSC
 }
 
 // DialWSInsecureWithCompression connects to WebSocket server with optional TLS skip verification and compression
-// DialWSInsecureWithCompression connects to WebSocket server with optional TLS skip verification and compression
 func DialWSInsecureWithCompression(ctx context.Context, url, token string, insecure bool, enableCompression bool) (*WSConn, error) {
 	opts := &websocket.DialOptions{
 		HTTPHeader: http.Header{
@@ -89,9 +88,11 @@ func DialWSInsecureWithCompression(ctx context.Context, url, token string, insec
 		},
 	}
 	
-	// Add compression header if enabled
+	// Don't send compression header to avoid negotiation issues
+	// Compression is handled at application level, not transport level
 	if enableCompression {
-		opts.HTTPHeader.Set("X-Tunnel-Compression", "gzip")
+		// Log that compression is requested but handled internally
+		// No HTTP header needed as compression is at stream level
 	}
 	
 	// Skip TLS verification if insecure mode is enabled
@@ -126,9 +127,9 @@ func AcceptWSWithCompression(w http.ResponseWriter, r *http.Request, expectedTok
 		return nil, fmt.Errorf("invalid token")
 	}
 	
-	// Check if client supports compression
-	clientCompression := r.Header.Get("X-Tunnel-Compression") == "gzip"
-	useCompression := enableCompression && clientCompression
+	// Compression is handled at application level, not in WebSocket handshake
+	// Remove client compression checking to avoid negotiation conflicts
+	useCompression := enableCompression
 	
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: []string{"*"},
