@@ -62,15 +62,8 @@ if "%service_choice%"=="1" (
     echo Selected: Custom service
 )
 
-echo.
-set /p use_compression="Enable compression? (y/n) [n]: "
-if /i "%use_compression%"=="y" (
-    set COMPRESSION_FLAG=-compress
-    echo Compression enabled
-) else (
-    set COMPRESSION_FLAG=
-    echo Compression disabled
-)
+set COMPRESSION_FLAG=
+
 
 echo.
 echo Starting client tunnel:
