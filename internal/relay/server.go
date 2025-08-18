@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -72,15 +73,22 @@ func (s *Server) HandleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	// Wait for REGISTER message
+	// Wait for REGISTER message from agent
+	log.Printf("Waiting for REGISTER message from agent...")
 	msg, err := session.ReceiveControl()
 	if err != nil {
 		log.Printf("Agent receive register failed: %v", err)
 		return
 	}
 
+	log.Printf("Received message type: %s", msg.Type)
 	if msg.Type != proto.MsgRegister {
 		log.Printf("Expected REGISTER, got %s", msg.Type)
+		// Send error and close connection
+		session.SendControl(&proto.Control{
+			Type:  proto.MsgError,
+			Error: fmt.Sprintf("Expected REGISTER, got %s", msg.Type),
+		})
 		return
 	}
 
@@ -146,15 +154,19 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
+	log.Printf("Client connected")
+
 	ctx, cancel := context.WithCancel(s.ctx)
 	clientSession := &ClientSession{
 		Session: session,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
-	defer cancel()
 
-	log.Printf("Client connected")
+	defer func() {
+		cancel()
+		log.Printf("Client disconnected")
+	}()
 
 	// Handle client requests
 	s.handleClientRequests(clientSession)

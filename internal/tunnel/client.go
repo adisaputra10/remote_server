@@ -109,6 +109,10 @@ func (c *Client) connectToRelay() error {
 	c.session = session
 
 	log.Printf("Connected to relay (goroutine completed)")
+	
+	// Add small delay to ensure mux session is fully established
+	time.Sleep(200 * time.Millisecond)
+	
 	return nil
 }
 
@@ -250,13 +254,15 @@ func (c *Client) handleConnection(localConn net.Conn) {
 	streamID := uuid.New().String()
 	log.Printf("New connection, stream ID: %s", streamID)
 
-	// Wait for connection to be established
+	// Wait for connection to be established and stable
 	var session *transport.MuxSession
 	for i := 0; i < 10; i++ { // Wait up to 10 seconds
 		c.controlMutex.RLock()
 		if c.connected && c.session != nil {
 			session = c.session
 			c.controlMutex.RUnlock()
+			// Extra delay to ensure session is fully ready
+			time.Sleep(100 * time.Millisecond)
 			break
 		}
 		c.controlMutex.RUnlock()
