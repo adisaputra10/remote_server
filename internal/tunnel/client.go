@@ -401,3 +401,77 @@ func (c *Client) Close() error {
 	
 	return nil
 }
+
+// CreateDirectConnection creates a direct tunnel connection without local listener
+// This is useful for applications like SSH client that need direct access
+func (c *Client) CreateDirectConnection() (net.Conn, error) {
+	// Connect to relay if not already connected
+	err := c.connectToRelay()
+	if err != nil {
+		return nil, fmt.Errorf("connect to relay: %w", err)
+	}
+
+	// Create a new stream for this connection
+	stream, err := c.session.OpenStream()
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+
+	// Send dial request via control connection
+	streamID := uuid.New().String()
+	dialReq := &proto.Control{
+		Type:       proto.MsgDial,
+		AgentID:    c.agentID,
+		StreamID:   streamID,
+		TargetAddr: c.targetAddr,
+	}
+
+	err = c.session.SendControl(dialReq)
+	if err != nil {
+		stream.Close()
+		return nil, fmt.Errorf("send dial request: %w", err)
+	}
+
+	// Wait for accept/refuse response
+	response, err := c.waitForResponse(streamID, 30*time.Second)
+	if err != nil {
+		stream.Close()
+		return nil, fmt.Errorf("wait for dial response: %w", err)
+	}
+
+	if response.Type == proto.MsgRefuse {
+		stream.Close()
+		return nil, fmt.Errorf("dial request refused: %s", response.Error)
+	}
+
+	if response.Type != proto.MsgAccept {
+		stream.Close()
+		return nil, fmt.Errorf("unexpected response type: %s", response.Type)
+	}
+
+	log.Printf("Direct tunnel connection established to agent %s target %s", c.agentID, c.targetAddr)
+	return stream, nil
+}
+
+// waitForResponse waits for a control response with the given stream ID
+func (c *Client) waitForResponse(streamID string, timeout time.Duration) (*proto.Control, error) {
+	c.responsesMutex.Lock()
+	respCh := make(chan *proto.Control, 1)
+	c.responses[streamID] = respCh
+	c.responsesMutex.Unlock()
+
+	defer func() {
+		c.responsesMutex.Lock()
+		delete(c.responses, streamID)
+		c.responsesMutex.Unlock()
+	}()
+
+	select {
+	case response := <-respCh:
+		return response, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("timeout waiting for response")
+	case <-c.ctx.Done():
+		return nil, c.ctx.Err()
+	}
+}

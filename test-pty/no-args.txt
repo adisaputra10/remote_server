@@ -1,0 +1,28 @@
+Usage: ssh-pty -relay-url <url> -agent <id> -token <token> [options]
+
+Required:
+  -relay-url    Relay WebSocket URL
+  -agent        Target agent ID
+  -token        Authentication token
+
+SSH Options:
+  -user         SSH username
+  -password     SSH password (not recommended)
+  -key          Path to SSH private key file
+  -log          Enable command logging (default: true)
+  -log-dir      Log directory (default: pty-logs)
+
+Tunnel Options:
+  -insecure     Skip TLS verification
+  -compress     Enable compression
+
+Example:
+  ssh-pty -relay-url wss://relay.example.com/ws/client -agent my-agent -token secret123 -user admin
+
+Linux Commands:
+  After connection, you can run any Linux command:
+  $ ls -la
+  $ ps aux
+  $ cd /var/log && tail -f messages
+  $ htop
+  $ vim /etc/hosts

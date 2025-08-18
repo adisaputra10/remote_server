@@ -1,13 +1,28 @@
-# Remote Tunnel
+# Re## Features
 
-A simple remote tunnel imple## Documentation
+- 🚇 **Multi-Service Tunneling**: HTTP, HTTPS, MySQL/MariaDB, SSH, and custom TCP services
+- 🔒 **Security**: TLS encryption, token-based authentication, optional mTLS
+- 🗜️ **Compression**: Gzip compression support for bandwidth optimization
+- 🖥️ **SSH with PTY**: Full interactive Linux terminal with command logging
+- 💻 **Interactive Shell**: Complete bash/zsh support with history and tab completion
+- 📝 **Command Logging**: All SSH commands and output automatically logged
+- 🌐 **Cross-Platform**: Windows, Linux, macOS support
+- 🐳 **Containerized**: Docker and docker-compose ready
+- 📊 **Monitoring**: Health checks and connection logging
+- 🎯 **Production Ready**: Systemd services, robust error handlingl
 
-- 📚 **[Platform Support](PLATFORMS.md)** - Detailed platform-specific instructions
-- 🔧 **[Examples](examples/)** - Common use cases and configurations  
-- 🗄️ **[MySQL/MariaDB Guide](MYSQL-GUIDE.md)** - Database tunneling setup
-- 🗜️ **[Compression Guide](COMPRESSION-GUIDE.md)** - Bandwidth optimization with gzip
-- 🐳 **[Docker](docker-compose.yml)** - Container deployment
-- ⚙️ **[Systemd](deploy/)** - Linux service configurationon in Go, similar to Teleport, that allows secure access to services behind firewalls through a relay server.
+A simple remote tunnel implementation in Go, similar to Teleport, that allows secure access to services behind firewalls through a relay server.
+
+## Features
+
+- � **Multi-Service Tunneling**: HTTP, HTTPS, MySQL/MariaDB, SSH, and custom TCP services
+- � **Security**: TLS encryption, token-based authentication, optional mTLS
+- 🗜️ **Compression**: Gzip compression support for bandwidth optimization
+- 🖥️ **SSH with PTY**: Full SSH terminal support with command logging
+- 🌐 **Cross-Platform**: Windows, Linux, macOS support
+- 🐳 **Containerized**: Docker and docker-compose ready
+- 📊 **Monitoring**: Health checks and connection logging
+- 🎯 **Production Ready**: Systemd services, robust error handling
 
 ## Quick Start
 
@@ -24,6 +39,9 @@ build.bat
 
 # Run demo  
 demo.bat
+
+# SSH Client
+start-ssh-client.bat
 ```
 
 #### **Linux/macOS**
@@ -36,6 +54,9 @@ chmod +x build.sh demo.sh
 
 # Run demo
 ./demo.sh
+
+# SSH Client
+./start-ssh-client.sh
 
 # Or use Makefile
 make build
@@ -52,11 +73,65 @@ docker build -t remote-tunnel .
 docker run -p 8443:443 -e TUNNEL_TOKEN=demo-token remote-tunnel
 ```
 
+## SSH PTY Terminal
+
+The system includes a full-featured SSH PTY (Pseudo Terminal) client for interactive Linux command execution.
+
+### Quick SSH PTY Demo
+```bash
+# Windows
+start-ssh-pty.bat -agent server1 -token your-token -user admin
+
+# Linux/macOS
+./start-ssh-pty.sh -agent server1 -token your-token -user admin
+```
+
+### PTY Features
+- **🖥️ Full Linux Terminal**: Complete interactive shell (bash, zsh, etc.)
+- **📝 Command Logging**: All commands and output automatically saved
+- **⌨️ Interactive Programs**: nano, vim, htop, less all work perfectly
+- **🔄 Command History**: Up/down arrow navigation
+- **⭐ Tab Completion**: Bash completion for commands and files
+- **📊 Session Recording**: Complete terminal sessions with timestamps
+
+### Common Linux Commands
+```bash
+# System information
+uname -a                    # System details
+uptime                     # System uptime
+whoami                     # Current user
+
+# File operations  
+ls -la                     # List files
+cd /var/log               # Change directory
+find . -name "*.log"      # Find files
+
+# Process management
+ps aux                    # List processes
+htop                      # Interactive process monitor
+kill -9 <pid>            # Terminate process
+
+# System monitoring
+df -h                     # Disk usage
+free -m                   # Memory usage
+tail -f /var/log/syslog  # Follow log files
+
+# Text editing
+nano file.txt            # Simple editor
+vim config.conf          # Advanced editor
+```
+
+See **[SSH PTY Guide](PTY-SSH-GUIDE.md)** for complete documentation.
+
 ## Documentation
 
 - 📚 **[Platform Support](PLATFORMS.md)** - Detailed platform-specific instructions
 - 🔧 **[Examples](examples/)** - Common use cases and configurations  
-- �️ **[MySQL/MariaDB Guide](MYSQL-GUIDE.md)** - Database tunneling setup
+- 🗄️ **[MySQL/MariaDB Guide](MYSQL-GUIDE.md)** - Database tunneling setup
+- 🗜️ **[Compression Guide](COMPRESSION-GUIDE.md)** - Bandwidth optimization with gzip
+- 🖥️ **[SSH Client Guide](docs/SSH-CLIENT.md)** - SSH tunneling with PTY and logging
+- � **[SSH PTY Guide](PTY-SSH-GUIDE.md)** - Interactive Linux terminal with full command logging
+- 🚀 **[PTY Demo](SSH-PTY-DEMO.md)** - Quick start guide for SSH PTY terminal
 - �🐳 **[Docker](docker-compose.yml)** - Container deployment
 - ⚙️ **[Systemd](deploy/)** - Linux service configuration
 
