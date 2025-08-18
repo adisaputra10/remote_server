@@ -155,6 +155,14 @@ func (c *Client) connectionLoop() {
 
 		log.Printf("Control message handler started")
 
+		// Send initial ping to verify connection
+		err = session.SendControl(&proto.Control{Type: proto.MsgPing})
+		if err != nil {
+			log.Printf("Failed to send initial ping: %v", err)
+			c.markDisconnected()
+			continue
+		}
+
 		// Handle control messages until connection fails
 		c.handleControlMessages(session)
 
@@ -166,23 +174,40 @@ func (c *Client) connectionLoop() {
 }
 
 func (c *Client) handleControlMessages(session *transport.MuxSession) {
+	defer log.Printf("Control message handler stopped")
+	
 	for {
 		select {
 		case <-c.ctx.Done():
+			log.Printf("Control message handler exiting due to context cancellation")
 			return
 		default:
 		}
 
+		// Add timeout for ReceiveControl to avoid blocking indefinitely
 		msg, err := session.ReceiveControl()
 		if err != nil {
 			log.Printf("Control message receive error: %v", err)
-			return
+			// Check if it's a context cancellation or connection closed
+			select {
+			case <-c.ctx.Done():
+				log.Printf("Context cancelled during control message receive")
+				return
+			default:
+				// Connection issue, return to trigger reconnection
+				log.Printf("Connection issue detected, returning from control handler")
+				return
+			}
 		}
 
 		// Handle control messages
 		switch msg.Type {
 		case proto.MsgPing:
-			session.SendControl(&proto.Control{Type: proto.MsgPong})
+			err := session.SendControl(&proto.Control{Type: proto.MsgPong})
+			if err != nil {
+				log.Printf("Failed to send pong: %v", err)
+				return
+			}
 		case proto.MsgPong:
 			// Ignore pong messages
 		case proto.MsgAccept, proto.MsgRefuse:
@@ -194,8 +219,8 @@ func (c *Client) handleControlMessages(session *transport.MuxSession) {
 			if exists {
 				select {
 				case respChan <- msg:
-				default:
-					log.Printf("Response channel full for stream %s", msg.StreamID)
+				case <-time.After(5 * time.Second):
+					log.Printf("Timeout sending response for stream %s", msg.StreamID)
 				}
 			} else {
 				log.Printf("No waiting handler for stream %s", msg.StreamID)

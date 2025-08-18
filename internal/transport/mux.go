@@ -184,6 +184,12 @@ func (m *MuxSession) ReceiveControl() (*proto.Control, error) {
 		return nil, fmt.Errorf("session closed")
 	}
 	
+	// Set read timeout to detect connection issues
+	if tcpConn, ok := m.controlConn.(*net.TCPConn); ok {
+		tcpConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		defer tcpConn.SetReadDeadline(time.Time{}) // Clear deadline
+	}
+	
 	// Read until newline delimiter
 	buffer := make([]byte, 1)
 	var msgBytes []byte
@@ -191,6 +197,9 @@ func (m *MuxSession) ReceiveControl() (*proto.Control, error) {
 	for {
 		n, err := m.controlConn.Read(buffer)
 		if err != nil {
+			if err == io.EOF {
+				return nil, fmt.Errorf("connection closed: %w", err)
+			}
 			return nil, fmt.Errorf("read control: %w", err)
 		}
 		

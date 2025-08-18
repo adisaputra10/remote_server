@@ -198,9 +198,12 @@ func (s *Server) handleAgentRequests(agent *AgentSession) {
 }
 
 func (s *Server) handleClientRequests(client *ClientSession) {
+	defer log.Printf("Client request handler stopped")
+	
 	for {
 		select {
 		case <-client.ctx.Done():
+			log.Printf("Client request handler exiting due to context cancellation")
 			return
 		default:
 		}
@@ -208,6 +211,13 @@ func (s *Server) handleClientRequests(client *ClientSession) {
 		msg, err := client.Session.ReceiveControl()
 		if err != nil {
 			log.Printf("Client control receive error: %v", err)
+			// Check if it's a clean shutdown or connection issue
+			select {
+			case <-client.ctx.Done():
+				log.Printf("Client context cancelled during receive")
+			default:
+				log.Printf("Client connection issue detected")
+			}
 			return
 		}
 
@@ -215,7 +225,11 @@ func (s *Server) handleClientRequests(client *ClientSession) {
 		case proto.MsgDial:
 			go s.handleDial(client, msg)
 		case proto.MsgPing:
-			client.Session.SendControl(&proto.Control{Type: proto.MsgPong})
+			err := client.Session.SendControl(&proto.Control{Type: proto.MsgPong})
+			if err != nil {
+				log.Printf("Failed to send pong to client: %v", err)
+				return
+			}
 		case proto.MsgPong:
 			// Keep alive received
 		default:
