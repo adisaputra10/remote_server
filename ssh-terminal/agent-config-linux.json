@@ -1,0 +1,14 @@
+{
+  "agent_id": "agent-linux",
+  "agent_name": "Local Test Agent linux",
+  "server_url": "ws://192.168.1.123:8080",
+  "auth_token": "teleport123",
+  "platform": "windows",
+  "log_file": "logs/agent-local.log",
+  "working_dir": "./temp",
+  "allowed_users": ["admin", "user"],
+  "metadata": {
+    "environment": "development",
+    "location": "localhost"
+  }
+}

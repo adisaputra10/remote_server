@@ -1,0 +1,7 @@
+{
+  "server_url": "ws://192.168.1.123:8080/ws/client",
+  "client_name": "AdminClient-01",
+  "log_file": "client.log",
+  "auth_token": "teleport123",
+  "auto_reconnect": true
+}

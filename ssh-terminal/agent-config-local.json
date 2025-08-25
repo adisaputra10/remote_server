@@ -1,0 +1,14 @@
+{
+  "agent_id": "local-test-agent",
+  "agent_name": "Local Test Agent",
+  "server_url": "ws://localhost:8080",
+  "auth_token": "teleport123",
+  "platform": "windows",
+  "log_file": "d:/repo/remote/ssh-terminal/logs/agent-local.log",
+  "working_dir": "./temp",
+  "allowed_users": ["admin", "user"],
+  "metadata": {
+    "environment": "development",
+    "location": "localhost"
+  }
+}
