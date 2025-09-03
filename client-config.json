@@ -1,0 +1,7 @@
+{
+  "server_addr": "localhost",
+  "username": "user",
+  "ssh_port": 3022,
+  "api_port": 3080,
+  "web_ui_port": 3000
+}

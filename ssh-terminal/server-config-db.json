@@ -1,0 +1,7 @@
+{
+  "port": 8080,
+  "log_file": "server.log",
+  "auth_token": "teleport123",
+  "enable_database": true,
+  "database_url": "root:rootpassword@tcp(localhost:3306)/log?charset=utf8mb4&parseTime=True&loc=Local"
+}
