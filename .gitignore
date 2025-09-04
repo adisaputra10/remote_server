@@ -25,6 +25,7 @@ go.work
 *.swo
 *~
 
+frontend/node_modules/
 # OS generated files
 .DS_Store
 .DS_Store?

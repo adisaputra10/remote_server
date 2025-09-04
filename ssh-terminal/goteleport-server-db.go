@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,15 +47,25 @@ type User struct {
 	Active   bool      `json:"active"`
 }
 
+type UserAgentAssignment struct {
+	ID         int       `json:"id"`
+	UserID     int       `json:"user_id"`
+	AgentID    string    `json:"agent_id"`
+	AssignedBy int       `json:"assigned_by"`
+	AssignedAt time.Time `json:"assigned_at"`
+	Active     bool      `json:"active"`
+}
+
 type Agent struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	Address    string                 `json:"address"`
-	Platform   string                 `json:"platform"`
-	Status     string                 `json:"status"`
-	LastSeen   time.Time              `json:"last_seen"`
-	Connection *websocket.Conn        `json:"-"`
-	Metadata   map[string]interface{} `json:"metadata"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Address     string                 `json:"address"`
+	Platform    string                 `json:"platform"`
+	Status      string                 `json:"status"`
+	LastSeen    time.Time              `json:"last_seen"`
+	ConnectedAt time.Time              `json:"connected_at"`
+	Connection  *websocket.Conn        `json:"-"`
+	Metadata    map[string]interface{} `json:"metadata"`
 }
 
 type Client struct {
@@ -118,6 +130,24 @@ type AccessLog struct {
 	Timestamp  time.Time `json:"timestamp"`
 }
 
+// CORS middleware
+func (s *GoTeleportServerDB) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		
+		next(w, r)
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: goteleport-server.exe <config-file>")
@@ -136,14 +166,19 @@ func main() {
 
 	server.logEvent("SERVER_START", "GoTeleport Server starting", fmt.Sprintf("Port: %d, DB: %v", server.config.Port, server.config.EnableDB))
 
-	// Setup routes
-	http.HandleFunc("/ws/agent", server.handleAgentConnection)
-	http.HandleFunc("/ws/client", server.handleClientConnection)
-	http.HandleFunc("/api/logs", server.handleLogsAPI)
-	http.HandleFunc("/api/sessions", server.handleSessionsAPI)
-	http.HandleFunc("/api/access-logs", server.handleAccessLogsAPI)
-	http.HandleFunc("/api/stats", server.handleStatsAPI)
-	http.HandleFunc("/login", server.handleLogin)
+	// Setup routes with CORS middleware
+	http.HandleFunc("/ws/agent", server.corsMiddleware(server.handleAgentConnection))
+	http.HandleFunc("/ws/client", server.corsMiddleware(server.handleClientConnection))
+	http.HandleFunc("/api/auth/login", server.corsMiddleware(server.handleAPILogin))
+	http.HandleFunc("/api/auth/logout", server.corsMiddleware(server.handleAPILogout))
+	http.HandleFunc("/api/users", server.corsMiddleware(server.handleUsersAPI))
+	http.HandleFunc("/api/agents", server.corsMiddleware(server.handleAgentsAPI))
+	http.HandleFunc("/api/user-assignments", server.corsMiddleware(server.handleUserAssignmentsAPI))
+	http.HandleFunc("/api/logs", server.corsMiddleware(server.handleLogsAPI))
+	http.HandleFunc("/api/sessions", server.corsMiddleware(server.handleSessionsAPI))
+	http.HandleFunc("/api/access-logs", server.corsMiddleware(server.handleAccessLogsAPI))
+	http.HandleFunc("/api/stats", server.corsMiddleware(server.handleStatsAPI))
+	http.HandleFunc("/login", server.corsMiddleware(server.handleLogin))
 	http.HandleFunc("/admin", server.handleAdmin)
 	http.HandleFunc("/access-logs", server.handleAccessLogsPage)
 	http.HandleFunc("/logs", server.handleLogsPage)
@@ -322,6 +357,21 @@ func (s *GoTeleportServerDB) createTables() error {
 			INDEX idx_timestamp (timestamp),
 			INDEX idx_session_id (session_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		`CREATE TABLE IF NOT EXISTS user_agent_assignments (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			agent_id VARCHAR(255) NOT NULL,
+			assigned_by INT NOT NULL,
+			assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			active BOOLEAN DEFAULT TRUE,
+			UNIQUE KEY unique_user_agent (user_id, agent_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (assigned_by) REFERENCES users(id),
+			INDEX idx_user_id (user_id),
+			INDEX idx_agent_id (agent_id),
+			INDEX idx_active (active)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
 	for _, query := range tables {
@@ -336,6 +386,10 @@ func (s *GoTeleportServerDB) createTables() error {
 		`ALTER TABLE command_logs ADD COLUMN agent_name VARCHAR(255) DEFAULT ''`,
 		`ALTER TABLE command_logs ADD COLUMN username VARCHAR(255) DEFAULT ''`,
 		`ALTER TABLE command_logs ADD INDEX idx_username (username)`,
+		`ALTER TABLE clients ADD COLUMN username VARCHAR(255) DEFAULT ''`,
+		`ALTER TABLE clients ADD INDEX idx_username (username)`,
+		`ALTER TABLE users ADD COLUMN active BOOLEAN DEFAULT TRUE`,
+		`ALTER TABLE users ADD INDEX idx_active (active)`,
 	}
 
 	for _, query := range alterQueries {
@@ -361,13 +415,15 @@ func (s *GoTeleportServerDB) handleAgentConnection(w http.ResponseWriter, r *htt
 	defer conn.Close()
 
 	agentID := fmt.Sprintf("%x", time.Now().UnixNano())
+	now := time.Now()
 	agent := &Agent{
-		ID:         agentID,
-		Status:     "online",
-		LastSeen:   time.Now(),
-		Connection: conn,
-		Address:    r.RemoteAddr,
-		Metadata:   make(map[string]interface{}),
+		ID:          agentID,
+		Status:      "online",
+		LastSeen:    now,
+		ConnectedAt: now,
+		Connection:  conn,
+		Address:     r.RemoteAddr,
+		Metadata:    make(map[string]interface{}),
 	}
 
 	// Read registration message
@@ -804,23 +860,823 @@ func (s *GoTeleportServerDB) handleSessionsAPI(w http.ResponseWriter, r *http.Re
 
 func (s *GoTeleportServerDB) handleStatsAPI(w http.ResponseWriter, r *http.Request) {
 	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+	activeConnections := len(s.clients)
+	activeAgents := len(s.agents)
+	s.mutex.RUnlock()
 
 	stats := map[string]interface{}{
-		"agents":   len(s.agents),
-		"clients":  len(s.clients),
-		"sessions": len(s.sessions),
-		"uptime":   time.Since(time.Now()).String(),
+		"activeConnections": activeConnections,
+		"activeAgents":      activeAgents,
+		"activeUsers":       s.getActiveUsersCount(),
+		"totalCommands":     0,
 	}
 
 	if s.db != nil {
 		var totalCommands int
 		s.db.QueryRow("SELECT COUNT(*) FROM command_logs").Scan(&totalCommands)
-		stats["total_commands"] = totalCommands
+		stats["totalCommands"] = totalCommands
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// Helper method to get active users count
+func (s *GoTeleportServerDB) getActiveUsersCount() int {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	
+	activeUsers := make(map[string]bool)
+	for _, client := range s.clients {
+		if client.Username != "" {
+			activeUsers[client.Username] = true
+		}
+	}
+	return len(activeUsers)
+}
+
+// API Authentication handlers
+func (s *GoTeleportServerDB) handleAPILogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var loginReq struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&loginReq); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Authenticate user
+	user, authenticated := s.authenticateUser(loginReq.Username, loginReq.Password)
+	if !authenticated {
+		s.logEvent("API_LOGIN_FAILED", "API login failed", fmt.Sprintf("Username: %s, IP: %s", loginReq.Username, r.RemoteAddr))
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Generate simple token (in production, use JWT or proper session)
+	token := s.generateSessionToken(user.Username)
+	
+	// Log successful login
+	s.logEvent("API_LOGIN_SUCCESS", "API login successful", fmt.Sprintf("Username: %s, Role: %s, IP: %s", user.Username, user.Role, r.RemoteAddr))
+	
+	// Log access
+	s.logAccess("", "Web API", user.Username, "", "", "", "login", "API login successful", r.RemoteAddr, r.UserAgent())
+
+	response := map[string]interface{}{
+		"token": token,
+		"user": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+		},
+		"message": "Login successful",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleAPILogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get username from token (simplified - in production, validate JWT)
+	token := r.Header.Get("Authorization")
+	username := s.getUsernameFromToken(token)
+	
+	s.logEvent("API_LOGOUT", "API logout", fmt.Sprintf("Username: %s, IP: %s", username, r.RemoteAddr))
+	
+	// Log access
+	s.logAccess("", "Web API", username, "", "", "", "logout", "API logout", r.RemoteAddr, r.UserAgent())
+
+	response := map[string]interface{}{
+		"message": "Logout successful",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Helper methods for token management
+func (s *GoTeleportServerDB) generateSessionToken(username string) string {
+	// Simple token generation with username:timestamp encoded in base64
+	timestamp := time.Now().Unix()
+	data := fmt.Sprintf("%s:%d", username, timestamp)
+	
+	// Add a simple signature to prevent tampering
+	hash := sha256.Sum256([]byte(data + "SECRET_KEY"))
+	signature := hex.EncodeToString(hash[:8]) // Use first 8 bytes as signature
+	
+	// Combine data and signature
+	tokenData := fmt.Sprintf("%s:%s", data, signature)
+	
+	// Encode in base64
+	return hex.EncodeToString([]byte(tokenData))
+}
+
+func (s *GoTeleportServerDB) getUsernameFromToken(authHeader string) string {
+	// Simplified token parsing
+	if authHeader == "" {
+		return "unknown"
+	}
+	
+	// Remove "Bearer " prefix if present
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == "" {
+		return "unknown"
+	}
+	
+	// Decode from hex
+	tokenBytes, err := hex.DecodeString(token)
+	if err != nil {
+		return "unknown"
+	}
+	
+	// Parse token data
+	tokenData := string(tokenBytes)
+	parts := strings.Split(tokenData, ":")
+	if len(parts) < 3 {
+		return "unknown"
+	}
+	
+	username := parts[0]
+	timestampStr := parts[1]
+	signature := parts[2]
+	
+	// Verify signature
+	data := fmt.Sprintf("%s:%s", username, timestampStr)
+	hash := sha256.Sum256([]byte(data + "SECRET_KEY"))
+	expectedSignature := hex.EncodeToString(hash[:8])
+	
+	if signature != expectedSignature {
+		return "unknown"
+	}
+	
+	// Check if token is not too old (optional: 24 hours)
+	timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
+	if err != nil {
+		return "unknown"
+	}
+	
+	// Token expires after 24 hours
+	if time.Now().Unix()-timestamp > 86400 {
+		return "unknown"
+	}
+	
+	return username
+}
+
+func (s *GoTeleportServerDB) getUserFromToken(authHeader string) (*User, error) {
+	if authHeader == "" {
+		return nil, fmt.Errorf("no authorization header")
+	}
+	
+	// Remove "Bearer " prefix if present
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == "" {
+		return nil, fmt.Errorf("invalid token format")
+	}
+	
+	// Simple token validation - in production use proper JWT validation
+	// For now, extract username from the token (this is a simplified approach)
+	username := s.getUsernameFromToken(authHeader)
+	if username == "unknown" || username == "api_user" {
+		return nil, fmt.Errorf("invalid token")
+	}
+	
+	// Get user from database
+	var user User
+	query := `SELECT id, username, role, active, created_at FROM users WHERE username = ? AND active = 1`
+	var createdAt string
+	err := s.db.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Role, &user.Active, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("user not found: %v", err)
+	}
+	
+	if parsedTime, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
+		user.CreatedAt = parsedTime
+	}
+	
+	return &user, nil
+}
+
+// Users API handler - handles CRUD operations for users
+func (s *GoTeleportServerDB) handleUsersAPI(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, "Database not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		s.handleGetUsers(w, r)
+	case "POST":
+		s.handleCreateUser(w, r)
+	case "PUT":
+		s.handleUpdateUser(w, r)
+	case "DELETE":
+		s.handleDeleteUser(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *GoTeleportServerDB) handleGetUsers(w http.ResponseWriter, r *http.Request) {
+	query := `SELECT id, username, role, status, email, full_name, created_at, updated_at 
+			  FROM users ORDER BY id`
+	
+	rows, err := s.db.Query(query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get users: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var username, role, status, email, fullName string
+		var createdAt, updatedAt time.Time
+		
+		err := rows.Scan(&id, &username, &role, &status, &email, &fullName, &createdAt, &updatedAt)
+		if err != nil {
+			continue
+		}
+		
+		user := map[string]interface{}{
+			"id":         id,
+			"username":   username,
+			"role":       role,
+			"status":     status,
+			"email":      email,
+			"full_name":  fullName,
+			"created_at": createdAt,
+			"updated_at": updatedAt,
+		}
+		users = append(users, user)
+	}
+
+	response := map[string]interface{}{
+		"users": users,
+		"total": len(users),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+		FullName string `json:"full_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" || req.Password == "" {
+		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults
+	if req.Role == "" {
+		req.Role = "user"
+	}
+	if req.Email == "" {
+		req.Email = req.Username + "@goteleport.local"
+	}
+	if req.FullName == "" {
+		req.FullName = req.Username
+	}
+
+	// Hash password
+	hashedPassword := hashPassword(req.Password)
+
+	// Check if username already exists
+	var existingCount int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", req.Username).Scan(&existingCount)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if existingCount > 0 {
+		http.Error(w, "Username already exists", http.StatusConflict)
+		return
+	}
+
+	// Insert new user
+	query := `INSERT INTO users (username, password_hash, role, status, email, full_name, created_at, updated_at) 
+			  VALUES (?, ?, ?, 'active', ?, ?, NOW(), NOW())`
+	
+	result, err := s.db.Exec(query, req.Username, hashedPassword, req.Role, req.Email, req.FullName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create user: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	userID, _ := result.LastInsertId()
+	
+	// Log the action
+	s.logEvent("USER_CREATE", "User created via API", fmt.Sprintf("Username: %s, Role: %s", req.Username, req.Role))
+
+	response := map[string]interface{}{
+		"id":      userID,
+		"message": "User created successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("id")
+	if userID == "" {
+		http.Error(w, "User ID is required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+		FullName string `json:"full_name"`
+		Status   string `json:"status"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Build dynamic update query
+	setParts := []string{}
+	args := []interface{}{}
+
+	if req.Username != "" {
+		setParts = append(setParts, "username = ?")
+		args = append(args, req.Username)
+	}
+	if req.Password != "" {
+		setParts = append(setParts, "password_hash = ?")
+		args = append(args, hashPassword(req.Password))
+	}
+	if req.Role != "" {
+		setParts = append(setParts, "role = ?")
+		args = append(args, req.Role)
+	}
+	if req.Email != "" {
+		setParts = append(setParts, "email = ?")
+		args = append(args, req.Email)
+	}
+	if req.FullName != "" {
+		setParts = append(setParts, "full_name = ?")
+		args = append(args, req.FullName)
+	}
+	if req.Status != "" {
+		setParts = append(setParts, "status = ?")
+		args = append(args, req.Status)
+	}
+
+	if len(setParts) == 0 {
+		http.Error(w, "No fields to update", http.StatusBadRequest)
+		return
+	}
+
+	setParts = append(setParts, "updated_at = NOW()")
+	args = append(args, userID)
+
+	query := fmt.Sprintf("UPDATE users SET %s WHERE id = ?", strings.Join(setParts, ", "))
+	
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update user: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Log the action
+	s.logEvent("USER_UPDATE", "User updated via API", fmt.Sprintf("UserID: %s", userID))
+
+	response := map[string]interface{}{
+		"message": "User updated successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("id")
+	if userID == "" {
+		http.Error(w, "User ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Don't allow deleting the last admin user
+	var adminCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'").Scan(&adminCount)
+	
+	var userRole string
+	err := s.db.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&userRole)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	if userRole == "admin" && adminCount <= 1 {
+		http.Error(w, "Cannot delete the last admin user", http.StatusBadRequest)
+		return
+	}
+
+	// Soft delete - set status to 'deleted'
+	query := `UPDATE users SET status = 'deleted', updated_at = NOW() WHERE id = ?`
+	
+	result, err := s.db.Exec(query, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete user: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Log the action
+	s.logEvent("USER_DELETE", "User deleted via API", fmt.Sprintf("UserID: %s", userID))
+
+	response := map[string]interface{}{
+		"message": "User deleted successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleAgentsAPI(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		s.handleGetAgents(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *GoTeleportServerDB) handleGetAgents(w http.ResponseWriter, r *http.Request) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	// For now, allow access to agents for all authenticated users
+	// TODO: Implement proper user-agent assignment filtering
+	var currentUser *User = &User{Role: "admin"} // Temporary: treat all as admin
+
+	// Get agents based on user role and assignments
+	var agents []map[string]interface{}
+	var allowedAgentIDs map[string]bool
+
+	// If user is not admin, get their assigned agents
+	if currentUser.Role != "admin" && s.db != nil {
+		allowedAgentIDs = make(map[string]bool)
+		query := `SELECT agent_id FROM user_agent_assignments WHERE user_id = ? AND active = 1`
+		rows, err := s.db.Query(query, currentUser.ID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var agentID string
+				if err := rows.Scan(&agentID); err == nil {
+					allowedAgentIDs[agentID] = true
+				}
+			}
+		}
+	}
+
+	// Get online agents from memory
+	for id, agent := range s.agents {
+		// Check if user has access to this agent
+		if currentUser.Role != "admin" && !allowedAgentIDs[id] {
+			continue
+		}
+
+		agentInfo := map[string]interface{}{
+			"id":           id,
+			"name":         agent.Name,
+			"status":       "online",
+			"last_seen":    agent.LastSeen,
+			"connected_at": agent.ConnectedAt,
+		}
+		
+		// Get additional info from database if available
+		if s.db != nil {
+			var dbName, dbStatus, metadata string
+			var lastSeen time.Time
+			query := `SELECT name, status, last_seen, metadata FROM agents WHERE id = ?`
+			err := s.db.QueryRow(query, id).Scan(&dbName, &dbStatus, &lastSeen, &metadata)
+			if err == nil {
+				agentInfo["db_name"] = dbName
+				agentInfo["db_status"] = dbStatus
+				agentInfo["db_last_seen"] = lastSeen
+				agentInfo["metadata"] = metadata
+			}
+		}
+		
+		agents = append(agents, agentInfo)
+	}
+
+	// Also get offline agents from database
+	if s.db != nil {
+		query := `SELECT id, name, status, last_seen, metadata FROM agents WHERE status = 'offline' OR id NOT IN (SELECT id FROM agents WHERE status = 'online')`
+		rows, err := s.db.Query(query)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, name, status, metadata string
+				var lastSeen time.Time
+				err := rows.Scan(&id, &name, &status, &lastSeen, &metadata)
+				if err != nil {
+					continue
+				}
+				
+				// Check if user has access to this agent
+				if currentUser.Role != "admin" && !allowedAgentIDs[id] {
+					continue
+				}
+				
+				// Check if agent is not already in online list
+				found := false
+				for _, agent := range agents {
+					if agent["id"] == id {
+						found = true
+						break
+					}
+				}
+				
+				if !found {
+					agentInfo := map[string]interface{}{
+						"id":         id,
+						"name":       name,
+						"status":     status,
+						"last_seen":  lastSeen,
+						"metadata":   metadata,
+					}
+					agents = append(agents, agentInfo)
+				}
+			}
+		}
+	}
+
+	response := map[string]interface{}{
+		"agents": agents,
+		"total":  len(agents),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// User-Agent Assignments API
+func (s *GoTeleportServerDB) handleUserAssignmentsAPI(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, "Database not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// For now, allow access for all users with proper auth header
+	// TODO: Implement proper admin-only access
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+	
+	// Temporary: assume user is admin if they have any auth header
+	// In real implementation, properly validate token and check role
+
+	switch r.Method {
+	case "GET":
+		s.handleGetUserAssignments(w, r)
+	case "POST":
+		s.handleCreateUserAssignment(w, r)
+	case "DELETE":
+		s.handleDeleteUserAssignment(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *GoTeleportServerDB) handleGetUserAssignments(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	agentID := r.URL.Query().Get("agent_id")
+
+	var query string
+	var args []interface{}
+
+	if userID != "" && agentID != "" {
+		query = `SELECT ua.id, ua.user_id, ua.agent_id, ua.assigned_by, ua.assigned_at, ua.active,
+				        u.username, admin.username as assigned_by_username
+				 FROM user_agent_assignments ua
+				 JOIN users u ON ua.user_id = u.id
+				 JOIN users admin ON ua.assigned_by = admin.id
+				 WHERE ua.user_id = ? AND ua.agent_id = ? AND ua.active = 1`
+		args = append(args, userID, agentID)
+	} else if userID != "" {
+		query = `SELECT ua.id, ua.user_id, ua.agent_id, ua.assigned_by, ua.assigned_at, ua.active,
+				        u.username, admin.username as assigned_by_username
+				 FROM user_agent_assignments ua
+				 JOIN users u ON ua.user_id = u.id
+				 JOIN users admin ON ua.assigned_by = admin.id
+				 WHERE ua.user_id = ? AND ua.active = 1`
+		args = append(args, userID)
+	} else if agentID != "" {
+		query = `SELECT ua.id, ua.user_id, ua.agent_id, ua.assigned_by, ua.assigned_at, ua.active,
+				        u.username, admin.username as assigned_by_username
+				 FROM user_agent_assignments ua
+				 JOIN users u ON ua.user_id = u.id
+				 JOIN users admin ON ua.assigned_by = admin.id
+				 WHERE ua.agent_id = ? AND ua.active = 1`
+		args = append(args, agentID)
+	} else {
+		query = `SELECT ua.id, ua.user_id, ua.agent_id, ua.assigned_by, ua.assigned_at, ua.active,
+				        u.username, admin.username as assigned_by_username
+				 FROM user_agent_assignments ua
+				 JOIN users u ON ua.user_id = u.id
+				 JOIN users admin ON ua.assigned_by = admin.id
+				 WHERE ua.active = 1`
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var assignments []map[string]interface{}
+	for rows.Next() {
+		var assignment UserAgentAssignment
+		var username, assignedByUsername string
+		var assignedAtStr string
+		
+		err := rows.Scan(&assignment.ID, &assignment.UserID, &assignment.AgentID,
+			&assignment.AssignedBy, &assignedAtStr, &assignment.Active,
+			&username, &assignedByUsername)
+		if err != nil {
+			continue
+		}
+
+		if parsedTime, err := time.Parse("2006-01-02 15:04:05", assignedAtStr); err == nil {
+			assignment.AssignedAt = parsedTime
+		}
+
+		assignmentInfo := map[string]interface{}{
+			"id":                    assignment.ID,
+			"user_id":              assignment.UserID,
+			"agent_id":             assignment.AgentID,
+			"assigned_by":          assignment.AssignedBy,
+			"assigned_at":          assignment.AssignedAt,
+			"active":               assignment.Active,
+			"username":             username,
+			"assigned_by_username": assignedByUsername,
+		}
+		assignments = append(assignments, assignmentInfo)
+	}
+
+	response := map[string]interface{}{
+		"assignments": assignments,
+		"total":       len(assignments),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleCreateUserAssignment(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID  int    `json:"user_id"`
+		AgentID string `json:"agent_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.logEvent("ASSIGNMENT_ERROR", "Invalid JSON in create assignment", fmt.Sprintf("Error: %v", err))
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Log the request for debugging
+	s.logEvent("ASSIGNMENT_REQUEST", "Create assignment request", 
+		fmt.Sprintf("UserID: %d, AgentID: %s", req.UserID, req.AgentID))
+
+	// Get admin user from token
+	authHeader := r.Header.Get("Authorization")
+	currentUser, err := s.getUserFromToken(authHeader)
+	if err != nil {
+		s.logEvent("ASSIGNMENT_ERROR", "Token validation failed", fmt.Sprintf("Error: %v", err))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if assignment already exists
+	var existingID int
+	query := `SELECT id FROM user_agent_assignments WHERE user_id = ? AND agent_id = ? AND active = 1`
+	err = s.db.QueryRow(query, req.UserID, req.AgentID).Scan(&existingID)
+	if err == nil {
+		s.logEvent("ASSIGNMENT_ERROR", "Assignment already exists", 
+			fmt.Sprintf("UserID: %d, AgentID: %s", req.UserID, req.AgentID))
+		http.Error(w, "Assignment already exists", http.StatusConflict)
+		return
+	}
+
+	// Create new assignment
+	query = `INSERT INTO user_agent_assignments (user_id, agent_id, assigned_by, assigned_at, active) VALUES (?, ?, ?, NOW(), 1)`
+	result, err := s.db.Exec(query, req.UserID, req.AgentID, currentUser.ID)
+	if err != nil {
+		s.logEvent("ASSIGNMENT_ERROR", "Database error in create assignment", 
+			fmt.Sprintf("UserID: %d, AgentID: %s, Error: %v", req.UserID, req.AgentID, err))
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	assignmentID, _ := result.LastInsertId()
+
+	// Log the assignment
+	s.logEvent("USER_AGENT_ASSIGNED", "User assigned to agent", 
+		fmt.Sprintf("UserID: %d, AgentID: %s, AssignedBy: %s", req.UserID, req.AgentID, currentUser.Username))
+
+	response := map[string]interface{}{
+		"id":        assignmentID,
+		"user_id":   req.UserID,
+		"agent_id":  req.AgentID,
+		"assigned_by": currentUser.ID,
+		"message":   "Assignment created successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *GoTeleportServerDB) handleDeleteUserAssignment(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	agentID := r.URL.Query().Get("agent_id")
+
+	if userID == "" || agentID == "" {
+		http.Error(w, "user_id and agent_id are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get admin user from token
+	authHeader := r.Header.Get("Authorization")
+	currentUser, err := s.getUserFromToken(authHeader)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Soft delete assignment by setting active = 0
+	query := `UPDATE user_agent_assignments SET active = 0 WHERE user_id = ? AND agent_id = ? AND active = 1`
+	result, err := s.db.Exec(query, userID, agentID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Assignment not found", http.StatusNotFound)
+		return
+	}
+
+	// Log the unassignment
+	s.logEvent("USER_AGENT_UNASSIGNED", "User unassigned from agent", 
+		fmt.Sprintf("UserID: %s, AgentID: %s, UnassignedBy: %s", userID, agentID, currentUser.Username))
+
+	response := map[string]interface{}{
+		"message": "Assignment removed successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *GoTeleportServerDB) handleAccessLogsAPI(w http.ResponseWriter, r *http.Request) {
@@ -853,16 +1709,66 @@ func (s *GoTeleportServerDB) handleAccessLogsAPI(w http.ResponseWriter, r *http.
 // Rest of the methods remain similar but with database logging added...
 func (s *GoTeleportServerDB) sendAgentList(client *Client) {
 	s.mutex.RLock()
-	agents := make([]*Agent, 0, len(s.agents))
+	
+	// Get user information
+	var userRole string = "user" // Default to user role
+	var userID int = 0
+	
+	// Try to get user info from database based on username
+	if s.db != nil && client.Username != "" {
+		query := `SELECT id, role FROM users WHERE username = ? AND active = 1`
+		err := s.db.QueryRow(query, client.Username).Scan(&userID, &userRole)
+		if err != nil {
+			// User not found in database, default to user role
+			userRole = "user"
+			userID = 0
+		}
+	}
+	
+	// Get all agents
+	allAgents := make([]*Agent, 0, len(s.agents))
 	for _, agent := range s.agents {
-		agents = append(agents, agent)
+		allAgents = append(allAgents, agent)
 	}
 	s.mutex.RUnlock()
+	
+	// Filter agents based on user role and assignments
+	var filteredAgents []*Agent
+	
+	if userRole == "admin" {
+		// Admin can see all agents
+		filteredAgents = allAgents
+	} else if s.db != nil && userID > 0 {
+		// Regular user - get assigned agents only
+		var allowedAgentIDs map[string]bool = make(map[string]bool)
+		
+		query := `SELECT agent_id FROM user_agent_assignments WHERE user_id = ? AND active = 1`
+		rows, err := s.db.Query(query, userID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var agentID string
+				if err := rows.Scan(&agentID); err == nil {
+					allowedAgentIDs[agentID] = true
+				}
+			}
+		}
+		
+		// Filter agents based on assignments
+		for _, agent := range allAgents {
+			if allowedAgentIDs[agent.ID] {
+				filteredAgents = append(filteredAgents, agent)
+			}
+		}
+	} else {
+		// User not found in database or no database - show no agents for security
+		filteredAgents = []*Agent{}
+	}
 
 	response := Message{
 		Type:      "agent_list",
-		Data:      fmt.Sprintf("%d", len(agents)),
-		Metadata:  map[string]interface{}{"agents": agents},
+		Data:      fmt.Sprintf("%d", len(filteredAgents)),
+		Metadata:  map[string]interface{}{"agents": filteredAgents},
 		Timestamp: time.Now(),
 	}
 
@@ -870,6 +1776,49 @@ func (s *GoTeleportServerDB) sendAgentList(client *Client) {
 }
 
 func (s *GoTeleportServerDB) createSession(client *Client, agentID string) {
+	// Validate user access to agent first
+	var userRole string = "user" // Default to user role
+	var userID int = 0
+	hasAccess := false
+	
+	// Try to get user info from database based on username
+	if s.db != nil && client.Username != "" {
+		query := `SELECT id, role FROM users WHERE username = ? AND active = 1`
+		err := s.db.QueryRow(query, client.Username).Scan(&userID, &userRole)
+		if err != nil {
+			// User not found in database, default to user role
+			userRole = "user"
+			userID = 0
+		}
+	}
+	
+	// Check access permissions
+	if userRole == "admin" {
+		// Admin can access all agents
+		hasAccess = true
+	} else if s.db != nil && userID > 0 {
+		// Regular user - check assignments
+		query := `SELECT COUNT(*) FROM user_agent_assignments WHERE user_id = ? AND agent_id = ? AND active = 1`
+		var count int
+		err := s.db.QueryRow(query, userID, agentID).Scan(&count)
+		if err == nil && count > 0 {
+			hasAccess = true
+		}
+	}
+	
+	if !hasAccess {
+		// Send access denied response
+		response := Message{
+			Type:      "access_denied",
+			Data:      "You don't have permission to access this agent",
+			AgentID:   agentID,
+			Timestamp: time.Now(),
+		}
+		client.Connection.WriteJSON(response)
+		s.logEvent("ACCESS_DENIED", "Client access denied to agent", fmt.Sprintf("Client: %s, Agent: %s, User: %s", client.ID, agentID, client.Username))
+		return
+	}
+
 	sessionID := fmt.Sprintf("%x", time.Now().UnixNano())
 
 	session := &Session{
