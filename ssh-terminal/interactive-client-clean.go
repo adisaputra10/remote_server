@@ -28,6 +28,8 @@ type ClientConfig struct {
 	ServerURL     string `json:"server_url"`
 	ClientName    string `json:"client_name"`
 	LogFile       string `json:"log_file"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
 	AuthToken     string `json:"auth_token"`
 	AutoReconnect bool   `json:"auto_reconnect"`
 }
@@ -121,7 +123,9 @@ func (c *InteractiveClient) Connect() error {
 		ClientID:  c.clientID,
 		Data:      c.config.AuthToken,
 		Metadata: map[string]interface{}{
-			"name": c.config.ClientName,
+			"name":     c.config.ClientName,
+			"username": c.config.Username,
+			"password": c.config.Password,
 		},
 		Timestamp: time.Now(),
 	}
@@ -179,9 +183,9 @@ func (c *InteractiveClient) StartInteractiveShell() {
 
 func (c *InteractiveClient) getPrompt() string {
 	if c.currentAgent != "" {
-		return fmt.Sprintf("\033[32m%s@agent\033[0m$ ", c.currentAgent)
+		return fmt.Sprintf("\033[32m%s@%s\033[0m$ ", c.config.Username, c.currentAgent)
 	}
-	return "\033[36mteleport\033[0m> "
+	return fmt.Sprintf("\033[36m%s@teleport\033[0m> ", c.config.Username)
 }
 
 func (c *InteractiveClient) processCommand(command string) {
@@ -392,6 +396,13 @@ func (c *InteractiveClient) handleMessages() {
 
 func (c *InteractiveClient) processMessage(msg *Message) {
 	switch msg.Type {
+	case "auth_failed":
+		fmt.Printf("\n❌ Authentication failed: %s\n", msg.Data)
+		fmt.Println("🔐 Please check your username and auth_token in the config file")
+		c.connected = false
+		os.Exit(1)
+	case "registered":
+		fmt.Printf("✅ Successfully authenticated as user: %s\n", c.config.Username)
 	case "agent_list":
 		c.handleAgentList(msg)
 	case "session_created":

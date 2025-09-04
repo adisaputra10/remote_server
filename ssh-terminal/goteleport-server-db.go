@@ -1,28 +1,31 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/websocket"
 )
 
 type GoTeleportServerDB struct {
-	config    *ServerConfig
-	agents    map[string]*Agent
-	clients   map[string]*Client
-	sessions  map[string]*Session
-	mutex     sync.RWMutex
-	logger    *log.Logger
-	db        *sql.DB
-	upgrader  websocket.Upgrader
+	config   *ServerConfig
+	agents   map[string]*Agent
+	clients  map[string]*Client
+	sessions map[string]*Session
+	mutex    sync.RWMutex
+	logger   *log.Logger
+	db       *sql.DB
+	upgrader websocket.Upgrader
 }
 
 type ServerConfig struct {
@@ -33,25 +36,36 @@ type ServerConfig struct {
 	EnableDB    bool   `json:"enable_database"`
 }
 
+type User struct {
+	ID       int       `json:"id"`
+	Username string    `json:"username"`
+	Password string    `json:"password"`
+	Role     string    `json:"role"` // "admin" or "user"
+	CreatedAt time.Time `json:"created_at"`
+	Active   bool      `json:"active"`
+}
+
 type Agent struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Address     string                 `json:"address"`
-	Platform    string                 `json:"platform"`
-	Status      string                 `json:"status"`
-	LastSeen    time.Time              `json:"last_seen"`
-	Connection  *websocket.Conn        `json:"-"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	ID         string                 `json:"id"`
+	Name       string                 `json:"name"`
+	Address    string                 `json:"address"`
+	Platform   string                 `json:"platform"`
+	Status     string                 `json:"status"`
+	LastSeen   time.Time              `json:"last_seen"`
+	Connection *websocket.Conn        `json:"-"`
+	Metadata   map[string]interface{} `json:"metadata"`
 }
 
 type Client struct {
-	ID         string              `json:"id"`
-	Name       string              `json:"name"`
-	Status     string              `json:"status"`
-	LastSeen   time.Time           `json:"last_seen"`
-	Connection *websocket.Conn     `json:"-"`
-	Address    string              `json:"address"`
-	Metadata   map[string]string   `json:"metadata"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Username   string            `json:"username"`
+	Role       string            `json:"role"`
+	Status     string            `json:"status"`
+	LastSeen   time.Time         `json:"last_seen"`
+	Connection *websocket.Conn   `json:"-"`
+	Address    string            `json:"address"`
+	Metadata   map[string]string `json:"metadata"`
 }
 
 type Session struct {
@@ -75,15 +89,33 @@ type Message struct {
 }
 
 type CommandLog struct {
-	ID        int       `json:"id"`
-	SessionID string    `json:"session_id"`
-	ClientID  string    `json:"client_id"`
-	AgentID   string    `json:"agent_id"`
-	Command   string    `json:"command"`
-	Output    string    `json:"output"`
-	Status    string    `json:"status"`
-	Duration  int64     `json:"duration_ms"`
-	Timestamp time.Time `json:"timestamp"`
+	ID         int       `json:"id"`
+	SessionID  string    `json:"session_id"`
+	ClientID   string    `json:"client_id"`
+	ClientName string    `json:"client_name"`
+	AgentID    string    `json:"agent_id"`
+	AgentName  string    `json:"agent_name"`
+	Username   string    `json:"username"`
+	Command    string    `json:"command"`
+	Output     string    `json:"output"`
+	Status     string    `json:"status"`
+	Duration   int64     `json:"duration_ms"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+type AccessLog struct {
+	ID         int       `json:"id"`
+	ClientID   string    `json:"client_id"`
+	ClientName string    `json:"client_name"`
+	Username   string    `json:"username"`
+	AgentID    string    `json:"agent_id"`
+	AgentName  string    `json:"agent_name"`
+	SessionID  string    `json:"session_id"`
+	Action     string    `json:"action"` // connect, disconnect, command, login, logout
+	Details    string    `json:"details"`
+	IPAddress  string    `json:"ip_address"`
+	UserAgent  string    `json:"user_agent"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 func main() {
@@ -109,7 +141,14 @@ func main() {
 	http.HandleFunc("/ws/client", server.handleClientConnection)
 	http.HandleFunc("/api/logs", server.handleLogsAPI)
 	http.HandleFunc("/api/sessions", server.handleSessionsAPI)
+	http.HandleFunc("/api/access-logs", server.handleAccessLogsAPI)
 	http.HandleFunc("/api/stats", server.handleStatsAPI)
+	http.HandleFunc("/login", server.handleLogin)
+	http.HandleFunc("/admin", server.handleAdmin)
+	http.HandleFunc("/access-logs", server.handleAccessLogsPage)
+	http.HandleFunc("/logs", server.handleLogsPage)
+	http.HandleFunc("/dashboard", server.handleDashboard)
+	http.HandleFunc("/", server.handleIndex)
 
 	// Start server
 	addr := fmt.Sprintf(":%d", server.config.Port)
@@ -131,13 +170,20 @@ func NewGoTeleportServerDB(configFile string) (*GoTeleportServerDB, error) {
 		return nil, fmt.Errorf("failed to parse config: %v", err)
 	}
 
-	// Setup logging
-	logFile, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %v", err)
+	// Setup logging - write to both console and file
+	var writers []io.Writer
+	writers = append(writers, os.Stdout) // Always log to console
+
+	if config.LogFile != "" {
+		logFile, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open log file: %v", err)
+		}
+		writers = append(writers, logFile)
 	}
 
-	logger := log.New(logFile, "", log.LstdFlags)
+	multiWriter := io.MultiWriter(writers...)
+	logger := log.New(multiWriter, "", log.LstdFlags)
 
 	server := &GoTeleportServerDB{
 		config:   &config,
@@ -178,6 +224,11 @@ func (s *GoTeleportServerDB) initDatabase() error {
 		return fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	// Initialize default users
+	if err := s.initDefaultUsers(); err != nil {
+		return fmt.Errorf("failed to initialize default users: %v", err)
+	}
+
 	fmt.Println("✅ Database connected and tables ready")
 	return nil
 }
@@ -188,7 +239,10 @@ func (s *GoTeleportServerDB) createTables() error {
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			session_id VARCHAR(255) NOT NULL,
 			client_id VARCHAR(255) NOT NULL,
+			client_name VARCHAR(255) DEFAULT '',
 			agent_id VARCHAR(255) NOT NULL,
+			agent_name VARCHAR(255) DEFAULT '',
+			username VARCHAR(255) DEFAULT '',
 			command TEXT NOT NULL,
 			output TEXT,
 			status VARCHAR(50) DEFAULT 'executed',
@@ -197,6 +251,7 @@ func (s *GoTeleportServerDB) createTables() error {
 			INDEX idx_session (session_id),
 			INDEX idx_client (client_id),
 			INDEX idx_agent (agent_id),
+			INDEX idx_username (username),
 			INDEX idx_timestamp (timestamp)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -225,17 +280,72 @@ func (s *GoTeleportServerDB) createTables() error {
 		`CREATE TABLE IF NOT EXISTS clients (
 			id VARCHAR(255) PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
+			username VARCHAR(255) NOT NULL,
 			status VARCHAR(50) DEFAULT 'online',
 			last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			metadata JSON,
 			INDEX idx_status (status),
+			INDEX idx_username (username),
 			INDEX idx_last_seen (last_seen)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		
+		`CREATE TABLE IF NOT EXISTS users (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			username VARCHAR(255) UNIQUE NOT NULL,
+			password VARCHAR(255) NOT NULL,
+			role ENUM('admin', 'user') DEFAULT 'user',
+			active BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_username (username),
+			INDEX idx_role (role),
+			INDEX idx_active (active)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		
+		`CREATE TABLE IF NOT EXISTS access_logs (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			client_id VARCHAR(255) NOT NULL,
+			client_name VARCHAR(255),
+			username VARCHAR(255),
+			agent_id VARCHAR(255),
+			agent_name VARCHAR(255),
+			session_id VARCHAR(255),
+			action ENUM('connect', 'disconnect', 'command', 'login', 'logout') NOT NULL,
+			details TEXT,
+			ip_address VARCHAR(45),
+			user_agent TEXT,
+			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_client_id (client_id),
+			INDEX idx_agent_id (agent_id),
+			INDEX idx_username (username),
+			INDEX idx_action (action),
+			INDEX idx_timestamp (timestamp),
+			INDEX idx_session_id (session_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
 	for _, query := range tables {
 		if _, err := s.db.Exec(query); err != nil {
 			return fmt.Errorf("failed to create table: %v", err)
+		}
+	}
+
+	// Add missing columns to existing tables (for backward compatibility)
+	alterQueries := []string{
+		`ALTER TABLE command_logs ADD COLUMN client_name VARCHAR(255) DEFAULT ''`,
+		`ALTER TABLE command_logs ADD COLUMN agent_name VARCHAR(255) DEFAULT ''`,
+		`ALTER TABLE command_logs ADD COLUMN username VARCHAR(255) DEFAULT ''`,
+		`ALTER TABLE command_logs ADD INDEX idx_username (username)`,
+	}
+
+	for _, query := range alterQueries {
+		_, err := s.db.Exec(query)
+		if err != nil {
+			// Ignore errors for ALTER TABLE operations - columns might already exist
+			s.logEvent("DB_ALTER", "ALTER TABLE query failed (may be expected if column exists)", 
+				fmt.Sprintf("Query: %s, Error: %v", query, err))
+		} else {
+			s.logEvent("DB_ALTER", "ALTER TABLE query succeeded", query)
 		}
 	}
 
@@ -351,9 +461,77 @@ func (s *GoTeleportServerDB) handleClientConnection(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Validate auth token
+	if regMsg.Data != s.config.AuthToken {
+		s.logEvent("AUTH_FAILED", "Invalid auth token", fmt.Sprintf("Client: %s, Token: %s", clientID, regMsg.Data))
+		conn.WriteJSON(Message{
+			Type:      "auth_failed",
+			Data:      "Invalid authentication token",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Extract client information from metadata
+	var username, password string
 	if name, ok := regMsg.Metadata["name"].(string); ok {
 		client.Name = name
 	}
+	
+	if user, ok := regMsg.Metadata["username"].(string); ok {
+		username = user
+		client.Username = user
+	}
+	
+	if pass, ok := regMsg.Metadata["password"].(string); ok {
+		password = pass
+	}
+
+	// Validate required fields
+	if username == "" {
+		s.logEvent("AUTH_FAILED", "Missing username", fmt.Sprintf("Client: %s", clientID))
+		conn.WriteJSON(Message{
+			Type:      "auth_failed",
+			Data:      "Username is required",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	if password == "" {
+		s.logEvent("AUTH_FAILED", "Missing password", fmt.Sprintf("Client: %s, User: %s", clientID, username))
+		conn.WriteJSON(Message{
+			Type:      "auth_failed",
+			Data:      "Password is required",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Validate user credentials
+	user, authenticated := s.authenticateUser(username, password)
+	if !authenticated {
+		s.logEvent("AUTH_FAILED", "Invalid credentials", fmt.Sprintf("Client: %s, User: %s", clientID, username))
+		conn.WriteJSON(Message{
+			Type:      "auth_failed",
+			Data:      "Invalid username or password",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	if !user.Active {
+		s.logEvent("AUTH_FAILED", "User account disabled", fmt.Sprintf("Client: %s, User: %s", clientID, username))
+		conn.WriteJSON(Message{
+			Type:      "auth_failed",
+			Data:      "Account is disabled",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Set user role
+	client.Role = user.Role
 
 	// Register client
 	s.mutex.Lock()
@@ -365,7 +543,12 @@ func (s *GoTeleportServerDB) handleClientConnection(w http.ResponseWriter, r *ht
 		s.saveClientToDB(client)
 	}
 
-	s.logEvent("CLIENT_CONNECT", "Client registered", fmt.Sprintf("ID: %s, Name: %s", clientID, client.Name))
+	s.logEvent("CLIENT_CONNECT", "Client registered", fmt.Sprintf("ID: %s, Name: %s, User: %s, Role: %s", clientID, client.Name, client.Username, client.Role))
+
+	// Log access
+	s.logAccess(clientID, client.Name, client.Username, "", "", "", "login", 
+		fmt.Sprintf("Client connected with role %s", client.Role), 
+		r.RemoteAddr, r.UserAgent())
 
 	// Send registration response
 	response := Message{
@@ -406,7 +589,7 @@ func (s *GoTeleportServerDB) handleClientMessage(client *Client, msg *Message) {
 	case "command":
 		// Log command to database before forwarding
 		if s.config.EnableDB {
-			s.logCommandToDB(msg.SessionID, client.ID, msg.AgentID, msg.Command, "", "sent", 0)
+			s.logCommandToDB(msg.SessionID, client.ID, client.Name, msg.AgentID, "", client.Username, msg.Command, "", "sent", 0)
 		}
 		s.forwardToAgent(msg.SessionID, msg)
 	case "disconnect":
@@ -426,7 +609,7 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 				command := ""
 				output := msg.Data
 				duration := int64(0)
-				
+
 				if metadata := msg.Metadata; metadata != nil {
 					if cmd, ok := metadata["command"].(string); ok {
 						command = cmd
@@ -435,8 +618,21 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 						duration = int64(dur)
 					}
 				}
-				
-				s.logCommandToDB(sessionID, "", agent.ID, command, output, "completed", duration)
+
+				// Get client info from session
+				s.mutex.RLock()
+				session := s.sessions[sessionID]
+				var clientID, clientName, username string
+				if session != nil {
+					clientID = session.ClientID
+					if client := s.clients[clientID]; client != nil {
+						clientName = client.Name
+						username = client.Username
+					}
+				}
+				s.mutex.RUnlock()
+
+				s.logCommandToDB(sessionID, clientID, clientName, agent.ID, agent.Name, username, command, output, "completed", duration)
 			}
 		}
 		// Forward command result to client
@@ -449,18 +645,24 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 	}
 }
 
-func (s *GoTeleportServerDB) logCommandToDB(sessionID, clientID, agentID, command, output, status string, duration int64) {
+func (s *GoTeleportServerDB) logCommandToDB(sessionID, clientID, clientName, agentID, agentName, username, command, output, status string, duration int64) {
 	if s.db == nil {
 		return
 	}
 
-	query := `INSERT INTO command_logs (session_id, client_id, agent_id, command, output, status, duration_ms) 
-			  VALUES (?, ?, ?, ?, ?, ?, ?)`
-	
-	_, err := s.db.Exec(query, sessionID, clientID, agentID, command, output, status, duration)
+	query := `INSERT INTO command_logs (session_id, client_id, client_name, agent_id, agent_name, username, command, output, status, duration_ms) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := s.db.Exec(query, sessionID, clientID, clientName, agentID, agentName, username, command, output, status, duration)
 	if err != nil {
 		s.logEvent("DB_ERROR", "Failed to log command", err.Error())
+		return
 	}
+	
+	// Also log access for command execution  
+	details := fmt.Sprintf("Command executed: %s [%s]", command, status)
+	s.logAccess(clientID, clientName, username, agentID, agentName, sessionID, "command", 
+		details, "", "")
 }
 
 func (s *GoTeleportServerDB) saveAgentToDB(agent *Agent) {
@@ -473,7 +675,7 @@ func (s *GoTeleportServerDB) saveAgentToDB(agent *Agent) {
 			  VALUES (?, ?, ?, ?, ?) 
 			  ON DUPLICATE KEY UPDATE 
 			  name=VALUES(name), platform=VALUES(platform), status=VALUES(status), metadata=VALUES(metadata)`
-	
+
 	_, err := s.db.Exec(query, agent.ID, agent.Name, agent.Platform, agent.Status, string(metadata))
 	if err != nil {
 		s.logEvent("DB_ERROR", "Failed to save agent", err.Error())
@@ -486,12 +688,12 @@ func (s *GoTeleportServerDB) saveClientToDB(client *Client) {
 	}
 
 	metadata, _ := json.Marshal(client.Metadata)
-	query := `INSERT INTO clients (id, name, status, metadata) 
-			  VALUES (?, ?, ?, ?) 
+	query := `INSERT INTO clients (id, name, username, status, metadata) 
+			  VALUES (?, ?, ?, ?, ?) 
 			  ON DUPLICATE KEY UPDATE 
-			  name=VALUES(name), status=VALUES(status), metadata=VALUES(metadata)`
-	
-	_, err := s.db.Exec(query, client.ID, client.Name, client.Status, string(metadata))
+			  name=VALUES(name), username=VALUES(username), status=VALUES(status), metadata=VALUES(metadata)`
+
+	_, err := s.db.Exec(query, client.ID, client.Name, client.Username, client.Status, string(metadata))
 	if err != nil {
 		s.logEvent("DB_ERROR", "Failed to save client", err.Error())
 	}
@@ -538,7 +740,7 @@ func (s *GoTeleportServerDB) handleLogsAPI(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Build query
-	query := `SELECT id, session_id, client_id, agent_id, command, output, status, duration_ms, timestamp 
+	query := `SELECT id, session_id, client_id, client_name, agent_id, agent_name, username, command, output, status, duration_ms, timestamp 
 			  FROM command_logs WHERE 1=1`
 	args := []interface{}{}
 
@@ -568,8 +770,8 @@ func (s *GoTeleportServerDB) handleLogsAPI(w http.ResponseWriter, r *http.Reques
 	var logs []CommandLog
 	for rows.Next() {
 		var log CommandLog
-		err := rows.Scan(&log.ID, &log.SessionID, &log.ClientID, &log.AgentID, 
-						&log.Command, &log.Output, &log.Status, &log.Duration, &log.Timestamp)
+		err := rows.Scan(&log.ID, &log.SessionID, &log.ClientID, &log.ClientName, &log.AgentID, &log.AgentName, &log.Username,
+			&log.Command, &log.Output, &log.Status, &log.Duration, &log.Timestamp)
 		if err != nil {
 			continue
 		}
@@ -577,7 +779,14 @@ func (s *GoTeleportServerDB) handleLogsAPI(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logs)
+	
+	// Format response as expected by frontend
+	response := map[string]interface{}{
+		"logs": logs,
+		"total": len(logs),
+	}
+	
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *GoTeleportServerDB) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
@@ -614,6 +823,33 @@ func (s *GoTeleportServerDB) handleStatsAPI(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(stats)
 }
 
+func (s *GoTeleportServerDB) handleAccessLogsAPI(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	clientID := r.URL.Query().Get("client_id")
+	agentID := r.URL.Query().Get("agent_id")
+	username := r.URL.Query().Get("username")
+	limitStr := r.URL.Query().Get("limit")
+	
+	limit := 100 // default limit
+	if limitStr != "" {
+		if parsedLimit, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil || parsedLimit != 1 {
+			limit = 100
+		}
+	}
+	
+	logs, err := s.getAccessLogs(limit, clientID, agentID, username)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get access logs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"logs":  logs,
+		"total": len(logs),
+	})
+}
+
 // Rest of the methods remain similar but with database logging added...
 func (s *GoTeleportServerDB) sendAgentList(client *Client) {
 	s.mutex.RLock()
@@ -635,7 +871,7 @@ func (s *GoTeleportServerDB) sendAgentList(client *Client) {
 
 func (s *GoTeleportServerDB) createSession(client *Client, agentID string) {
 	sessionID := fmt.Sprintf("%x", time.Now().UnixNano())
-	
+
 	session := &Session{
 		ID:        sessionID,
 		AgentID:   agentID,
@@ -665,6 +901,16 @@ func (s *GoTeleportServerDB) createSession(client *Client, agentID string) {
 
 	client.Connection.WriteJSON(response)
 	s.logEvent("SESSION_CREATE", "Session created", fmt.Sprintf("ID: %s, Agent: %s, Client: %s", sessionID, agentID, client.ID))
+	
+	// Log access for session creation
+	s.mutex.RLock()
+	agent := s.agents[agentID]
+	s.mutex.RUnlock()
+	
+	if agent != nil {
+		s.logAccess(client.ID, client.Name, client.Username, agentID, agent.Name, sessionID, "connect",
+			"Session created between client and agent", "", "")
+	}
 }
 
 func (s *GoTeleportServerDB) forwardToAgent(sessionID string, msg *Message) {
@@ -684,7 +930,7 @@ func (s *GoTeleportServerDB) forwardToAgent(sessionID string, msg *Message) {
 
 	session.LastUsed = time.Now()
 	agent.Connection.WriteJSON(msg)
-	
+
 	s.logEvent("FORWARD_AGENT", "Message forwarded to agent", fmt.Sprintf("Session: %s", sessionID))
 }
 
@@ -705,7 +951,7 @@ func (s *GoTeleportServerDB) forwardToClient(sessionID string, msg *Message) {
 
 	session.LastUsed = time.Now()
 	client.Connection.WriteJSON(msg)
-	
+
 	s.logEvent("FORWARD_CLIENT", "Message forwarded to client", fmt.Sprintf("Session: %s", sessionID))
 }
 
@@ -724,7 +970,7 @@ func (s *GoTeleportServerDB) closeSession(sessionID string) {
 
 func (s *GoTeleportServerDB) logEvent(eventType, description, data string) {
 	if s.logger != nil {
-		logEntry := fmt.Sprintf("[%s] %s: %s | %s",
+		logEntry := fmt.Sprintf("📝 [%s] %s: %s | %s",
 			time.Now().Format("2006-01-02 15:04:05"),
 			eventType, description, data)
 		s.logger.Println(logEntry)
@@ -735,4 +981,845 @@ func (s *GoTeleportServerDB) Close() {
 	if s.db != nil {
 		s.db.Close()
 	}
+}
+
+// Web interface handlers
+func (s *GoTeleportServerDB) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .btn { background: #007bff; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; margin: 5px; }
+        .btn:hover { background: #0056b3; }
+        .info { background: #e3f2fd; padding: 15px; border-radius: 4px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 GoTeleport Server</h1>
+        <div class="info">
+            <p><strong>Server Status:</strong> Running</p>
+            <p><strong>Port:</strong> %d</p>
+            <p><strong>WebSocket Endpoint:</strong> /ws/client</p>
+        </div>
+        <div style="text-align: center;">
+            <a href="/login" class="btn">🔐 Admin Login</a>
+            <a href="/dashboard" class="btn">📊 Dashboard</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, html, s.config.Port)
+}
+
+func (s *GoTeleportServerDB) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+		
+		if user, authenticated := s.authenticateUser(username, password); authenticated && user.Active {
+			s.logEvent("WEB_LOGIN", "User logged in", fmt.Sprintf("User: %s, Role: %s", username, user.Role))
+			
+			if user.Role == "admin" {
+				http.Redirect(w, r, "/admin", http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			}
+			return
+		} else {
+			s.logEvent("WEB_AUTH_FAILED", "Invalid login attempt", fmt.Sprintf("User: %s", username))
+		}
+	}
+	
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport - Login</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; color: #555; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        .btn { background: #007bff; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
+        .btn:hover { background: #0056b3; }
+        .error { color: red; margin-top: 10px; }
+        .users { background: #fff3cd; padding: 15px; border-radius: 4px; margin: 20px 0; border: 1px solid #ffeaa7; }
+        .users h3 { margin-top: 0; color: #856404; }
+        .user-item { margin: 5px 0; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 GoTeleport Login</h1>
+        
+        <div class="users">
+            <h3>Available Test Users:</h3>
+            <div class="user-item"><strong>Admin:</strong> admin1 / admin123</div>
+            <div class="user-item"><strong>User:</strong> user1 / user123</div>
+        </div>
+        
+        <form method="POST">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit" class="btn">Login</button>
+        </form>
+        
+        <div style="text-align: center; margin-top: 20px;">
+            <a href="/">← Back to Home</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+func (s *GoTeleportServerDB) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	s.mutex.RLock()
+	agentCount := len(s.agents)
+	clientCount := len(s.clients)
+	sessionCount := len(s.sessions)
+	
+	// Get detailed client info
+	clientsInfo := make([]Client, 0, len(s.clients))
+	for _, client := range s.clients {
+		clientsInfo = append(clientsInfo, *client)
+	}
+	s.mutex.RUnlock()
+	
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport - Admin Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: #007bff; color: white; padding: 20px; border-radius: 8px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; margin-bottom: 5px; }
+        .stat-label { font-size: 0.9em; opacity: 0.9; }
+        .section { margin: 30px 0; }
+        .section h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; color: #333; font-weight: bold; }
+        .role-admin { background: #dc3545; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; }
+        .role-user { background: #28a745; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; }
+        .status-online { color: #28a745; font-weight: bold; }
+        .nav { text-align: center; margin-top: 30px; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; margin: 0 5px; }
+        .btn:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👑 Admin Panel</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Active Agents</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Connected Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Active Sessions</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Connected Clients</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                    </tr>
+                </thead>
+                <tbody>`
+	
+	for _, client := range clientsInfo {
+		roleClass := "role-user"
+		if client.Role == "admin" {
+			roleClass = "role-admin"
+		}
+		
+		html += fmt.Sprintf(`
+                    <tr>
+                        <td>%s</td>
+                        <td>%s</td>
+                        <td>%s</td>
+                        <td><span class="%s">%s</span></td>
+                        <td class="status-online">%s</td>
+                        <td>%s</td>
+                    </tr>`,
+			client.ID[:8]+"...", client.Name, client.Username, roleClass, client.Role, client.Status, client.LastSeen.Format("2006-01-02 15:04:05"))
+	}
+	
+	html += `
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="nav">
+            <a href="/logs" class="btn">📝 Command Logs</a>
+            <a href="/api/sessions" class="btn">📊 View Sessions</a>
+            <a href="/access-logs" class="btn">📋 Access Logs</a>
+            <a href="/dashboard" class="btn">📈 Dashboard</a>
+            <a href="/" class="btn">🏠 Home</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, html, agentCount, clientCount, sessionCount)
+}
+
+func (s *GoTeleportServerDB) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	s.mutex.RLock()
+	agentCount := len(s.agents)
+	clientCount := len(s.clients)
+	sessionCount := len(s.sessions)
+	s.mutex.RUnlock()
+	
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport - Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: #28a745; color: white; padding: 20px; border-radius: 8px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; margin-bottom: 5px; }
+        .stat-label { font-size: 0.9em; opacity: 0.9; }
+        .info { background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .nav { text-align: center; margin-top: 30px; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; margin: 0 5px; }
+        .btn:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 GoTeleport Dashboard</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Active Agents</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Connected Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">%d</div>
+                <div class="stat-label">Active Sessions</div>
+            </div>
+        </div>
+        
+        <div class="info">
+            <h3>🔗 Connection Information</h3>
+            <p><strong>WebSocket Endpoint:</strong> ws://localhost:%d/ws/client</p>
+            <p><strong>API Endpoints:</strong></p>
+            <ul>
+                <li>/api/logs - View server logs</li>
+                <li>/api/sessions - View active sessions</li>
+                <li>/api/stats - Server statistics</li>
+            </ul>
+        </div>
+        
+        <div class="nav">
+            <a href="/login" class="btn">🔐 Admin Login</a>
+            <a href="/" class="btn">🏠 Home</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, html, agentCount, clientCount, sessionCount, s.config.Port)
+}
+
+func (s *GoTeleportServerDB) handleAccessLogsPage(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport - Access Logs</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .filters { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+        .filters input, .filters select { padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        .action-login { background: #28a745; color: white; padding: 2px 8px; border-radius: 3px; }
+        .action-connect { background: #007bff; color: white; padding: 2px 8px; border-radius: 3px; }
+        .action-command { background: #ffc107; color: black; padding: 2px 8px; border-radius: 3px; }
+        .action-disconnect { background: #dc3545; color: white; padding: 2px 8px; border-radius: 3px; }
+        .nav { text-align: center; margin-top: 30px; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; margin: 0 5px; }
+        .btn:hover { background: #0056b3; }
+    </style>
+    <script>
+        function loadAccessLogs() {
+            const username = document.getElementById('username').value;
+            const clientId = document.getElementById('clientId').value;
+            const agentId = document.getElementById('agentId').value;
+            
+            let url = '/api/access-logs?';
+            if (username) url += 'username=' + encodeURIComponent(username) + '&';
+            if (clientId) url += 'client_id=' + encodeURIComponent(clientId) + '&';
+            if (agentId) url += 'agent_id=' + encodeURIComponent(agentId) + '&';
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.getElementById('logs-tbody');
+                    tbody.innerHTML = '';
+                    
+                    data.logs.forEach(log => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = ` + "`" + `
+                            <td>${log.timestamp}</td>
+                            <td>${log.username || '-'}</td>
+                            <td>${log.client_name || '-'}</td>
+                            <td>${log.agent_name || '-'}</td>
+                            <td><span class="action-${log.action}">${log.action}</span></td>
+                            <td>${log.details || '-'}</td>
+                            <td>${log.ip_address || '-'}</td>
+                        ` + "`" + `;
+                        tbody.appendChild(row);
+                    });
+                    
+                    document.getElementById('total-count').textContent = data.total;
+                })
+                .catch(error => console.error('Error:', error));
+        }
+        
+        // Load logs when page loads
+        window.onload = function() { loadAccessLogs(); };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Access Logs</h1>
+        
+        <div class="filters">
+            <input type="text" id="username" placeholder="Username" onchange="loadAccessLogs()">
+            <input type="text" id="clientId" placeholder="Client ID" onchange="loadAccessLogs()">
+            <input type="text" id="agentId" placeholder="Agent ID" onchange="loadAccessLogs()">
+            <button onclick="loadAccessLogs()" class="btn">🔍 Filter</button>
+            <span>Total: <strong id="total-count">0</strong> records</span>
+        </div>
+        
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Username</th>
+                        <th>Client</th>
+                        <th>Agent</th>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>IP Address</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-tbody">
+                    <tr><td colspan="7">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="nav">
+            <a href="/admin" class="btn">📊 Admin Panel</a>
+            <a href="/logs" class="btn">📝 Command Logs</a>
+            <a href="/access-logs" class="btn">📋 Access Logs</a>
+            <a href="/dashboard" class="btn">🎛️ Dashboard</a>
+            <a href="/" class="btn">🏠 Home</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+func (s *GoTeleportServerDB) handleLogsPage(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>GoTeleport - Command Logs</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .filters { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .filters input, .filters select { padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: #e3f2fd; padding: 15px; border-radius: 8px; text-align: center; min-width: 120px; }
+        .stat-number { font-size: 1.5em; font-weight: bold; color: #1976d2; }
+        .stat-label { font-size: 0.9em; color: #666; }
+        .table-container { overflow-x: auto; max-height: 600px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 0.9em; }
+        th { background-color: #f2f2f2; font-weight: bold; position: sticky; top: 0; }
+        .status-executed { background: #28a745; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+        .status-failed { background: #dc3545; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+        .status-running { background: #ffc107; color: black; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+        .command-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .output-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 0.8em; }
+        .duration { text-align: right; font-family: monospace; }
+        .nav { text-align: center; margin-top: 30px; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; margin: 0 5px; }
+        .btn:hover { background: #0056b3; }
+        .refresh-btn { background: #28a745; }
+        .refresh-btn:hover { background: #218838; }
+        .export-btn { background: #6f42c1; }
+        .export-btn:hover { background: #5a2d91; }
+        .search-container { display: flex; align-items: center; gap: 10px; }
+        .pagination { text-align: center; margin: 20px 0; }
+        .pagination button { margin: 0 5px; padding: 5px 10px; }
+    </style>
+    <script>
+        let currentPage = 1;
+        const pageSize = 50;
+        let allLogs = [];
+        
+        function loadCommandLogs() {
+            const sessionId = document.getElementById('sessionId').value;
+            const clientId = document.getElementById('clientId').value;
+            const agentId = document.getElementById('agentId').value;
+            const status = document.getElementById('status').value;
+            const command = document.getElementById('command').value;
+            
+            let url = '/api/logs?';
+            if (sessionId) url += 'session_id=' + encodeURIComponent(sessionId) + '&';
+            if (clientId) url += 'client_id=' + encodeURIComponent(clientId) + '&';
+            if (agentId) url += 'agent_id=' + encodeURIComponent(agentId) + '&';
+            if (status) url += 'status=' + encodeURIComponent(status) + '&';
+            if (command) url += 'command=' + encodeURIComponent(command) + '&';
+            
+            document.getElementById('loading').style.display = 'block';
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('API Response:', data);
+                    allLogs = data.logs || [];
+                    console.log('Loaded logs:', allLogs.length);
+                    updateStats(data);
+                    displayLogs();
+                    document.getElementById('loading').style.display = 'none';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('loading').style.display = 'none';
+                    alert('Error loading logs: ' + error.message);
+                });
+        }
+        
+        function updateStats(data) {
+            const totalLogs = data.logs ? data.logs.length : 0;
+            const executedCount = data.logs ? data.logs.filter(log => log.status === 'executed').length : 0;
+            const failedCount = data.logs ? data.logs.filter(log => log.status === 'failed').length : 0;
+            
+            document.getElementById('total-logs').textContent = totalLogs;
+            document.getElementById('executed-count').textContent = executedCount;
+            document.getElementById('failed-count').textContent = failedCount;
+        }
+        
+        function displayLogs() {
+            const startIndex = (currentPage - 1) * pageSize;
+            const endIndex = startIndex + pageSize;
+            const logsToShow = allLogs.slice(startIndex, endIndex);
+            
+            const tbody = document.getElementById('logs-tbody');
+            tbody.innerHTML = '';
+            
+            if (logsToShow.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px;">No logs found</td></tr>';
+                return;
+            }
+            
+            logsToShow.forEach(log => {
+                const row = document.createElement('tr');
+                row.innerHTML = ` + "`" + `
+                    <td>${formatTimestamp(log.timestamp)}</td>
+                    <td>${log.session_id ? log.session_id.substring(0, 8) + '...' : '-'}</td>
+                    <td>${log.client_name || '-'}</td>
+                    <td>${log.agent_name || '-'}</td>
+                    <td>${log.username || '-'}</td>
+                    <td class="command-cell" title="${log.command || ''}">${log.command || '-'}</td>
+                    <td class="output-cell" title="${log.output || ''}">${log.output || '-'}</td>
+                    <td><span class="status-${log.status}">${log.status}</span></td>
+                    <td class="duration">${log.duration_ms}ms</td>
+                ` + "`" + `;
+                tbody.appendChild(row);
+            });
+            
+            updatePagination();
+        }
+        
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+        
+        function updatePagination() {
+            const totalPages = Math.ceil(allLogs.length / pageSize);
+            const pagination = document.getElementById('pagination');
+            pagination.innerHTML = '';
+            
+            if (totalPages <= 1) return;
+            
+            // Previous button
+            if (currentPage > 1) {
+                const prevBtn = document.createElement('button');
+                prevBtn.textContent = '« Previous';
+                prevBtn.onclick = () => { currentPage--; displayLogs(); };
+                pagination.appendChild(prevBtn);
+            }
+            
+            // Page numbers
+            for (let i = Math.max(1, currentPage - 2); i <= Math.min(totalPages, currentPage + 2); i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.onclick = () => { currentPage = i; displayLogs(); };
+                if (i === currentPage) {
+                    pageBtn.style.background = '#007bff';
+                    pageBtn.style.color = 'white';
+                }
+                pagination.appendChild(pageBtn);
+            }
+            
+            // Next button
+            if (currentPage < totalPages) {
+                const nextBtn = document.createElement('button');
+                nextBtn.textContent = 'Next »';
+                nextBtn.onclick = () => { currentPage++; displayLogs(); };
+                pagination.appendChild(nextBtn);
+            }
+            
+            // Page info
+            const pageInfo = document.createElement('span');
+            pageInfo.textContent = ` + "`" + ` Page ${currentPage} of ${totalPages} (${allLogs.length} total records)` + "`" + `;
+            pageInfo.style.marginLeft = '20px';
+            pagination.appendChild(pageInfo);
+        }
+        
+        function exportLogs() {
+            if (allLogs.length === 0) {
+                alert('No logs to export');
+                return;
+            }
+            
+            let csv = 'Timestamp,Session ID,Client Name,Agent Name,Username,Command,Output,Status,Duration (ms)\\n';
+            allLogs.forEach(log => {
+                csv += ` + "`" + `"${log.timestamp}","${log.session_id || ''}","${log.client_name || ''}","${log.agent_name || ''}","${log.username || ''}","${(log.command || '').replace(/"/g, '""')}","${(log.output || '').replace(/"/g, '""')}","${log.status}","${log.duration_ms}"\\n` + "`" + `;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'command_logs_' + new Date().toISOString().split('T')[0] + '.csv';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+        
+        function clearFilters() {
+            document.getElementById('sessionId').value = '';
+            document.getElementById('clientId').value = '';
+            document.getElementById('agentId').value = '';
+            document.getElementById('status').value = '';
+            document.getElementById('command').value = '';
+            currentPage = 1;
+            loadCommandLogs();
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadCommandLogs, 30000);
+        
+        // Load logs when page loads
+        window.onload = function() { loadCommandLogs(); };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Command Logs</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number" id="total-logs">0</div>
+                <div class="stat-label">Total Commands</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="executed-count">0</div>
+                <div class="stat-label">Executed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="failed-count">0</div>
+                <div class="stat-label">Failed</div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <input type="text" id="sessionId" placeholder="Session ID" style="width: 150px;">
+            <input type="text" id="clientId" placeholder="Client ID" style="width: 150px;">
+            <input type="text" id="agentId" placeholder="Agent ID" style="width: 150px;">
+            <select id="status">
+                <option value="">All Status</option>
+                <option value="executed">Executed</option>
+                <option value="failed">Failed</option>
+                <option value="running">Running</option>
+            </select>
+            <input type="text" id="command" placeholder="Search command..." style="width: 200px;">
+            <button onclick="loadCommandLogs()" class="btn">🔍 Filter</button>
+            <button onclick="clearFilters()" class="btn">🗑️ Clear</button>
+            <button onclick="loadCommandLogs()" class="btn refresh-btn">🔄 Refresh</button>
+            <button onclick="exportLogs()" class="btn export-btn">📥 Export CSV</button>
+        </div>
+        
+        <div id="loading" style="display: none; text-align: center; padding: 20px;">
+            <strong>Loading logs...</strong>
+        </div>
+        
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Session ID</th>
+                        <th>Client Name</th>
+                        <th>Agent Name</th>
+                        <th>Username</th>
+                        <th>Command</th>
+                        <th>Output</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-tbody">
+                    <tr><td colspan="9">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="pagination" id="pagination"></div>
+        
+        <div class="nav">
+            <a href="/admin" class="btn">📊 Admin Panel</a>
+            <a href="/access-logs" class="btn">📋 Access Logs</a>
+            <a href="/dashboard" class="btn">🎛️ Dashboard</a>
+            <a href="/" class="btn">🏠 Home</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+// Authentication functions
+func hashPassword(password string) string {
+	hash := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(hash[:])
+}
+
+func (s *GoTeleportServerDB) authenticateUser(username, password string) (*User, bool) {
+	if s.db == nil {
+		return nil, false
+	}
+	
+	var user User
+	var passwordHash string
+	query := `SELECT id, username, password_hash, role 
+			  FROM users 
+			  WHERE username = ? AND status = 'active'`
+	
+	err := s.db.QueryRow(query, username).Scan(
+		&user.ID, &user.Username, &passwordHash, &user.Role)
+	
+	if err != nil {
+		return nil, false
+	}
+	
+	// For existing users with bcrypt, just check direct match for now
+	// Later we can implement proper bcrypt checking
+	if passwordHash == password {
+		user.Active = true
+		return &user, true
+	}
+	
+	// Also try SHA256 for new users
+	hashedPassword := hashPassword(password)
+	if passwordHash == hashedPassword {
+		user.Active = true
+		return &user, true
+	}
+	
+	return nil, false
+}
+
+func (s *GoTeleportServerDB) createUser(username, password, role string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not available")
+	}
+	
+	hashedPassword := hashPassword(password)
+	query := `INSERT INTO users (username, password_hash, role, status, email, full_name) 
+			  VALUES (?, ?, ?, 'active', ?, ?)`
+	
+	email := username + "@goteleport.local"
+	fullName := username
+	if role == "admin" {
+		fullName = "Administrator"
+	} else {
+		fullName = "User"
+	}
+	
+	_, err := s.db.Exec(query, username, hashedPassword, role, email, fullName)
+	return err
+}
+
+func (s *GoTeleportServerDB) initDefaultUsers() error {
+	// Check if any users exist
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	if err != nil {
+		return err
+	}
+	
+	s.logEvent("USER_CHECK", "Checking existing users", fmt.Sprintf("Found %d users in database", count))
+	
+	// Don't create default users if any already exist
+	if count > 0 {
+		s.logEvent("USER_INIT", "Users already exist, skipping default user creation", fmt.Sprintf("Found %d users", count))
+		return nil
+	}
+	
+	// Create default users if none exist
+	defaultUsers := []struct {
+		username, password, role string
+	}{
+		{"admin", "admin123", "admin"},
+		{"user", "user123", "user"},
+	}
+	
+	for _, u := range defaultUsers {
+		if err := s.createUser(u.username, u.password, u.role); err != nil {
+			s.logEvent("DB_ERROR", "Failed to create default user", fmt.Sprintf("User: %s, Error: %v", u.username, err))
+		} else {
+			s.logEvent("USER_CREATED", "Default user created", fmt.Sprintf("User: %s, Role: %s", u.username, u.role))
+		}
+	}
+	
+	return nil
+}
+
+// Access logging functions
+func (s *GoTeleportServerDB) logAccess(clientID, clientName, username, agentID, agentName, sessionID, action, details, ipAddress, userAgent string) {
+	if s.db == nil {
+		return
+	}
+	
+	query := `INSERT INTO access_logs 
+			  (client_id, client_name, username, agent_id, agent_name, session_id, action, details, ip_address, user_agent) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	
+	_, err := s.db.Exec(query, clientID, clientName, username, agentID, agentName, sessionID, action, details, ipAddress, userAgent)
+	if err != nil {
+		s.logEvent("DB_ERROR", "Failed to log access", err.Error())
+	}
+}
+
+func (s *GoTeleportServerDB) getAccessLogs(limit int, clientID, agentID, username string) ([]AccessLog, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	
+	query := `SELECT id, client_id, client_name, username, agent_id, agent_name, session_id, 
+			  action, details, ip_address, user_agent, timestamp 
+			  FROM access_logs WHERE 1=1`
+	args := []interface{}{}
+	
+	if clientID != "" {
+		query += " AND client_id = ?"
+		args = append(args, clientID)
+	}
+	
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	
+	if username != "" {
+		query += " AND username = ?"
+		args = append(args, username)
+	}
+	
+	query += " ORDER BY timestamp DESC"
+	
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var logs []AccessLog
+	for rows.Next() {
+		var log AccessLog
+		err := rows.Scan(&log.ID, &log.ClientID, &log.ClientName, &log.Username, 
+			&log.AgentID, &log.AgentName, &log.SessionID, &log.Action, 
+			&log.Details, &log.IPAddress, &log.UserAgent, &log.Timestamp)
+		if err != nil {
+			s.logEvent("DB_ERROR", "Failed to scan access log", err.Error())
+			continue
+		}
+		logs = append(logs, log)
+	}
+	
+	return logs, nil
 }

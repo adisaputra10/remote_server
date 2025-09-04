@@ -1,7 +1,9 @@
 {
   "server_url": "ws://localhost:8080/ws/client",
-  "client_name": "AdminClient-01",
+  "client_name": "DemoClient-01",
   "log_file": "client.log",
+  "username": "admin",
+  "password": "admin123",
   "auth_token": "teleport123",
   "auto_reconnect": true
 }
