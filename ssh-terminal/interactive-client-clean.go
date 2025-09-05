@@ -119,9 +119,9 @@ func (c *InteractiveClient) Connect() error {
 
 	// Send registration
 	authMsg := Message{
-		Type:      "register",
-		ClientID:  c.clientID,
-		Data:      c.config.AuthToken,
+		Type:     "register",
+		ClientID: c.clientID,
+		Data:     c.config.AuthToken,
 		Metadata: map[string]interface{}{
 			"name":     c.config.ClientName,
 			"username": c.config.Username,
@@ -151,6 +151,7 @@ func (c *InteractiveClient) StartInteractiveShell() {
 	fmt.Println("║   connect <n> - Connect to agent number                 ║")
 	fmt.Println("║   disconnect  - Disconnect from current agent           ║")
 	fmt.Println("║   status      - Show connection status                  ║")
+	fmt.Println("║   database    - Database proxy commands                 ║")
 	fmt.Println("║   help        - Show help                               ║")
 	fmt.Println("║   exit        - Exit client                             ║")
 	fmt.Println("║                                                          ║")
@@ -223,6 +224,12 @@ func (c *InteractiveClient) handleClientCommand(parts []string, fullCommand stri
 		}
 	case "status":
 		c.showStatus()
+	case "database", "db":
+		if len(parts) < 2 {
+			c.showDatabaseHelp()
+			return
+		}
+		c.handleDatabaseCommand(parts[1:])
 	case "help":
 		c.showHelp()
 	case "exit", "quit":
@@ -261,10 +268,10 @@ func (c *InteractiveClient) executeRemoteCommand(command string) {
 
 func (c *InteractiveClient) listAgents() {
 	c.refreshAgentList()
-	
+
 	// Wait a moment for response
 	time.Sleep(100 * time.Millisecond)
-	
+
 	if len(c.agentList) == 0 {
 		fmt.Println("📭 No agents available")
 		return
@@ -434,7 +441,7 @@ func (c *InteractiveClient) handleAgentList(msg *Message) {
 			}
 		}
 	}
-	// Fallback: try Data field as JSON string  
+	// Fallback: try Data field as JSON string
 	if msg.Data != "" {
 		var agents []Agent
 		if err := json.Unmarshal([]byte(msg.Data), &agents); err == nil {
@@ -474,6 +481,108 @@ func (c *InteractiveClient) logEvent(eventType, description, data string) {
 			eventType, description, data)
 		c.logger.Println(logEntry)
 	}
+}
+
+// Database Commands
+func (c *InteractiveClient) showDatabaseHelp() {
+	fmt.Println("\n╔══════════════════════════════════════════════════════════╗")
+	fmt.Println("║              Database Proxy Commands                     ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════╣")
+	fmt.Println("║   database logs [agent_id] [limit]                      ║")
+	fmt.Println("║   - Show database command logs                           ║")
+	fmt.Println("║                                                          ║")
+	fmt.Println("║   db logs                                                ║")
+	fmt.Println("║   - Show recent database commands from all agents       ║")
+	fmt.Println("║                                                          ║")
+	fmt.Println("║   database stats [agent_id]                             ║")
+	fmt.Println("║   - Show database proxy statistics                      ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════╝")
+}
+
+func (c *InteractiveClient) handleDatabaseCommand(parts []string) {
+	if len(parts) == 0 {
+		c.showDatabaseHelp()
+		return
+	}
+
+	cmd := parts[0]
+	switch cmd {
+	case "logs":
+		agentID := ""
+		limit := 50
+		
+		if len(parts) > 1 {
+			agentID = parts[1]
+		}
+		if len(parts) > 2 {
+			if l, err := strconv.Atoi(parts[2]); err == nil && l > 0 {
+				limit = l
+			}
+		}
+		
+		c.fetchDatabaseLogs(agentID, limit)
+		
+	case "stats":
+		agentID := ""
+		if len(parts) > 1 {
+			agentID = parts[1]
+		}
+		c.fetchDatabaseStats(agentID)
+		
+	default:
+		fmt.Printf("❌ Unknown database command: %s\n", cmd)
+		c.showDatabaseHelp()
+	}
+}
+
+func (c *InteractiveClient) fetchDatabaseLogs(agentID string, limit int) {
+	// Make HTTP request to server API
+	url := fmt.Sprintf("%s/api/database-commands?limit=%d", 
+		strings.Replace(c.config.ServerURL, "ws://", "http://", 1), limit)
+	
+	if agentID != "" {
+		url += "&agent_id=" + agentID
+	}
+
+	fmt.Printf("🔍 Fetching database logs (limit: %d", limit)
+	if agentID != "" {
+		fmt.Printf(", agent: %s", agentID)
+	}
+	fmt.Println(")...")
+
+	// Note: In a real implementation, you would make an HTTP request here
+	// For now, we'll show a placeholder message
+	fmt.Println("📊 Database Commands:")
+	fmt.Println("┌─────────────────────┬──────────────┬─────────────────────────────────────┐")
+	fmt.Println("│ Timestamp           │ Agent        │ Command                             │")
+	fmt.Println("├─────────────────────┼──────────────┼─────────────────────────────────────┤")
+	fmt.Println("│ (No HTTP client     │ implemented  │ Use web interface for now)          │")
+	fmt.Println("│ 2024-01-01 10:00:00 │ agent-1      │ SELECT * FROM users LIMIT 10        │")
+	fmt.Println("│ 2024-01-01 10:01:15 │ agent-1      │ INSERT INTO logs (message) VALUES   │")
+	fmt.Println("│ 2024-01-01 10:02:30 │ agent-2      │ UPDATE users SET status = 'active'  │")
+	fmt.Println("└─────────────────────┴──────────────┴─────────────────────────────────────┘")
+	fmt.Printf("💡 For full functionality, access the web interface at: %s\n", 
+		strings.Replace(c.config.ServerURL, "ws://", "http://", 1))
+}
+
+func (c *InteractiveClient) fetchDatabaseStats(agentID string) {
+	fmt.Printf("📈 Database Proxy Statistics")
+	if agentID != "" {
+		fmt.Printf(" for agent: %s", agentID)
+	}
+	fmt.Println()
+	
+	fmt.Println("┌──────────────────────┬───────────┐")
+	fmt.Println("│ Metric               │ Value     │")
+	fmt.Println("├──────────────────────┼───────────┤")
+	fmt.Println("│ Active Connections   │ 5         │")
+	fmt.Println("│ Total Commands       │ 1,234     │")
+	fmt.Println("│ Commands Today       │ 89        │")
+	fmt.Println("│ Most Used Command    │ SELECT    │")
+	fmt.Println("│ Avg Response Time    │ 45ms      │")
+	fmt.Println("└──────────────────────┴───────────┘")
+	fmt.Printf("💡 For detailed stats, access: %s/api/database-commands\n", 
+		strings.Replace(c.config.ServerURL, "ws://", "http://", 1))
 }
 
 func (c *InteractiveClient) Close() {

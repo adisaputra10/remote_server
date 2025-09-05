@@ -78,6 +78,11 @@ export default {
     return api.get('/access-logs', { params })
   },
 
+  // Query Logs
+  getQueryLogs(params = {}) {
+    return api.get('/query-logs', { params })
+  },
+
   // Sessions
   getSessions(params = {}) {
     return api.get('/sessions', { params })

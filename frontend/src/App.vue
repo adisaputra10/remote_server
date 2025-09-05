@@ -18,7 +18,7 @@
             </el-menu-item>
             <el-menu-item index="/access-logs">
               <el-icon><List /></el-icon>
-              Access Logs
+              Query Logs
             </el-menu-item>
             <el-menu-item index="/sessions">
               <el-icon><Connection /></el-icon>

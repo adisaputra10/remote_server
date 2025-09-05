@@ -1,9 +1,9 @@
 <template>
-  <div class="access-logs">
+  <div class="query-logs">
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>Access Logs</span>
+          <span>Query Logs</span>
           <div class="header-actions">
             <el-button type="success" @click="exportToCSV" :disabled="!logs.length">
               <el-icon><Download /></el-icon>
@@ -19,22 +19,20 @@
 
       <!-- Filters -->
       <el-form :model="filters" inline class="filter-form mb-4">
-        <el-form-item label="Client ID">
-          <el-input v-model="filters.clientId" placeholder="Client ID" clearable />
-        </el-form-item>
-        <el-form-item label="Agent ID">
-          <el-input v-model="filters.agentId" placeholder="Agent ID" clearable />
+        <el-form-item label="Client Name">
+          <el-input v-model="filters.agentId" placeholder="Client Name" clearable />
         </el-form-item>
         <el-form-item label="Username">
           <el-input v-model="filters.username" placeholder="Username" clearable />
         </el-form-item>
-        <el-form-item label="Action">
-          <el-select v-model="filters.action" placeholder="All Actions" clearable>
-            <el-option label="All Actions" value="" />
-            <el-option label="Connect" value="connect" />
-            <el-option label="Disconnect" value="disconnect" />
-            <el-option label="Command" value="command" />
-            <el-option label="Login" value="login" />
+        <el-form-item label="Event Type">
+          <el-select v-model="filters.eventType" placeholder="All Types" clearable>
+            <el-option label="All Types" value="" />
+            <el-option label="CMD_EXEC" value="CMD_EXEC" />
+            <el-option label="DB_COMMAND" value="DB_COMMAND" />
+            <el-option label="AGENT_START" value="AGENT_START" />
+            <el-option label="AGENT_CONNECT" value="AGENT_CONNECT" />
+            <el-option label="AGENT_DISCONNECT" value="AGENT_DISCONNECT" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -56,14 +54,9 @@
             {{ formatTimestamp(row.timestamp) }}
           </template>
         </el-table-column>
-        <el-table-column prop="client_name" label="Client Name" width="120">
+        <el-table-column prop="agent_id" label="Client Name" width="120">
           <template #default="{ row }">
-            {{ row.client_name || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="username" label="Username" width="100">
-          <template #default="{ row }">
-            {{ row.username || '-' }}
+            {{ row.agent_id || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="agent_name" label="Agent Name" width="120">
@@ -71,24 +64,45 @@
             {{ row.agent_name || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="action" label="Action" width="100">
+        <el-table-column prop="username" label="Username" width="100">
           <template #default="{ row }">
-            <el-tag :type="getActionType(row.action)">{{ row.action }}</el-tag>
+            {{ row.username || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="details" label="Details" min-width="200">
+        <el-table-column prop="protocol" label="Protocol" width="100">
           <template #default="{ row }">
-            <el-text truncated>{{ row.details || '-' }}</el-text>
+            {{ row.protocol || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="ip_address" label="IP Address" width="120">
+        <el-table-column prop="event_type" label="Event Type" width="120">
           <template #default="{ row }">
-            {{ row.ip_address || '-' }}
+            <el-tag :type="getQueryType(row.event_type)" size="small">
+              {{ row.event_type || '-' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="user_agent" label="User Agent" min-width="200">
+        <el-table-column prop="command" label="Command/Query" min-width="300">
           <template #default="{ row }">
-            <el-text truncated>{{ row.user_agent || '-' }}</el-text>
+            <el-tooltip effect="dark" :content="row.command" placement="top">
+              <el-text truncated>{{ row.command || '-' }}</el-text>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column prop="session_id" label="Session ID" width="150">
+          <template #default="{ row }">
+            {{ row.session_id || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="affected_rows" label="Rows" width="80">
+          <template #default="{ row }">
+            {{ row.affected_rows || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="Status" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row.status)" size="small">
+              {{ row.status || '-' }}
+            </el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -111,6 +125,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Download, Refresh, Search, RefreshLeft } from '@element-plus/icons-vue'
 import api from '../services/api'
 
@@ -118,10 +133,9 @@ const logs = ref([])
 const loading = ref(false)
 
 const filters = ref({
-  clientId: '',
   agentId: '',
   username: '',
-  action: ''
+  eventType: ''
 })
 
 const pagination = ref({
@@ -134,14 +148,24 @@ const formatTimestamp = (timestamp) => {
   return new Date(timestamp).toLocaleString()
 }
 
-const getActionType = (action) => {
-  const actionMap = {
-    'connect': 'success',
-    'disconnect': 'info',
-    'command': 'warning',
-    'login': 'primary'
+const getQueryType = (eventType) => {
+  const typeMap = {
+    'CMD_EXEC': 'primary',
+    'DB_COMMAND': 'success',
+    'AGENT_START': 'info',
+    'AGENT_CONNECT': 'success',
+    'AGENT_DISCONNECT': 'warning'
   }
-  return actionMap[action] || 'info'
+  return typeMap[eventType] || 'info'
+}
+
+const getStatusType = (status) => {
+  const statusMap = {
+    'success': 'success',
+    'error': 'danger',
+    'warning': 'warning'
+  }
+  return statusMap[status] || 'info'
 }
 
 const loadLogs = async () => {
@@ -149,21 +173,20 @@ const loadLogs = async () => {
   try {
     const params = {
       limit: pagination.value.pageSize,
-      offset: (pagination.value.currentPage - 1) * pagination.value.pageSize,
-      ...filters.value
+      offset: (pagination.value.currentPage - 1) * pagination.value.pageSize
     }
     
-    // Remove empty filters
-    Object.keys(params).forEach(key => {
-      if (params[key] === '') delete params[key]
-    })
+    // Map frontend filter names to backend parameter names
+    if (filters.value.agentId) params.agent_id = filters.value.agentId
+    if (filters.value.username) params.username = filters.value.username
+    if (filters.value.eventType) params.event_type = filters.value.eventType
     
-    const response = await api.getAccessLogs(params)
+    const response = await api.getQueryLogs(params)
     logs.value = response.data.logs || []
     pagination.value.total = response.data.total || logs.value.length
   } catch (error) {
-    console.error('Failed to load access logs:', error)
-    ElMessage.error('Failed to load access logs')
+    console.error('Failed to load query logs:', error)
+    ElMessage.error('Failed to load query logs')
   } finally {
     loading.value = false
   }
@@ -196,25 +219,27 @@ const handleCurrentChange = (page) => {
 const exportToCSV = () => {
   if (!logs.value.length) return
   
-  const headers = ['Timestamp', 'Client Name', 'Username', 'Agent Name', 'Action', 'Details', 'IP Address', 'User Agent']
+  const headers = ['Timestamp', 'Client Name', 'Client ID', 'Username', 'Database', 'Query Type', 'Query Text', 'Execution Time (ms)', 'Affected Rows', 'Status']
   const csvContent = [
     headers.join(','),
     ...logs.value.map(log => [
       formatTimestamp(log.timestamp),
-      log.client_name || '',
+      log.agent_id || '',
+      log.client_id || '', 
       log.username || '',
-      log.agent_name || '',
-      log.action || '',
-      `"${(log.details || '').replace(/"/g, '""')}"`,
-      log.ip_address || '',
-      `"${(log.user_agent || '').replace(/"/g, '""')}"`,
+      log.database_name || '',
+      log.query_type || '',
+      `"${(log.query_text || '').replace(/"/g, '""')}"`,
+      log.execution_time || '',
+      log.affected_rows || '',
+      log.status || ''
     ].join(','))
   ].join('\n')
   
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `access-logs-${new Date().toISOString().split('T')[0]}.csv`
+  link.download = `query-logs-${new Date().toISOString().split('T')[0]}.csv`
   link.click()
 }
 
