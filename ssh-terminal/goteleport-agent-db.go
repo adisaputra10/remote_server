@@ -474,8 +474,12 @@ func (dp *DatabaseProxy) inspectAndForward(src, dst net.Conn, direction, session
 		dataBuffer.Write(data)
 
 		// Inspect data for SQL commands if it's from client to server
-		if direction == "client_to_server" && dp.Config.Protocol == "mysql" {
-			dp.inspectMySQLCommands(dataBuffer.Bytes(), sessionID, clientIP)
+		if direction == "client_to_server" {
+			if dp.Config.Protocol == "mysql" {
+				dp.inspectMySQLCommands(dataBuffer.Bytes(), sessionID, clientIP)
+			} else if dp.Config.Protocol == "postgres" {
+				dp.inspectPostgreSQLCommands(dataBuffer.Bytes(), sessionID, clientIP)
+			}
 		}
 
 		// Forward the data
@@ -604,6 +608,71 @@ func (dp *DatabaseProxy) extractSQLCommands(data string) []string {
 	}
 
 	return commands
+}
+
+func (dp *DatabaseProxy) inspectPostgreSQLCommands(data []byte, sessionID, clientIP string) {
+	// PostgreSQL command detection with protocol parsing
+	if len(data) < 5 {
+		return
+	}
+
+	// PostgreSQL protocol: Try to detect Query messages (type 'Q')
+	offset := 0
+	for offset < len(data) {
+		if offset+5 >= len(data) {
+			break
+		}
+
+		// Look for Query message type 'Q' (0x51)
+		if data[offset] == 0x51 {
+			// Next 4 bytes are message length (big-endian)
+			msgLen := int(data[offset+1])<<24 | int(data[offset+2])<<16 | int(data[offset+3])<<8 | int(data[offset+4])
+			
+			if msgLen > 4 && offset+msgLen+1 <= len(data) {
+				// Extract SQL query (null-terminated string after the length)
+				queryStart := offset + 5
+				queryEnd := queryStart
+				for queryEnd < offset+msgLen+1 && queryEnd < len(data) && data[queryEnd] != 0 {
+					queryEnd++
+				}
+				
+				if queryEnd > queryStart {
+					sqlQuery := string(data[queryStart:queryEnd])
+					if dp.isSQLCommand(sqlQuery) {
+						dbCmd := DatabaseCommand{
+							SessionID: sessionID,
+							Command:   strings.TrimSpace(sqlQuery),
+							Protocol:  dp.Config.Protocol,
+							ClientIP:  clientIP,
+							Timestamp: time.Now(),
+							ProxyName: dp.Config.Name,
+						}
+						dp.logDatabaseCommand(dbCmd)
+						dp.sendCommandToServer(dbCmd)
+					}
+				}
+			}
+			offset += msgLen + 1
+		} else {
+			offset++
+		}
+	}
+
+	// Fallback: try regex-based detection on raw data
+	dataStr := string(data)
+	sqlCommands := dp.extractSQLCommands(dataStr)
+	for _, cmd := range sqlCommands {
+		dbCmd := DatabaseCommand{
+			SessionID: sessionID,
+			Command:   cmd,
+			Protocol:  dp.Config.Protocol,
+			ClientIP:  clientIP,
+			Timestamp: time.Now(),
+			ProxyName: dp.Config.Name,
+		}
+		dp.logDatabaseCommand(dbCmd)
+		dp.sendCommandToServer(dbCmd)
+	}
 }
 
 func (dp *DatabaseProxy) logDatabaseCommand(cmd DatabaseCommand) {

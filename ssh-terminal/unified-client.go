@@ -29,7 +29,7 @@ type UnifiedClient struct {
 	selectedAgent string
 	portForwards  map[string]*UnifiedPortForward
 	mutex         sync.RWMutex
-	mode          string // "interactive" or "port_forward"
+	mode          string // "remote" or "port_forward"
 }
 
 type ClientConfig struct {
@@ -232,7 +232,7 @@ func (c *UnifiedClient) handleAgentList(msg Message) {
 }
 
 func (c *UnifiedClient) handleCommandResult(msg Message) {
-	// Show command results when in interactive session or interactive mode
+	// Show command results when in remote session or remote mode
 	c.logger.Printf("handleCommandResult: sessionID='%s', currentAgent='%s', msgData='%s'", c.sessionID, c.currentAgent, msg.Data)
 	if c.sessionID != "" && c.currentAgent != "" {
 		if msg.Data != "" {
@@ -241,7 +241,7 @@ func (c *UnifiedClient) handleCommandResult(msg Message) {
 			c.logger.Printf("Empty command result data")
 		}
 	} else {
-		c.logger.Printf("Not in interactive session - sessionID='%s', currentAgent='%s'", c.sessionID, c.currentAgent)
+		c.logger.Printf("Not in remote session - sessionID='%s', currentAgent='%s'", c.sessionID, c.currentAgent)
 	}
 }
 
@@ -267,7 +267,7 @@ func getString(data map[string]interface{}, key string) string {
 
 func (c *UnifiedClient) StartMainMenu() {
 	scanner := bufio.NewScanner(os.Stdin)
-	
+
 	// Langsung masuk ke mode port forward (simplified mode)
 	c.startSimplePortForwardMode(scanner)
 }
@@ -275,13 +275,13 @@ func (c *UnifiedClient) StartMainMenu() {
 func (c *UnifiedClient) startSimplePortForwardMode(scanner *bufio.Scanner) {
 	c.mode = "port_forward"
 	fmt.Println("\n🚀 GoTeleport Simple Client - Port Forward Manager")
-	
+
 	// Show menu only once at startup
 	c.showSimpleMenu()
-	
+
 	for c.connected && c.mode == "port_forward" {
 		fmt.Print("command> ")
-		
+
 		if scanner.Scan() {
 			input := strings.TrimSpace(scanner.Text())
 			if input == "" {
@@ -299,7 +299,7 @@ func (c *UnifiedClient) showSimpleMenu() {
 	fmt.Println("║ Commands:                                                ║")
 	fmt.Println("║   agents                 - List available agents        ║")
 	fmt.Println("║   connect <agent_id>     - Connect to specific agent    ║")
-	fmt.Println("║   interactive            - Enter interactive shell mode ║")
+	fmt.Println("║   remote                 - Enter remote shell mode      ║")
 	fmt.Println("║   forward <local> <target> <port> - Create port forward ║")
 	fmt.Println("║   list                   - List active port forwards    ║")
 	fmt.Println("║   stop <local_port>      - Stop port forward            ║")
@@ -308,15 +308,15 @@ func (c *UnifiedClient) showSimpleMenu() {
 	fmt.Println("║   help                   - Show this help               ║")
 	fmt.Println("║   exit                   - Exit application             ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════╝")
-	
-	fmt.Println("\n💡 Port Forward + Interactive Shell Support!")
-	fmt.Println("💡 Connect to agent, then use 'interactive' for shell commands")
-	
+
+	fmt.Println("\n💡 Port Forward + Remote Shell Support!")
+	fmt.Println("💡 Connect to agent, then use 'remote' for shell commands")
+
 	fmt.Println("\n💡 Examples:")
 	fmt.Println("   agents                               # List all agents")
 	fmt.Println("   connect 1862343a04e880f4             # Connect to agent")
-	fmt.Println("   interactive                          # Enter shell mode")
-	fmt.Println("   forward 3308 localhost 3306          # Create MySQL proxy")
+	fmt.Println("   remote                               # Enter shell mode")
+	fmt.Println("   forward 3308 localhost 3306          # Create MySQL/PostgreSQL proxy")
 	fmt.Println("   list                                 # Show active forwards")
 	fmt.Println("   stop 3308                            # Stop port forward")
 }
@@ -354,6 +354,37 @@ func (c *UnifiedClient) processSimpleCommand(input string) {
 		targetHost := parts[2]
 		targetPort, _ := strconv.Atoi(parts[3])
 		c.createPortForward(localPort, c.selectedAgent, targetHost, targetPort)
+	case "mysql":
+		if len(parts) < 2 {
+			fmt.Println("❌ Usage: mysql <local_port>")
+			fmt.Println("💡 Example: mysql 3308")
+			fmt.Println("💡 This will create port forward: localhost:<local_port> -> agent:3307")
+			return
+		}
+		if c.selectedAgent == "" {
+			fmt.Println("❌ No agent selected. Use 'connect <agent_id>' first")
+			return
+		}
+		localPort, _ := strconv.Atoi(parts[1])
+		fmt.Printf("🐬 Creating MySQL port forward: localhost:%d -> agent:3307\n", localPort)
+		c.createPortForward(localPort, c.selectedAgent, "127.0.0.1", 3307)
+	case "postgresql":
+		if len(parts) < 2 {
+			fmt.Println("❌ Usage: postgresql <local_port>")
+			fmt.Println("💡 Example: postgresql 5433")
+			fmt.Println("💡 This will create port forward: localhost:<local_port> -> agent:<postgres_port>")
+			return
+		}
+		if c.selectedAgent == "" {
+			fmt.Println("❌ No agent selected. Use 'connect <agent_id>' first")
+			return
+		}
+		localPort, _ := strconv.Atoi(parts[1])
+
+		// Read PostgreSQL port dynamically from agent config
+		postgresPort := c.getPostgreSQLPort()
+		fmt.Printf("🐘 Creating PostgreSQL port forward: localhost:%d -> agent:%d\n", localPort, postgresPort)
+		c.createPortForward(localPort, c.selectedAgent, "127.0.0.1", postgresPort)
 	case "list":
 		c.listPortForwards()
 	case "stop":
@@ -367,19 +398,19 @@ func (c *UnifiedClient) processSimpleCommand(input string) {
 		c.getDatabaseLogs()
 	case "help":
 		c.showSimpleHelp()
-	case "interactive":
+	case "remote":
 		if c.selectedAgent == "" {
 			fmt.Println("❌ No agent selected. Use 'connect <agent_id>' first")
 			return
 		}
-		c.startInteractiveWithAgent(c.selectedAgent)
+		c.startRemoteWithAgent(c.selectedAgent)
 	case "shell":
 		if c.selectedAgent == "" {
 			fmt.Println("❌ No agent selected. Use 'connect <agent_id>' first")
 			return
 		}
 		fmt.Printf("💡 To execute shell commands on agent %s:\n", c.selectedAgent)
-		fmt.Println("💡 Type 'interactive' to enter interactive shell mode")
+		fmt.Println("💡 Type 'remote' to enter remote shell mode")
 		fmt.Println("💡 Or use: interactive-client-clean.exe for standalone shell")
 	case "exit", "quit":
 		fmt.Println("👋 Goodbye!")
@@ -387,12 +418,49 @@ func (c *UnifiedClient) processSimpleCommand(input string) {
 	default:
 		fmt.Printf("❌ Unknown command: %s\n", cmd)
 		fmt.Println("💡 This is a PORT FORWARD MANAGER, not a shell")
-		fmt.Println("💡 Available commands: agents, connect, forward, list, stop, logs, help, interactive, exit")
-		fmt.Println("💡 For shell commands, use 'interactive' after connecting to an agent")
+		fmt.Println("💡 Available commands: agents, connect, forward, list, stop, logs, help, remote, exit")
+		fmt.Println("💡 For shell commands, use 'remote' after connecting to an agent")
 	}
 }
 
-func (c *UnifiedClient) startInteractiveWithAgent(agentID string) {
+// getPostgreSQLPort reads agent config and returns the enabled PostgreSQL proxy port
+func (c *UnifiedClient) getPostgreSQLPort() int {
+	configFile := "agent-config-db.json"
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		fmt.Printf("⚠️  Could not read agent config %s, using default port 5435\n", configFile)
+		return 5435 // fallback to default
+	}
+
+	// Parse JSON manually to get PostgreSQL proxy port
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		fmt.Printf("⚠️  Could not parse agent config, using default port 5435\n")
+		return 5435 // fallback to default
+	}
+
+	// Find enabled PostgreSQL proxy
+	if proxies, ok := config["database_proxies"].([]interface{}); ok {
+		for _, p := range proxies {
+			if proxy, ok := p.(map[string]interface{}); ok {
+				if protocol, ok := proxy["protocol"].(string); ok && protocol == "postgres" {
+					if enabled, ok := proxy["enabled"].(bool); ok && enabled {
+						if localPort, ok := proxy["local_port"].(float64); ok {
+							port := int(localPort)
+							fmt.Printf("📖 Found PostgreSQL proxy on port %d\n", port)
+							return port
+						}
+					}
+				}
+			}
+		}
+	}
+
+	fmt.Printf("⚠️  No enabled PostgreSQL proxy found in config, using default port 5435\n")
+	return 5435 // fallback to default
+}
+
+func (c *UnifiedClient) startRemoteWithAgent(agentID string) {
 	// Find agent info
 	var selectedAgent *Agent
 	for i := range c.agentList {
@@ -401,47 +469,47 @@ func (c *UnifiedClient) startInteractiveWithAgent(agentID string) {
 			break
 		}
 	}
-	
+
 	if selectedAgent == nil {
 		fmt.Printf("❌ Agent not found: %s\n", agentID)
 		return
 	}
-	
-	// Connect to agent for interactive session
+
+	// Connect to agent for remote session
 	connectMsg := Message{
 		Type:      "connect_agent",
 		ClientID:  c.clientID,
 		AgentID:   agentID,
 		Timestamp: time.Now(),
 	}
-	
+
 	if err := c.conn.WriteJSON(connectMsg); err != nil {
 		fmt.Printf("❌ Failed to connect to agent: %v\n", err)
 		return
 	}
-	
+
 	c.currentAgent = agentID
-	
+
 	// Wait for session creation
 	fmt.Printf("🔗 Connecting to agent: %s (%s)...\n", selectedAgent.Name, agentID)
-	
+
 	maxWait := 10
 	for i := 0; i < maxWait && c.sessionID == ""; i++ {
 		time.Sleep(100 * time.Millisecond)
 	}
-	
+
 	if c.sessionID == "" {
 		fmt.Printf("❌ Failed to create session with agent\n")
 		c.currentAgent = ""
 		return
 	}
-	
+
 	fmt.Printf("✅ Connected! Session ID: %s\n", c.sessionID)
-	fmt.Println("💡 You are now in INTERACTIVE SHELL mode")
+	fmt.Println("💡 You are now in REMOTE SHELL mode")
 	fmt.Println("💡 Type 'exit' to return to port forward manager")
 	fmt.Println("💡 Database commands: 'database logs', 'database stats'")
-	
-	// Interactive shell loop
+
+	// Remote shell loop
 	scanner := bufio.NewScanner(os.Stdin)
 	for c.connected && c.currentAgent == agentID && c.sessionID != "" {
 		fmt.Printf("%s> ", selectedAgent.Name)
@@ -450,18 +518,18 @@ func (c *UnifiedClient) startInteractiveWithAgent(agentID string) {
 			if command == "" {
 				continue
 			}
-			
+
 			if command == "exit" {
 				c.disconnectFromAgent()
 				fmt.Println("📋 Returned to Port Forward Manager")
 				return
 			}
-			
+
 			if strings.HasPrefix(command, "database") {
 				c.handleDatabaseCommand(command)
 				continue
 			}
-			
+
 			// Send command to agent
 			cmdMsg := Message{
 				Type:      "command",
@@ -471,13 +539,13 @@ func (c *UnifiedClient) startInteractiveWithAgent(agentID string) {
 				Command:   command,
 				Timestamp: time.Now(),
 			}
-			
+
 			c.logger.Printf("Sending command: %s to agent: %s, session: %s", command, agentID, c.sessionID)
 			if err := c.conn.WriteJSON(cmdMsg); err != nil {
 				fmt.Printf("❌ Failed to send command: %v\n", err)
 				continue
 			}
-			
+
 			// Wait a bit for response
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -490,7 +558,7 @@ func (c *UnifiedClient) handleDatabaseCommand(command string) {
 		fmt.Println("❌ Usage: database <logs|stats|help>")
 		return
 	}
-	
+
 	subCmd := parts[1]
 	switch subCmd {
 	case "logs":
@@ -508,20 +576,20 @@ func (c *UnifiedClient) handleDatabaseCommand(command string) {
 func (c *UnifiedClient) getDatabaseStats() {
 	serverURL := strings.Replace(c.config.ServerURL, "ws://", "http://", 1)
 	serverURL = strings.Replace(serverURL, "/ws/client", "", 1)
-	
+
 	resp, err := http.Get(serverURL + "/api/database-commands/stats")
 	if err != nil {
 		fmt.Printf("❌ Failed to get stats: %v\n", err)
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	var stats map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
 		fmt.Printf("❌ Failed to parse stats: %v\n", err)
 		return
 	}
-	
+
 	fmt.Println("\n📊 Database Command Statistics:")
 	if total, ok := stats["total_commands"].(float64); ok {
 		fmt.Printf("📈 Total Commands: %.0f\n", total)
@@ -540,7 +608,7 @@ func (c *UnifiedClient) getDatabaseStats() {
 func (c *UnifiedClient) showDatabaseHelp() {
 	fmt.Println("\n💡 Database Commands:")
 	fmt.Println("   database logs    - Show recent SQL command logs")
-	fmt.Println("   database stats   - Show database statistics")  
+	fmt.Println("   database stats   - Show database statistics")
 	fmt.Println("   database help    - Show this help")
 }
 
@@ -562,8 +630,10 @@ func (c *UnifiedClient) showSimpleHelp() {
 	fmt.Println("\n💡 Available Commands:")
 	fmt.Println("   agents                           - List all available agents")
 	fmt.Println("   connect <agent_id>               - Select agent for connections")
-	fmt.Println("   interactive                      - Enter interactive shell mode")
+	fmt.Println("   remote                           - Enter remote shell mode")
 	fmt.Println("   forward <local> <host> <port>    - Create port forward through selected agent")
+	fmt.Println("   mysql <local_port>               - Quick MySQL forward (3307)")
+	fmt.Println("   postgresql <local_port>          - Quick PostgreSQL forward (auto-detect)")
 	fmt.Println("   list                             - List all active port forwards")
 	fmt.Println("   stop <local_port>                - Stop specific port forward")
 	fmt.Println("   logs                             - Show database command logs")
@@ -571,15 +641,16 @@ func (c *UnifiedClient) showSimpleHelp() {
 	fmt.Println("   help                             - Show this help message")
 	fmt.Println("   exit                             - Exit the application")
 	fmt.Println("")
-	fmt.Println("🎯 This is a UNIFIED CLIENT - supports both port forwarding and interactive shell!")
-	fmt.Println("💡 Connect to agent first, then use 'interactive' for shell commands")
+	fmt.Println("🎯 This is a UNIFIED CLIENT - supports both port forwarding and remote shell!")
+	fmt.Println("💡 Connect to agent first, then use 'remote' for shell commands")
 	fmt.Println("")
 	fmt.Println("📋 Usage Flow:")
 	fmt.Println("   1. agents                        # See available agents")
 	fmt.Println("   2. connect <agent_id>            # Select an agent")
-	fmt.Println("   3. interactive                   # Enter interactive shell mode")
-	fmt.Println("   4. forward 3308 localhost 3306   # Create MySQL proxy")
-	fmt.Println("   5. logs                          # View SQL command logs")
+	fmt.Println("   3. remote                        # Enter remote shell mode")
+	fmt.Println("   4. mysql 3308                    # Create MySQL proxy")
+	fmt.Println("   5. postgresql 5433               # Create PostgreSQL proxy")
+	fmt.Println("   6. logs                          # View SQL command logs")
 }
 
 func (c *UnifiedClient) refreshAgentList() {
@@ -684,14 +755,14 @@ func (c *UnifiedClient) stopPortForward(localPort int) {
 func (c *UnifiedClient) getDatabaseLogs() {
 	serverURL := strings.Replace(c.config.ServerURL, "ws://", "http://", 1)
 	serverURL = strings.Replace(serverURL, "/ws/client", "", 1)
-	
+
 	resp, err := http.Get(serverURL + "/api/database-commands")
 	if err != nil {
 		fmt.Printf("❌ Failed to get logs: %v\n", err)
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	// Parse response as object with commands array
 	var response struct {
 		Commands []DatabaseCommand `json:"commands"`
@@ -699,25 +770,25 @@ func (c *UnifiedClient) getDatabaseLogs() {
 		Limit    int               `json:"limit"`
 		Offset   int               `json:"offset"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		fmt.Printf("❌ Failed to parse logs: %v\n", err)
 		return
 	}
-	
+
 	commands := response.Commands
 	fmt.Printf("\n📋 Database Command Logs (%d entries):\n", response.Total)
-	
+
 	if len(commands) == 0 {
 		fmt.Println("📝 No database commands logged yet")
 		fmt.Println("💡 Try executing some SQL commands through the database proxy first")
 		return
 	}
-	
+
 	fmt.Println("┌──────────────────────┬─────────────────────────────────────────────┬──────────┬──────────┐")
 	fmt.Println("│ Timestamp            │ Command                                     │ Protocol │ Proxy    │")
 	fmt.Println("├──────────────────────┼─────────────────────────────────────────────┼──────────┼──────────┤")
-	
+
 	count := 0
 	for i := len(commands) - 1; i >= 0 && count < 10; i-- {
 		cmd := commands[i]
@@ -743,7 +814,7 @@ func (c *UnifiedClient) getDatabaseLogs() {
 
 func (c *UnifiedClient) Close() {
 	c.connected = false
-	
+
 	// Stop all port forwards
 	c.mutex.Lock()
 	for _, pf := range c.portForwards {
@@ -788,18 +859,33 @@ func (pf *UnifiedPortForward) acceptConnections() {
 func (pf *UnifiedPortForward) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// Connect through agent's database proxy instead of direct connection
-	// The agent should have database proxy running on port 3307
-	proxyAddr := "localhost:3307" // Agent's database proxy port
+	// Connect through agent's database proxy - use dynamic port based on target
+	var proxyAddr string
+	var connectionType string
+
+	if pf.TargetPort == 5433 {
+		// PostgreSQL proxy connection (for postgresql command)
+		proxyAddr = fmt.Sprintf("localhost:%d", pf.TargetPort)
+		connectionType = "proxy"
+	} else if pf.TargetPort == 5432 && pf.TargetHost == "localhost" {
+		// PostgreSQL direct connection with logging (use intercept proxy)
+		proxyAddr = "localhost:5435"
+		connectionType = "intercept-proxy"
+	} else {
+		// MySQL proxy (default)
+		proxyAddr = "localhost:3307"
+		connectionType = "proxy"
+	}
+
 	targetConn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
-		pf.Client.logger.Printf("Failed to connect to agent database proxy %s: %v", proxyAddr, err)
+		pf.Client.logger.Printf("Failed to connect to %s %s: %v", connectionType, proxyAddr, err)
 		return
 	}
 	defer targetConn.Close()
 
-	pf.Client.logger.Printf("Port forward connection: localhost:%d -> %s:%d (via %s database proxy)",
-		pf.LocalPort, pf.TargetHost, pf.TargetPort, pf.AgentID)
+	pf.Client.logger.Printf("Port forward connection: localhost:%d -> %s (via %s %s)",
+		pf.LocalPort, proxyAddr, pf.AgentID, connectionType)
 
 	// Bidirectional copy - all SQL traffic will now go through agent's database proxy
 	done := make(chan bool, 2)

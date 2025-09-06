@@ -11,7 +11,7 @@ import (
 func main() {
 	fmt.Println("🧪 Testing MySQL Database Proxy with Real MySQL Driver...")
 
-	// Connect through the proxy port 3307 (agent's database proxy)
+	// Connect through the unified client port forward 3308 → agent:3307
 	// Try different connection options
 	dsns := []string{
 		"root:rootpassword@tcp(localhost:3308)/mysql?timeout=5s",
@@ -52,7 +52,10 @@ func main() {
 	// Execute test queries that should be logged
 	testQueries := []string{
 		"use log",
-		"select * from users",
+		"SELECT * FROM clients LIMIT 5",
+		"SELECT * FROM database_commands LIMIT 5",
+		"SELECT * FROM query_logs LIMIT 5",
+		"SELECT * FROM command_logs LIMIT 5",
 		"SHOW DATABASES",
 	}
 
