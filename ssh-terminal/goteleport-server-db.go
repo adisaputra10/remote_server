@@ -21,6 +21,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type GoTeleportServerDB struct {
 	config   *ServerConfig
 	agents   map[string]*Agent
@@ -1234,25 +1241,32 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 			break
 		}
 
-		s.logEvent("TUNNEL_DATA", "Forwarding data to agent", 
-			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
+		s.logEvent("TUNNEL_DATA_IN", "Received data from client", 
+			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes, FirstBytes: %x", tunnelID, len(data), data[:min(len(data), 16)]))
+		s.logger.Printf("🔽 SERVER: Received %d bytes from client: %x", len(data), data[:min(len(data), 32)])
 
 		// Forward data to agent via WebSocket - use base64 encoding for binary safety
+		encodedData := base64.StdEncoding.EncodeToString(data)
+		s.logger.Printf("🔧 SERVER: Encoded %d bytes to base64, length: %d", len(data), len(encodedData))
+		
 		forwardMsg := Message{
 			Type:      "tunnel_data",
 			AgentID:   agentID,
 			SessionID: tunnelID,
-			Data:      base64.StdEncoding.EncodeToString(data),
+			Data:      encodedData,
 			Timestamp: time.Now(),
 		}
 
+		s.logger.Printf("📤 SERVER: Sending tunnel_data to agent %s, SessionID: %s", agentID, tunnelID)
 		if err := agent.Connection.WriteJSON(forwardMsg); err != nil {
 			s.logEvent("TUNNEL_ERROR", "Error forwarding to agent", err.Error())
+			s.logger.Printf("❌ SERVER: Failed to send to agent: %v", err)
 			break
 		}
 
-		s.logEvent("TUNNEL_DATA", "Data forwarded to agent successfully", 
+		s.logEvent("TUNNEL_DATA_SENT", "Data forwarded to agent successfully", 
 			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
+		s.logger.Printf("✅ SERVER: Data sent to agent successfully")
 	}
 
 	// Cleanup tunnel session
@@ -1325,24 +1339,37 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 		}
 	case "tunnel_data":
 		// Forward tunnel data to client - decode base64 first
+		s.logger.Printf("📥 SERVER: Received tunnel_data response from agent %s, SessionID: %s", agent.Name, msg.SessionID)
+		s.logger.Printf("🔧 SERVER: Base64 data length: %d", len(msg.Data))
+		
 		if tunnelID := msg.SessionID; tunnelID != "" && agent.TunnelSessions != nil {
 			if clientConn := agent.TunnelSessions[tunnelID]; clientConn != nil {
 				// Decode base64 data from agent
 				data, err := base64.StdEncoding.DecodeString(msg.Data)
 				if err != nil {
 					s.logEvent("TUNNEL_ERROR", "Failed to decode agent response", err.Error())
+					s.logger.Printf("❌ SERVER: Failed to decode base64 from agent: %v", err)
 					return
 				}
 				
+				s.logger.Printf("🔽 SERVER: Decoded %d bytes from agent: %x", len(data), data[:min(len(data), 32)])
 				s.logEvent("TUNNEL_DATA", "Forwarding agent response to client", 
 					fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
+				s.logger.Printf("📤 SERVER: Sending %d bytes to client", len(data))
 					
 				if err := clientConn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 					s.logEvent("TUNNEL_ERROR", "Failed to forward data to client", err.Error())
+					s.logger.Printf("❌ SERVER: Failed to send to client: %v", err)
 					// Clean up broken connection
 					delete(agent.TunnelSessions, tunnelID)
+				} else {
+					s.logger.Printf("✅ SERVER: Data sent to client successfully")
 				}
+			} else {
+				s.logger.Printf("⚠️  SERVER: No client connection found for tunnel %s", tunnelID)
 			}
+		} else {
+			s.logger.Printf("⚠️  SERVER: Invalid tunnel data - SessionID: %s, TunnelSessions: %v", tunnelID, agent.TunnelSessions != nil)
 		}
 	default:
 		s.logEvent("AGENT_MSG", "Unknown agent message", msg.Type)

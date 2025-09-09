@@ -17,6 +17,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type GoTeleportAgent struct {
 	config     *AgentConfig
 	conn       *websocket.Conn
@@ -355,7 +362,7 @@ func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
 func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	sessionID := msg.SessionID
 	
-	a.logger.Printf("📦 TUNNEL_DATA: SessionID=%s, DataLen=%d", sessionID, len(msg.Data))
+	a.logger.Printf("📦 AGENT: TUNNEL_DATA - SessionID=%s, Base64Len=%d", sessionID, len(msg.Data))
 	
 	// Get tunnel session
 	a.mutex.RLock()
@@ -363,7 +370,7 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	a.mutex.RUnlock()
 	
 	if !exists {
-		a.logger.Printf("❌ TUNNEL_ERROR: Session not found: %s", sessionID)
+		a.logger.Printf("❌ AGENT: Session not found: %s", sessionID)
 		a.logEvent("TUNNEL_ERROR", "Tunnel session not found", sessionID)
 		return
 	}
@@ -377,30 +384,30 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 		}
 	}
 	
-	a.logger.Printf("🔌 TUNNEL_DATA: Connecting to database proxy at 127.0.0.1:%d", targetPort)
+	a.logger.Printf("🔌 AGENT: Connecting to proxy at 127.0.0.1:%d", targetPort)
 	
 	// Connect to local database proxy
 	proxyAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
-		a.logger.Printf("❌ TUNNEL_ERROR: Failed to connect to proxy %s: %v", proxyAddr, err)
+		a.logger.Printf("❌ AGENT: Failed to connect to proxy %s: %v", proxyAddr, err)
 		a.logEvent("TUNNEL_ERROR", "Failed to connect to database proxy", 
 			fmt.Sprintf("Address: %s, Error: %v", proxyAddr, err))
 		return
 	}
 	defer conn.Close()
 	
-	a.logger.Printf("✅ TUNNEL_DATA: Connected to database proxy, sending %d bytes", len(msg.Data))
+	a.logger.Printf("✅ AGENT: Connected to proxy")
 	
 	// Decode base64 data from server
 	data, err := base64.StdEncoding.DecodeString(msg.Data)
 	if err != nil {
-		a.logger.Printf("❌ TUNNEL_ERROR: Failed to decode base64 data: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to decode base64: %v", err)
 		a.logEvent("TUNNEL_ERROR", "Failed to decode tunnel data", err.Error())
 		return
 	}
 	
-	a.logger.Printf("📦 TUNNEL_DATA: Decoded %d bytes, forwarding to database proxy", len(data))
+	a.logger.Printf("� AGENT: Decoded %d bytes, forwarding to proxy", len(data))
 	
 	// Forward data to database proxy
 	if _, err := conn.Write(data); err != nil {
@@ -413,27 +420,31 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	buffer := make([]byte, 4096)
 	n, err := conn.Read(buffer)
 	if err != nil && err != io.EOF {
-		a.logger.Printf("❌ TUNNEL_ERROR: Failed to read from proxy: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to read from proxy: %v", err)
 		a.logEvent("TUNNEL_ERROR", "Failed to read from database proxy", err.Error())
 		return
 	}
 	
-	a.logger.Printf("📤 TUNNEL_DATA: Sending %d bytes response back to server", n)
+	a.logger.Printf("� AGENT: Received %d bytes from proxy", n)
+	
+	// Encode response as base64 before sending to server
+	encodedResponse := base64.StdEncoding.EncodeToString(buffer[:n])
+	a.logger.Printf("🔧 AGENT: Encoded %d bytes to base64, sending to server", n)
 	
 	// Send response back to server - encode with base64 for binary safety
 	responseMsg := Message{
 		Type:      "tunnel_data",
 		SessionID: sessionID,
 		AgentID:   a.agentID,
-		Data:      base64.StdEncoding.EncodeToString(buffer[:n]),
+		Data:      encodedResponse,
 		Timestamp: time.Now(),
 	}
 	
 	if err := a.conn.WriteJSON(responseMsg); err != nil {
-		a.logger.Printf("❌ TUNNEL_ERROR: Failed to send response to server: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to send response to server: %v", err)
 		a.logEvent("TUNNEL_ERROR", "Failed to send tunnel response", err.Error())
 	} else {
-		a.logger.Printf("✅ TUNNEL_DATA: Response sent successfully")
+		a.logger.Printf("✅ AGENT: Response sent successfully to server")
 	}
 }
 
