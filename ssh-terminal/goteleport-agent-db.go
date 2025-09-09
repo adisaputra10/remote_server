@@ -267,6 +267,10 @@ func (a *GoTeleportAgent) handleMessage(msg *Message) {
 	switch msg.Type {
 	case "command":
 		a.executeCommand(msg)
+	case "tunnel_start":
+		a.handleTunnelStart(msg)
+	case "tunnel_data":
+		a.handleTunnelData(msg)
 	default:
 		a.logEvent("MESSAGE", "Unknown message type", msg.Type)
 	}

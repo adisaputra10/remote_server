@@ -58,15 +58,16 @@ type UserAgentAssignment struct {
 }
 
 type Agent struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Address     string                 `json:"address"`
-	Platform    string                 `json:"platform"`
-	Status      string                 `json:"status"`
-	LastSeen    time.Time              `json:"last_seen"`
-	ConnectedAt time.Time              `json:"connected_at"`
-	Connection  *websocket.Conn        `json:"-"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	ID             string                         `json:"id"`
+	Name           string                         `json:"name"`
+	Address        string                         `json:"address"`
+	Platform       string                         `json:"platform"`
+	Status         string                         `json:"status"`
+	LastSeen       time.Time                      `json:"last_seen"`
+	ConnectedAt    time.Time                      `json:"connected_at"`
+	Connection     *websocket.Conn                `json:"-"`
+	TunnelSessions map[string]*websocket.Conn     `json:"-"`
+	Metadata       map[string]interface{}         `json:"metadata"`
 }
 
 type Client struct {
@@ -201,6 +202,7 @@ func main() {
 	// Setup routes with CORS middleware
 	http.HandleFunc("/ws/agent", server.corsMiddleware(server.handleAgentConnection))
 	http.HandleFunc("/ws/client", server.corsMiddleware(server.handleClientConnection))
+	http.HandleFunc("/ws/tunnel", server.corsMiddleware(server.handleTunnelConnection))
 	http.HandleFunc("/api/auth/login", server.corsMiddleware(server.handleAPILogin))
 	http.HandleFunc("/api/auth/logout", server.corsMiddleware(server.handleAPILogout))
 	http.HandleFunc("/api/users", server.corsMiddleware(server.handleUsersAPI))
@@ -1130,6 +1132,130 @@ func (s *GoTeleportServerDB) handlePortForwardRequest(client *Client, msg *Messa
 	}
 }
 
+// handleTunnelConnection handles database tunnel requests for agents behind NAT
+func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *http.Request) {
+	// Log tunnel connection attempt
+	s.logEvent("TUNNEL_REQUEST", "Tunnel connection request", fmt.Sprintf("From: %s", r.RemoteAddr))
+
+	// Upgrade connection to WebSocket
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.logEvent("TUNNEL_ERROR", "Failed to upgrade tunnel connection", err.Error())
+		return
+	}
+	defer conn.Close()
+
+	s.logEvent("TUNNEL_CONNECT", "Tunnel connection established", fmt.Sprintf("From: %s", r.RemoteAddr))
+
+	// Read tunnel request
+	var tunnelRequest map[string]interface{}
+	if err := conn.ReadJSON(&tunnelRequest); err != nil {
+		s.logEvent("TUNNEL_ERROR", "Failed to read tunnel request", err.Error())
+		return
+	}
+
+	// Extract tunnel parameters
+	agentID, _ := tunnelRequest["agent_id"].(string)
+	targetPort, _ := tunnelRequest["target_port"].(float64)
+	dbType, _ := tunnelRequest["db_type"].(string)
+
+	s.logEvent("TUNNEL_REQUEST", "Tunnel request parsed", 
+		fmt.Sprintf("AgentID: %s, TargetPort: %d, DBType: %s", agentID, int(targetPort), dbType))
+
+	// Find agent
+	s.mutex.RLock()
+	agent, exists := s.agents[agentID]
+	s.mutex.RUnlock()
+
+	if !exists {
+		s.logEvent("TUNNEL_ERROR", "Agent not found", agentID)
+		conn.WriteJSON(map[string]interface{}{
+			"status": "error",
+			"error":  "Agent not found",
+		})
+		return
+	}
+
+	// Send tunnel ready response
+	if err := conn.WriteJSON(map[string]interface{}{
+		"status": "tunnel_ready",
+		"agent":  agentID,
+		"port":   int(targetPort),
+	}); err != nil {
+		s.logEvent("TUNNEL_ERROR", "Failed to send tunnel ready", err.Error())
+		return
+	}
+
+	s.logEvent("TUNNEL_READY", "Tunnel ready", 
+		fmt.Sprintf("AgentID: %s, TargetPort: %d", agentID, int(targetPort)))
+
+	// Send tunnel request to agent via WebSocket
+	tunnelRequestMsg := Message{
+		Type:      "tunnel_start",
+		AgentID:   agentID,
+		Timestamp: time.Now(),
+		Metadata: map[string]interface{}{
+			"target_port": int(targetPort),
+			"db_type":     dbType,
+		},
+	}
+
+	if err := agent.Connection.WriteJSON(tunnelRequestMsg); err != nil {
+		s.logEvent("TUNNEL_ERROR", "Failed to send tunnel request to agent", err.Error())
+		conn.WriteJSON(map[string]interface{}{
+			"status": "error",
+			"error":  "Failed to contact agent",
+		})
+		return
+	}
+
+	// Create tunnel session for bidirectional forwarding
+	tunnelID := fmt.Sprintf("tunnel_%s_%d_%d", agentID, int(targetPort), time.Now().Unix())
+	
+	// Store tunnel info in agent for response routing
+	if agent.TunnelSessions == nil {
+		agent.TunnelSessions = make(map[string]*websocket.Conn)
+	}
+	agent.TunnelSessions[tunnelID] = conn
+
+	s.logEvent("TUNNEL_ESTABLISHED", "Tunnel session created", 
+		fmt.Sprintf("TunnelID: %s, AgentID: %s, TargetPort: %d", tunnelID, agentID, int(targetPort)))
+
+	// Handle client data forwarding
+	for {
+		// Read data from client WebSocket
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				s.logEvent("TUNNEL_ERROR", "Error reading from client", err.Error())
+			}
+			break
+		}
+
+		// Forward data to agent via WebSocket
+		forwardMsg := Message{
+			Type:      "tunnel_data",
+			AgentID:   agentID,
+			SessionID: tunnelID,
+			Data:      string(data),
+			Timestamp: time.Now(),
+		}
+
+		if err := agent.Connection.WriteJSON(forwardMsg); err != nil {
+			s.logEvent("TUNNEL_ERROR", "Error forwarding to agent", err.Error())
+			break
+		}
+	}
+
+	// Cleanup tunnel session
+	if agent.TunnelSessions != nil {
+		delete(agent.TunnelSessions, tunnelID)
+	}
+
+	s.logEvent("TUNNEL_CLOSE", "Tunnel closed", 
+		fmt.Sprintf("AgentID: %s, TargetPort: %d", agentID, int(targetPort)))
+}
+
 func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 	// Log setiap message dari agent
 	s.logEvent("AGENT_MESSAGE", "Message from agent", fmt.Sprintf("Type: %s, From: %s (%s), SessionID: %s", 
@@ -1181,6 +1307,17 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 	case "heartbeat":
 		// Update last seen
 		agent.LastSeen = time.Now()
+	case "tunnel_data":
+		// Forward tunnel data to client
+		if tunnelID := msg.SessionID; tunnelID != "" && agent.TunnelSessions != nil {
+			if clientConn := agent.TunnelSessions[tunnelID]; clientConn != nil {
+				if err := clientConn.WriteMessage(websocket.BinaryMessage, []byte(msg.Data)); err != nil {
+					s.logEvent("TUNNEL_ERROR", "Failed to forward data to client", err.Error())
+					// Clean up broken connection
+					delete(agent.TunnelSessions, tunnelID)
+				}
+			}
+		}
 	default:
 		s.logEvent("AGENT_MSG", "Unknown agent message", msg.Type)
 	}

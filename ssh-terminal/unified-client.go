@@ -842,6 +842,27 @@ func (pf *UnifiedPortForward) Start() error {
 	return nil
 }
 
+// getServerHost extracts the host from server URL (e.g., "ws://168.231.119.242:8080/ws/client" -> "168.231.119.242")
+func (c *UnifiedClient) getServerHost() string {
+	serverURL := c.config.ServerURL
+	// Remove protocol (ws:// or wss://)
+	if strings.HasPrefix(serverURL, "ws://") {
+		serverURL = serverURL[5:]
+	} else if strings.HasPrefix(serverURL, "wss://") {
+		serverURL = serverURL[6:]
+	}
+	
+	// Extract host part (before first colon or slash)
+	if colonIndex := strings.Index(serverURL, ":"); colonIndex != -1 {
+		return serverURL[:colonIndex]
+	}
+	if slashIndex := strings.Index(serverURL, "/"); slashIndex != -1 {
+		return serverURL[:slashIndex]
+	}
+	
+	return serverURL
+}
+
 func (pf *UnifiedPortForward) acceptConnections() {
 	for pf.Active {
 		conn, err := pf.Listener.Accept()
@@ -859,46 +880,33 @@ func (pf *UnifiedPortForward) acceptConnections() {
 func (pf *UnifiedPortForward) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// Connect through agent's database proxy - use dynamic port based on target
-	var proxyAddr string
-	var connectionType string
-
-	if pf.TargetPort == 5433 {
-		// PostgreSQL proxy connection (for postgresql command)
-		proxyAddr = fmt.Sprintf("localhost:%d", pf.TargetPort)
-		connectionType = "proxy"
-	} else if pf.TargetPort == 5432 && pf.TargetHost == "localhost" {
-		// PostgreSQL direct connection with logging (use intercept proxy)
-		proxyAddr = "localhost:5435"
-		connectionType = "intercept-proxy"
+	// For agents behind NAT, we need to create a tunnel through the server
+	// Instead of connecting directly to agent, we send a port forward request to server
+	
+	var targetPort int
+	var dbType string
+	
+	if pf.TargetPort == 5433 || (pf.TargetPort == 5432 && pf.TargetHost == "localhost") {
+		// PostgreSQL connection
+		if pf.TargetPort == 5432 {
+			targetPort = 5435 // Use intercept proxy for logging
+		} else {
+			targetPort = 5433 // Direct PostgreSQL proxy
+		}
+		dbType = "postgresql"
 	} else {
-		// MySQL proxy (default)
-		proxyAddr = "localhost:3307"
-		connectionType = "proxy"
+		// MySQL connection (default)
+		targetPort = 3307
+		dbType = "mysql"
 	}
 
-	targetConn, err := net.Dial("tcp", proxyAddr)
+	// Create a tunnel request through the server to the agent
+	err := pf.createTunnelThroughServer(clientConn, pf.AgentID, targetPort, dbType)
 	if err != nil {
-		pf.Client.logger.Printf("Failed to connect to %s %s: %v", connectionType, proxyAddr, err)
+		pf.Client.logger.Printf("Failed to create tunnel through server for %s:%d: %v", 
+			pf.AgentID, targetPort, err)
 		return
 	}
-	defer targetConn.Close()
-
-	pf.Client.logger.Printf("Port forward connection: localhost:%d -> %s (via %s %s)",
-		pf.LocalPort, proxyAddr, pf.AgentID, connectionType)
-
-	// Bidirectional copy - all SQL traffic will now go through agent's database proxy
-	done := make(chan bool, 2)
-	go func() {
-		io.Copy(clientConn, targetConn)
-		done <- true
-	}()
-	go func() {
-		io.Copy(targetConn, clientConn)
-		done <- true
-	}()
-
-	<-done
 }
 
 func (pf *UnifiedPortForward) Stop() {
@@ -906,4 +914,102 @@ func (pf *UnifiedPortForward) Stop() {
 	if pf.Listener != nil {
 		pf.Listener.Close()
 	}
+}
+
+// createTunnelThroughServer creates a database tunnel through the server to an agent behind NAT
+func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, agentID string, targetPort int, dbType string) error {
+	// Connect to server WebSocket
+	serverURL := pf.Client.config.ServerURL
+	if !strings.HasPrefix(serverURL, "ws://") && !strings.HasPrefix(serverURL, "wss://") {
+		serverURL = "ws://" + serverURL
+	}
+	
+	// Replace /ws/client with /ws/tunnel for tunnel endpoint
+	serverURL = strings.Replace(serverURL, "/ws/client", "/ws/tunnel", 1)
+	
+	pf.Client.logger.Printf("Creating tunnel through server: %s -> agent:%s port:%d (%s)", 
+		serverURL, agentID, targetPort, dbType)
+
+	// Create WebSocket connection to server tunnel endpoint
+	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to server tunnel endpoint: %v", err)
+	}
+	defer conn.Close()
+
+	// Send tunnel request
+	tunnelRequest := map[string]interface{}{
+		"type":       "tunnel_request",
+		"agent_id":   agentID,
+		"target_port": targetPort,
+		"db_type":    dbType,
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}
+
+	if err := conn.WriteJSON(tunnelRequest); err != nil {
+		return fmt.Errorf("failed to send tunnel request: %v", err)
+	}
+
+	// Wait for tunnel confirmation
+	var response map[string]interface{}
+	if err := conn.ReadJSON(&response); err != nil {
+		return fmt.Errorf("failed to read tunnel response: %v", err)
+	}
+
+	if status, ok := response["status"].(string); !ok || status != "tunnel_ready" {
+		return fmt.Errorf("tunnel request failed: %v", response)
+	}
+
+	pf.Client.logger.Printf("Tunnel established: localhost:%d -> %s:%d (via server)", 
+		pf.LocalPort, agentID, targetPort)
+
+	// Start bidirectional data transfer
+	done := make(chan bool, 2)
+	
+	// Client -> Server
+	go func() {
+		defer func() { done <- true }()
+		for {
+			// Read from client connection
+			buffer := make([]byte, 4096)
+			n, err := clientConn.Read(buffer)
+			if err != nil {
+				if err != io.EOF {
+					pf.Client.logger.Printf("Error reading from client: %v", err)
+				}
+				return
+			}
+
+			// Send to server via WebSocket
+			if err := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+				pf.Client.logger.Printf("Error sending to server: %v", err)
+				return
+			}
+		}
+	}()
+
+	// Server -> Client
+	go func() {
+		defer func() { done <- true }()
+		for {
+			// Read from server via WebSocket
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+					pf.Client.logger.Printf("Error reading from server: %v", err)
+				}
+				return
+			}
+
+			// Send to client connection
+			if _, err := clientConn.Write(data); err != nil {
+				pf.Client.logger.Printf("Error writing to client: %v", err)
+				return
+			}
+		}
+	}()
+
+	// Wait for either direction to close
+	<-done
+	return nil
 }
