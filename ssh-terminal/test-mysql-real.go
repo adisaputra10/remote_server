@@ -11,7 +11,7 @@ import (
 func main() {
 	fmt.Println("🧪 Testing MySQL Database Proxy with Real MySQL Driver...")
 
-	// Connect through the unified client port forward 3308 → agent:3307
+	// Connect through the agent's MySQL proxy on port 3307
 	// Try different connection options
 	dsns := []string{
 		"root:rootpassword@tcp(localhost:3308)/mysql?timeout=5s",
@@ -45,6 +45,7 @@ func main() {
 		fmt.Println("❌ All connection attempts failed. Please check MySQL server and credentials.")
 		fmt.Println("💡 This test requires a running MySQL server on localhost:3306")
 		fmt.Println("💡 Make sure the agent's database proxy is running on port 3307")
+		fmt.Println("💡 Check if goteleport-agent-db.exe is running with agent-config-db.json")
 		return
 	}
 	defer db.Close()

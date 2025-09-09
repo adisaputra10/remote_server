@@ -744,6 +744,9 @@ func (s *GoTeleportServerDB) sanitizeString(str string) string {
 }
 
 func (s *GoTeleportServerDB) handleAgentConnection(w http.ResponseWriter, r *http.Request) {
+	// Log agent connection attempt
+	s.logEvent("AGENT_CONNECT_ATTEMPT", "Agent connection attempt", fmt.Sprintf("From: %s", r.RemoteAddr))
+	
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logEvent("ERROR", "Failed to upgrade agent connection", err.Error())
@@ -825,6 +828,9 @@ func (s *GoTeleportServerDB) handleAgentConnection(w http.ResponseWriter, r *htt
 }
 
 func (s *GoTeleportServerDB) handleClientConnection(w http.ResponseWriter, r *http.Request) {
+	// Log client connection attempt
+	s.logEvent("CLIENT_CONNECT_ATTEMPT", "Client connection attempt", fmt.Sprintf("From: %s", r.RemoteAddr))
+	
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logEvent("ERROR", "Failed to upgrade client connection", err.Error())
@@ -977,6 +983,10 @@ func (s *GoTeleportServerDB) handleClientConnection(w http.ResponseWriter, r *ht
 }
 
 func (s *GoTeleportServerDB) handleClientMessage(client *Client, msg *Message) {
+	// Log setiap message dari client
+	s.logEvent("CLIENT_MESSAGE", "Message from client", fmt.Sprintf("Type: %s, From: %s (%s), SessionID: %s", 
+		msg.Type, client.Name, client.Address, msg.SessionID))
+		
 	switch msg.Type {
 	case "login":
 		s.handleClientAuth(client, msg)
@@ -1121,6 +1131,10 @@ func (s *GoTeleportServerDB) handlePortForwardRequest(client *Client, msg *Messa
 }
 
 func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
+	// Log setiap message dari agent
+	s.logEvent("AGENT_MESSAGE", "Message from agent", fmt.Sprintf("Type: %s, From: %s (%s), SessionID: %s", 
+		msg.Type, agent.Name, agent.Address, msg.SessionID))
+		
 	switch msg.Type {
 	case "command_result":
 		// Log command result to database

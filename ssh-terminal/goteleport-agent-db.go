@@ -202,6 +202,9 @@ func (a *GoTeleportAgent) connect() error {
 			return fmt.Errorf("connection lost: %v", err)
 		}
 
+		// Log incoming message dari server
+		a.logEvent("SERVER_MESSAGE", "Message from server", fmt.Sprintf("Type: %s, SessionID: %s", msg.Type, msg.SessionID))
+
 		a.handleMessage(&msg)
 	}
 }
@@ -251,6 +254,16 @@ func (a *GoTeleportAgent) heartbeat() {
 }
 
 func (a *GoTeleportAgent) handleMessage(msg *Message) {
+	// Log setiap request yang masuk
+	clientInfo := "unknown"
+	if msg.Metadata != nil {
+		if client, ok := msg.Metadata["client_ip"]; ok {
+			clientInfo = fmt.Sprintf("%v", client)
+		}
+	}
+	
+	a.logEvent("CLIENT_REQUEST", "Incoming request", fmt.Sprintf("Type: %s, From: %s, SessionID: %s", msg.Type, clientInfo, msg.SessionID))
+	
 	switch msg.Type {
 	case "command":
 		a.executeCommand(msg)
@@ -422,20 +435,24 @@ func (dp *DatabaseProxy) acceptConnections() {
 
 func (dp *DatabaseProxy) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
+	
+	clientIP := clientConn.RemoteAddr().String()
+	sessionID := fmt.Sprintf("db_%s_%d", dp.Config.Name, time.Now().Unix())
+	
+	// Log koneksi client
+	dp.Logger.Printf("CLIENT_CONNECT: New database connection from %s to %s proxy (Session: %s)", 
+		clientIP, dp.Config.Name, sessionID)
 
 	// Connect to target database
 	targetAddr := fmt.Sprintf("%s:%d", dp.Config.TargetHost, dp.Config.TargetPort)
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
-		dp.Logger.Printf("Failed to connect to target %s: %v", targetAddr, err)
+		dp.Logger.Printf("DB_ERROR: Failed to connect to target %s: %v (Session: %s)", targetAddr, err, sessionID)
 		return
 	}
 	defer targetConn.Close()
 
-	sessionID := fmt.Sprintf("db_%s_%d", dp.Config.Name, time.Now().Unix())
-	clientIP := clientConn.RemoteAddr().String()
-
-	dp.Logger.Printf("Database connection established: %s -> %s (Session: %s)", 
+	dp.Logger.Printf("DB_CONNECT: Database connection established: %s -> %s (Session: %s)", 
 		clientIP, targetAddr, sessionID)
 
 	// Start packet inspection for command logging
