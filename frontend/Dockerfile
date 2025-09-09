@@ -9,8 +9,10 @@ RUN npm run build
 # Production image
 FROM nginx:alpine
 
-# Install wget for healthcheck, remove default nginx config and setup nginx user
-RUN apk add --no-cache wget 
+# Install wget for healthcheck and remove default nginx config
+RUN apk add --no-cache wget && \
+    rm /etc/nginx/conf.d/default.conf
+
 # Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
