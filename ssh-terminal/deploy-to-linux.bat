@@ -69,6 +69,9 @@ scp server-config-db.json ${ServerUser}@${ServerIP}:${ProjectDir}/
 if (Test-Path "start-agent.sh") {
     scp start-agent.sh ${ServerUser}@${ServerIP}:${ProjectDir}/
 }
+if (Test-Path "start-agent-verbose.sh") {
+    scp start-agent-verbose.sh ${ServerUser}@${ServerIP}:${ProjectDir}/
+}
 if (Test-Path "start-server.sh") {
     scp start-server.sh ${ServerUser}@${ServerIP}:${ProjectDir}/
 }
@@ -109,6 +112,11 @@ Write-Host "🔧 To connect from Windows client:" -ForegroundColor Cyan
 Write-Host "   Update client-config-clean.json with server_url: ws://${ServerIP}:8081/ws/client" -ForegroundColor White
 Write-Host "   Run: .\unified-client.exe client-config-clean.json" -ForegroundColor White
 Write-Host "   🆕 Tunnel support: Agent behind NAT now supported!" -ForegroundColor Yellow
+
+Write-Host ""
+Write-Host "🔍 For debugging agent issues:" -ForegroundColor Cyan
+Write-Host "   ./start-agent-verbose.sh (shows stdout + file logs)" -ForegroundColor White
+Write-Host "   tail -f agent-db.log (file logs only)" -ForegroundColor White
 
 # Cleanup local Linux binaries
 Write-Host "🧹 Cleaning up local Linux binaries..." -ForegroundColor Yellow
