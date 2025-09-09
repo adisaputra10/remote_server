@@ -306,6 +306,122 @@ func (a *GoTeleportAgent) executeCommand(msg *Message) {
 	}
 }
 
+// handleTunnelStart starts a database tunnel for NAT clients
+func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
+	sessionID := msg.SessionID
+	if metadata := msg.Metadata; metadata != nil {
+		targetPort, _ := metadata["target_port"].(float64)
+		dbType, _ := metadata["db_type"].(string)
+		
+		a.logEvent("TUNNEL_START", "Starting database tunnel", 
+			fmt.Sprintf("SessionID: %s, TargetPort: %d, DBType: %s", sessionID, int(targetPort), dbType))
+		
+		// Find the database proxy for this port
+		a.mutex.RLock()
+		var proxy *DatabaseProxy
+		for _, p := range a.dbProxies {
+			if p.Config.LocalPort == int(targetPort) {
+				proxy = p
+				break
+			}
+		}
+		a.mutex.RUnlock()
+		
+		if proxy == nil {
+			a.logEvent("TUNNEL_ERROR", "Database proxy not found", fmt.Sprintf("Port: %d", int(targetPort)))
+			return
+		}
+		
+		// Store tunnel session for future data forwarding
+		if a.sessions == nil {
+			a.sessions = make(map[string]*AgentSession)
+		}
+		
+		// Create a pseudo session for tunnel
+		session := &AgentSession{
+			ID:          sessionID,
+			ClientID:    msg.ClientID,
+			WorkingDir:  fmt.Sprintf("tunnel_%d", int(targetPort)),
+			Environment: map[string]string{
+				"tunnel_type": "database",
+				"target_port": fmt.Sprintf("%d", int(targetPort)),
+				"db_type":     dbType,
+			},
+			CreatedAt:   time.Now(),
+			LastUsed:    time.Now(),
+		}
+		
+		a.mutex.Lock()
+		a.sessions[sessionID] = session
+		a.mutex.Unlock()
+		
+		a.logEvent("TUNNEL_READY", "Database tunnel ready", 
+			fmt.Sprintf("SessionID: %s, Port: %d", sessionID, int(targetPort)))
+	}
+}
+
+// handleTunnelData forwards tunnel data to database proxy
+func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
+	sessionID := msg.SessionID
+	
+	// Get tunnel session
+	a.mutex.RLock()
+	session, exists := a.sessions[sessionID]
+	a.mutex.RUnlock()
+	
+	if !exists {
+		a.logEvent("TUNNEL_ERROR", "Tunnel session not found", sessionID)
+		return
+	}
+	
+	// Get target port from session metadata
+	targetPortStr, _ := session.Environment["target_port"]
+	targetPort := 3307 // default MySQL port
+	if targetPortStr != "" {
+		if port, err := fmt.Sscanf(targetPortStr, "%d", &targetPort); port == 0 || err != nil {
+			targetPort = 3307
+		}
+	}
+	
+	// Connect to local database proxy
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		a.logEvent("TUNNEL_ERROR", "Failed to connect to database proxy", 
+			fmt.Sprintf("Address: %s, Error: %v", proxyAddr, err))
+		return
+	}
+	defer conn.Close()
+	
+	// Forward data to database proxy
+	data := []byte(msg.Data)
+	if _, err := conn.Write(data); err != nil {
+		a.logEvent("TUNNEL_ERROR", "Failed to write to database proxy", err.Error())
+		return
+	}
+	
+	// Read response from database proxy
+	buffer := make([]byte, 4096)
+	n, err := conn.Read(buffer)
+	if err != nil && err != io.EOF {
+		a.logEvent("TUNNEL_ERROR", "Failed to read from database proxy", err.Error())
+		return
+	}
+	
+	// Send response back to server
+	responseMsg := Message{
+		Type:      "tunnel_data",
+		SessionID: sessionID,
+		AgentID:   a.agentID,
+		Data:      string(buffer[:n]),
+		Timestamp: time.Now(),
+	}
+	
+	if err := a.conn.WriteJSON(responseMsg); err != nil {
+		a.logEvent("TUNNEL_ERROR", "Failed to send tunnel response", err.Error())
+	}
+}
+
 func (a *GoTeleportAgent) runCommand(command string) *CommandResult {
 	start := time.Now()
 	workingDir := a.config.WorkingDir
