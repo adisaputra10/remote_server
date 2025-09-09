@@ -931,13 +931,59 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 		serverURL, agentID, targetPort, dbType)
 
 	// Create WebSocket connection to server tunnel endpoint
-	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 30 * time.Second
+	conn, _, err := dialer.Dial(serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server tunnel endpoint: %v", err)
 	}
 	defer conn.Close()
+	
+	// Set WebSocket options for stability
+	conn.SetReadLimit(512 * 1024) // 512KB max message size
+	
+	// Setup ping/pong for keep-alive
+	conn.SetPongHandler(func(string) error {
+		pf.Client.logger.Printf("🏓 CLIENT: Received pong from server")
+		return nil
+	})
+	
+	conn.SetPingHandler(func(message string) error {
+		pf.Client.logger.Printf("🏓 CLIENT: Received ping from server, sending pong")
+		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		err := conn.WriteMessage(websocket.PongMessage, []byte(message))
+		conn.SetWriteDeadline(time.Time{})
+		return err
+	})
+	
+	// Start ping routine
+	pingTicker := time.NewTicker(25 * time.Second)
+	defer pingTicker.Stop()
+	
+	pingDone := make(chan bool)
+	defer close(pingDone)
+	
+	go func() {
+		defer func() {
+			pf.Client.logger.Printf("🏓 CLIENT: Ping goroutine exiting")
+		}()
+		for {
+			select {
+			case <-pingTicker.C:
+				pf.Client.logger.Printf("🏓 CLIENT: Sending ping to server")
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if err := conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					pf.Client.logger.Printf("❌ CLIENT: Ping failed: %v", err)
+					return
+				}
+				conn.SetWriteDeadline(time.Time{})
+			case <-pingDone:
+				return
+			}
+		}
+	}()
 
-	// Send tunnel request
+	// Send tunnel request with retry
 	tunnelRequest := map[string]interface{}{
 		"type":       "tunnel_request",
 		"agent_id":   agentID,
@@ -946,34 +992,56 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 		"timestamp":  time.Now().Format(time.RFC3339),
 	}
 
+	pf.Client.logger.Printf("📤 Sending tunnel request to server...")
 	if err := conn.WriteJSON(tunnelRequest); err != nil {
 		return fmt.Errorf("failed to send tunnel request: %v", err)
 	}
 
-	// Wait for tunnel confirmation
+	// Wait for tunnel confirmation with timeout
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	var response map[string]interface{}
 	if err := conn.ReadJSON(&response); err != nil {
 		return fmt.Errorf("failed to read tunnel response: %v", err)
 	}
+	conn.SetReadDeadline(time.Time{}) // Remove deadline
 
 	if status, ok := response["status"].(string); !ok || status != "tunnel_ready" {
 		return fmt.Errorf("tunnel request failed: %v", response)
 	}
 
+	pf.Client.logger.Printf("✅ Tunnel confirmation received from server")
+
 	pf.Client.logger.Printf("Tunnel established: localhost:%d -> %s:%d (via server)", 
 		pf.LocalPort, agentID, targetPort)
+
+	// Set connection timeouts
+	conn.SetReadDeadline(time.Time{}) // Remove read deadline
+	clientConn.SetReadDeadline(time.Time{}) // Remove read deadline
+	
+	pf.Client.logger.Printf("🔄 Starting bidirectional data transfer...")
 
 	// Start bidirectional data transfer
 	done := make(chan bool, 2)
 	
 	// Client -> Server
 	go func() {
-		defer func() { done <- true }()
+		defer func() { 
+			pf.Client.logger.Printf("📤 CLIENT->SERVER goroutine exiting")
+			done <- true 
+		}()
+		
+		// Buffer for reading from client
+		buffer := make([]byte, 4096)
+		
 		for {
-			// Read from client connection
-			buffer := make([]byte, 4096)
+			// Set read timeout for client connection
+			clientConn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 			n, err := clientConn.Read(buffer)
 			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					pf.Client.logger.Printf("⏰ Client read timeout, continuing...")
+					continue
+				}
 				if err != io.EOF {
 					pf.Client.logger.Printf("❌ Error reading from client: %v", err)
 				} else {
@@ -982,13 +1050,15 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 				return
 			}
 
-			pf.Client.logger.Printf("📤 CLIENT->SERVER: Read %d bytes from client, sending to server", n)
+			pf.Client.logger.Printf("📤 CLIENT->SERVER: Read %d bytes from client", n)
 
-			// Send to server via WebSocket
+			// Send to server via WebSocket with write timeout
+			conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if err := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
 				pf.Client.logger.Printf("❌ Error sending to server: %v", err)
 				return
 			}
+			conn.SetWriteDeadline(time.Time{}) // Remove deadline
 
 			pf.Client.logger.Printf("✅ CLIENT->SERVER: Sent %d bytes to server successfully", n)
 		}
@@ -996,32 +1066,66 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 
 	// Server -> Client
 	go func() {
-		defer func() { done <- true }()
+		defer func() { 
+			pf.Client.logger.Printf("📥 SERVER->CLIENT goroutine exiting")
+			done <- true 
+		}()
 		for {
-			// Read from server via WebSocket
-			_, data, err := conn.ReadMessage()
+			// Read from server via WebSocket with timeout
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			msgType, data, err := conn.ReadMessage()
 			if err != nil {
-				if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-					pf.Client.logger.Printf("❌ Error reading from server: %v", err)
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					pf.Client.logger.Printf("📥 WebSocket closed normally")
+				} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					pf.Client.logger.Printf("⏰ WebSocket read timeout, continuing...")
+					continue
 				} else {
-					pf.Client.logger.Printf("📥 Server connection closed")
+					pf.Client.logger.Printf("❌ Error reading from server: %v", err)
 				}
 				return
 			}
+			conn.SetReadDeadline(time.Time{}) // Remove deadline
 
-			pf.Client.logger.Printf("📥 SERVER->CLIENT: Received %d bytes from server, sending to client", len(data))
+			// Handle ping/pong messages
+			if msgType == websocket.PingMessage {
+				pf.Client.logger.Printf("🏓 CLIENT: Received ping from server")
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if err := conn.WriteMessage(websocket.PongMessage, data); err != nil {
+					pf.Client.logger.Printf("❌ CLIENT: Failed to send pong: %v", err)
+					return
+				}
+				conn.SetWriteDeadline(time.Time{})
+				continue
+			}
 
-			// Send to client connection
-			if _, err := clientConn.Write(data); err != nil {
+			if msgType == websocket.PongMessage {
+				pf.Client.logger.Printf("🏓 CLIENT: Received pong from server")
+				continue
+			}
+
+			if msgType != websocket.BinaryMessage {
+				pf.Client.logger.Printf("⚠️ CLIENT: Unexpected message type: %d", msgType)
+				continue
+			}
+
+			pf.Client.logger.Printf("📥 SERVER->CLIENT: Received %d bytes from server", len(data))
+
+			// Send to client connection with timeout
+			clientConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			n, err := clientConn.Write(data)
+			if err != nil {
 				pf.Client.logger.Printf("❌ Error writing to client: %v", err)
 				return
 			}
+			clientConn.SetWriteDeadline(time.Time{}) // Remove deadline
 
-			pf.Client.logger.Printf("✅ SERVER->CLIENT: Sent %d bytes to client successfully", len(data))
+			pf.Client.logger.Printf("✅ SERVER->CLIENT: Wrote %d bytes to client successfully", n)
 		}
 	}()
 
 	// Wait for either direction to close
 	<-done
+	pf.Client.logger.Printf("🔚 Tunnel connection ended")
 	return nil
 }

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,71 +21,43 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 type GoTeleportAgent struct {
-	config     *AgentConfig
-	conn       *websocket.Conn
-	logger     *log.Logger
-	agentID    string
-	sessions   map[string]*AgentSession
-	dbProxies  map[string]*DatabaseProxy
-	mutex      sync.RWMutex
+	config              *AgentConfig
+	agentID             string
+	conn                *websocket.Conn
+	sessions            map[string]*AgentSession
+	tunnelConnections   map[string]net.Conn
+	mutex               sync.RWMutex
+	logger              *log.Logger
+	logFile             *os.File
+	proxies             []*DatabaseProxy
 }
 
 type AgentConfig struct {
-	ServerURL       string                    `json:"server_url"`
-	AgentName       string                    `json:"agent_name"`
-	Platform        string                    `json:"platform"`
-	LogFile         string                    `json:"log_file"`
-	AuthToken       string                    `json:"auth_token"`
-	Metadata        map[string]string         `json:"metadata"`
-	WorkingDir      string                    `json:"working_dir"`
-	AllowedUsers    []string                  `json:"allowed_users"`
-	DatabaseProxies []DatabaseProxyConfig     `json:"database_proxies"`
-}
-
-type DatabaseProxyConfig struct {
-	Name       string `json:"name"`
-	LocalPort  int    `json:"local_port"`
-	TargetHost string `json:"target_host"`
-	TargetPort int    `json:"target_port"`
-	Protocol   string `json:"protocol"` // mysql, postgresql, etc
-	Enabled    bool   `json:"enabled"`
-}
-
-type DatabaseProxy struct {
-	Name       string
-	LocalPort  int
-	TargetHost string
-	TargetPort int
-	Protocol   string
-	listener   net.Listener
-	agentRef   *GoTeleportAgent
-}
-
-type DatabaseCommand struct {
-	SessionID string    `json:"session_id"`
-	Command   string    `json:"command"`
-	Protocol  string    `json:"protocol"`
-	ClientIP  string    `json:"client_ip"`
-	Username  string    `json:"username"`
-	Timestamp time.Time `json:"timestamp"`
-	ProxyName string    `json:"proxy_name"`
+	AgentName     string           `json:"agent_name"`
+	ServerURL     string           `json:"server_url"`
+	AuthToken     string           `json:"auth_token"`
+	Platform      string           `json:"platform"`
+	WorkingDir    string           `json:"working_dir"`
+	LogFile       string           `json:"log_file"`
+	DatabaseProxy []*DatabaseProxy `json:"database_proxy"`
 }
 
 type AgentSession struct {
-	ID          string
-	ClientID    string
-	WorkingDir  string
-	Environment map[string]string
-	CreatedAt   time.Time
-	LastUsed    time.Time
+	ID          string            `json:"id"`
+	ClientID    string            `json:"client_id"`
+	Environment map[string]string `json:"environment"`
+	CreatedAt   time.Time         `json:"created_at"`
+	LastUsed    time.Time         `json:"last_used"`
+}
+
+type CommandResult struct {
+	Command    string        `json:"command"`
+	Output     string        `json:"output"`
+	Error      string        `json:"error"`
+	ExitCode   int           `json:"exit_code"`
+	Duration   time.Duration `json:"duration"`
+	WorkingDir string        `json:"working_dir"`
 }
 
 type Message struct {
@@ -95,107 +71,83 @@ type Message struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
-type CommandResult struct {
-	Command   string        `json:"command"`
-	Output    string        `json:"output"`
-	Error     string        `json:"error"`
-	ExitCode  int           `json:"exit_code"`
-	Duration  time.Duration `json:"duration"`
-	WorkingDir string       `json:"working_dir"`
+type DatabaseProxy struct {
+	Name       string `json:"name"`
+	Protocol   string `json:"protocol"`
+	LocalPort  int    `json:"local_port"`
+	TargetHost string `json:"target_host"`
+	TargetPort int    `json:"target_port"`
+	agentRef   *GoTeleportAgent
+	listener   net.Listener
 }
 
-func main() {
-	configFile := "agent-config-db.json"
-	if len(os.Args) > 1 {
-		configFile = os.Args[1]
-	}
-
-	agent, err := NewGoTeleportAgent(configFile)
-	if err != nil {
-		log.Fatalf("Failed to create agent: %v", err)
-	}
-
-	if err := agent.Run(); err != nil {
-		log.Fatalf("Agent error: %v", err)
-	}
+func generateAgentID() string {
+	bytes := make([]byte, 8)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }
 
 func NewGoTeleportAgent(configFile string) (*GoTeleportAgent, error) {
-	// Create stdout logger for immediate output
-	stdoutLogger := log.New(os.Stdout, "[AGENT] ", log.LstdFlags|log.Lmicroseconds)
-	
-	config, err := loadConfig(configFile)
+	file, err := os.Open(configFile)
 	if err != nil {
-		stdoutLogger.Printf("❌ Failed to load config: %v", err)
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Create dual logger (file + stdout)
-	var logger *log.Logger
-	if config.LogFile != "" {
-		logFile, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err != nil {
-			stdoutLogger.Printf("❌ Failed to open log file: %v", err)
-			logger = stdoutLogger
-		} else {
-			multiWriter := io.MultiWriter(os.Stdout, logFile)
-			logger = log.New(multiWriter, "[AGENT] ", log.LstdFlags|log.Lmicroseconds)
-		}
-	} else {
-		logger = stdoutLogger
-	}
-
-	logger.Printf("🚀 Starting GoTeleport Agent: %s", config.AgentName)
-
-	agent := &GoTeleportAgent{
-		config:    config,
-		logger:    logger,
-		agentID:   generateAgentID(),
-		sessions:  make(map[string]*AgentSession),
-		dbProxies: make(map[string]*DatabaseProxy),
-	}
-
-	logger.Printf("✅ Agent initialized with ID: %s", agent.agentID)
-	return agent, nil
-}
-
-func loadConfig(filename string) (*AgentConfig, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open config file: %w", err)
 	}
 	defer file.Close()
 
 	var config AgentConfig
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&config)
-	return &config, err
-}
+	if err := json.NewDecoder(file).Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %w", err)
+	}
 
-func generateAgentID() string {
-	return fmt.Sprintf("%x", time.Now().UnixNano())
-}
+	// Setup logging
+	var logFile *os.File
+	var logger *log.Logger
 
-func (a *GoTeleportAgent) Run() error {
-	// Start database proxies
-	for _, proxyConfig := range a.config.DatabaseProxies {
-		if proxyConfig.Enabled {
-			proxy := &DatabaseProxy{
-				Name:       proxyConfig.Name,
-				LocalPort:  proxyConfig.LocalPort,
-				TargetHost: proxyConfig.TargetHost,
-				TargetPort: proxyConfig.TargetPort,
-				Protocol:   proxyConfig.Protocol,
-				agentRef:   a,
-			}
-			
-			if err := proxy.Start(); err != nil {
-				a.logger.Printf("❌ Failed to start proxy %s: %v", proxy.Name, err)
-			} else {
-				a.dbProxies[proxy.Name] = proxy
-				a.logger.Printf("✅ Database proxy %s started on port %d", proxy.Name, proxy.LocalPort)
-			}
+	if config.LogFile != "" {
+		logFile, err = os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open log file: %w", err)
 		}
+		logger = log.New(io.MultiWriter(os.Stdout, logFile), "", log.LstdFlags)
+	} else {
+		logger = log.New(os.Stdout, "", log.LstdFlags)
+	}
+
+	agent := &GoTeleportAgent{
+		config:            &config,
+		agentID:           generateAgentID(),
+		sessions:          make(map[string]*AgentSession),
+		tunnelConnections: make(map[string]net.Conn),
+		logger:            logger,
+		logFile:           logFile,
+	}
+
+	// Setup database proxies
+	for _, proxyConfig := range config.DatabaseProxy {
+		proxy := &DatabaseProxy{
+			Name:       proxyConfig.Name,
+			Protocol:   proxyConfig.Protocol,
+			LocalPort:  proxyConfig.LocalPort,
+			TargetHost: proxyConfig.TargetHost,
+			TargetPort: proxyConfig.TargetPort,
+			agentRef:   agent,
+		}
+		agent.proxies = append(agent.proxies, proxy)
+	}
+
+	return agent, nil
+}
+
+func (a *GoTeleportAgent) Start() error {
+	a.logger.Printf("🚀 Starting GoTeleport Agent: %s (ID: %s)", a.config.AgentName, a.agentID)
+
+	// Start database proxies
+	for _, proxy := range a.proxies {
+		if err := proxy.Start(); err != nil {
+			a.logger.Printf("❌ Failed to start proxy %s: %v", proxy.Name, err)
+			return err
+		}
+		a.logger.Printf("✅ Database proxy started: %s on port %d", proxy.Name, proxy.LocalPort)
 	}
 
 	// Connect to server
@@ -203,8 +155,8 @@ func (a *GoTeleportAgent) Run() error {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
 
-	// Keep running
-	select {}
+	a.logger.Printf("✅ Agent started successfully")
+	return nil
 }
 
 func (a *GoTeleportAgent) connectToServer() error {
@@ -299,13 +251,22 @@ func (a *GoTeleportAgent) handleMessages() {
 	defer a.conn.Close()
 
 	for {
+		// Set read deadline for message reading
+		a.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		
 		var msg Message
 		if err := a.conn.ReadJSON(&msg); err != nil {
-			a.logger.Printf("❌ WebSocket read error: %v", err)
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				a.logger.Printf("📥 AGENT: WebSocket closed normally")
+			} else {
+				a.logger.Printf("❌ AGENT: WebSocket read error: %v", err)
+			}
 			break
 		}
+		
+		a.conn.SetReadDeadline(time.Time{}) // Remove deadline after successful read
 
-		a.logger.Printf("📨 Received message: Type=%s, SessionID=%s", msg.Type, msg.SessionID)
+		a.logger.Printf("📨 AGENT: Received message: Type=%s, SessionID=%s", msg.Type, msg.SessionID)
 		a.handleMessage(&msg)
 	}
 }
@@ -321,7 +282,7 @@ func (a *GoTeleportAgent) handleMessage(msg *Message) {
 	case "tunnel_close":
 		a.handleTunnelClose(msg)
 	default:
-		a.logger.Printf("⚠️ Unknown message type: %s", msg.Type)
+		a.logger.Printf("⚠️ AGENT: Unknown message type: %s", msg.Type)
 	}
 }
 
@@ -329,7 +290,7 @@ func (a *GoTeleportAgent) handleCommand(msg *Message) {
 	sessionID := msg.SessionID
 	command := msg.Command
 
-	a.logger.Printf("🔧 Executing command: %s (Session: %s)", command, sessionID)
+	a.logger.Printf("🔧 AGENT: Executing command: %s (Session: %s)", command, sessionID)
 
 	result := a.runCommand(command)
 	
@@ -351,7 +312,7 @@ func (a *GoTeleportAgent) handleCommand(msg *Message) {
 	}
 
 	if err := a.conn.WriteJSON(response); err != nil {
-		a.logger.Printf("❌ Failed to send command result: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to send command result: %v", err)
 	}
 }
 
@@ -369,7 +330,7 @@ func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
 		}
 	}
 
-	a.logger.Printf("🚇 TUNNEL_START: SessionID=%s, TargetPort=%d, DBType=%s", sessionID, targetPort, dbType)
+	a.logger.Printf("🚇 AGENT: TUNNEL_START - SessionID=%s, TargetPort=%d, DBType=%s", sessionID, targetPort, dbType)
 
 	// Create session
 	session := &AgentSession{
@@ -400,9 +361,9 @@ func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
 	}
 
 	if err := a.conn.WriteJSON(response); err != nil {
-		a.logger.Printf("❌ Failed to send tunnel_ready: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to send tunnel_ready: %v", err)
 	} else {
-		a.logger.Printf("✅ TUNNEL_READY sent for session: %s", sessionID)
+		a.logger.Printf("✅ AGENT: TUNNEL_READY sent for session: %s", sessionID)
 	}
 }
 
@@ -426,7 +387,7 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	targetPortStr, _ := session.Environment["target_port"]
 	targetPort := 3307 // default MySQL port
 	if targetPortStr != "" {
-		if port, err := fmt.Sscanf(targetPortStr, "%d", &targetPort); port == 0 || err != nil {
+		if _, err := fmt.Sscanf(targetPortStr, "%d", &targetPort); err != nil {
 			targetPort = 3307
 		}
 	}
@@ -454,11 +415,11 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 		return
 	}
 	
-	a.logger.Printf("� AGENT: Decoded %d bytes, forwarding to proxy", len(data))
+	a.logger.Printf("🔄 AGENT: Decoded %d bytes, forwarding to proxy", len(data))
 	
 	// Forward data to database proxy
 	if _, err := conn.Write(data); err != nil {
-		a.logger.Printf("❌ TUNNEL_ERROR: Failed to write to proxy: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to write to proxy: %v", err)
 		a.logEvent("TUNNEL_ERROR", "Failed to write to database proxy", err.Error())
 		return
 	}
@@ -472,7 +433,7 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 		return
 	}
 	
-	a.logger.Printf("� AGENT: Received %d bytes from proxy", n)
+	a.logger.Printf("🔄 AGENT: Received %d bytes from proxy", n)
 	
 	// Encode response as base64 before sending to server
 	encodedResponse := base64.StdEncoding.EncodeToString(buffer[:n])
@@ -498,7 +459,7 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 func (a *GoTeleportAgent) handleTunnelClose(msg *Message) {
 	sessionID := msg.SessionID
 	
-	a.logger.Printf("🔒 TUNNEL_CLOSE: SessionID=%s", sessionID)
+	a.logger.Printf("🔒 AGENT: TUNNEL_CLOSE - SessionID=%s", sessionID)
 	
 	a.mutex.Lock()
 	delete(a.sessions, sessionID)
@@ -556,7 +517,7 @@ func (a *GoTeleportAgent) logEvent(eventType, action, details string) {
 	}
 
 	logLine, _ := json.Marshal(logEntry)
-	a.logger.Printf("📝 EVENT: %s", string(logLine))
+	a.logger.Printf("📝 AGENT: EVENT: %s", string(logLine))
 }
 
 // Database Proxy Implementation
@@ -575,11 +536,11 @@ func (dp *DatabaseProxy) acceptConnections() {
 	for {
 		clientConn, err := dp.listener.Accept()
 		if err != nil {
-			dp.agentRef.logger.Printf("❌ Proxy %s accept error: %v", dp.Name, err)
+			dp.agentRef.logger.Printf("❌ AGENT: Proxy %s accept error: %v", dp.Name, err)
 			continue
 		}
 
-		dp.agentRef.logger.Printf("🔗 New connection to proxy %s from %s", dp.Name, clientConn.RemoteAddr())
+		dp.agentRef.logger.Printf("🔗 AGENT: New connection to proxy %s from %s", dp.Name, clientConn.RemoteAddr())
 		go dp.handleConnection(clientConn)
 	}
 }
@@ -594,12 +555,12 @@ func (dp *DatabaseProxy) handleConnection(clientConn net.Conn) {
 	targetAddr := fmt.Sprintf("%s:%d", dp.TargetHost, dp.TargetPort)
 	serverConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
-		dp.agentRef.logger.Printf("❌ Failed to connect to target %s: %v", targetAddr, err)
+		dp.agentRef.logger.Printf("❌ AGENT: Failed to connect to target %s: %v", targetAddr, err)
 		return
 	}
 	defer serverConn.Close()
 
-	dp.agentRef.logger.Printf("✅ Connected to target database %s", targetAddr)
+	dp.agentRef.logger.Printf("✅ AGENT: Connected to target database %s", targetAddr)
 
 	// Start bidirectional forwarding with inspection
 	var wg sync.WaitGroup
@@ -616,7 +577,7 @@ func (dp *DatabaseProxy) handleConnection(clientConn net.Conn) {
 	}()
 
 	wg.Wait()
-	dp.agentRef.logger.Printf("🔒 Proxy session %s closed", sessionID)
+	dp.agentRef.logger.Printf("🔒 AGENT: Proxy session %s closed", sessionID)
 }
 
 func (dp *DatabaseProxy) inspectAndForward(src, dst net.Conn, direction, sessionID, clientIP string) {
@@ -626,7 +587,7 @@ func (dp *DatabaseProxy) inspectAndForward(src, dst net.Conn, direction, session
 		n, err := src.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
-				dp.agentRef.logger.Printf("❌ Read error in %s: %v", direction, err)
+				dp.agentRef.logger.Printf("❌ AGENT: Read error in %s: %v", direction, err)
 			}
 			break
 		}
@@ -644,7 +605,7 @@ func (dp *DatabaseProxy) inspectAndForward(src, dst net.Conn, direction, session
 
 		// Forward data
 		if _, err := dst.Write(data); err != nil {
-			dp.agentRef.logger.Printf("❌ Write error in %s: %v", direction, err)
+			dp.agentRef.logger.Printf("❌ AGENT: Write error in %s: %v", direction, err)
 			break
 		}
 	}
@@ -725,6 +686,34 @@ func (a *GoTeleportAgent) logDatabaseCommand(sessionID, command, protocol, clien
 	}
 
 	if err := a.conn.WriteJSON(msg); err != nil {
-		a.logger.Printf("❌ Failed to send DB command to server: %v", err)
+		a.logger.Printf("❌ AGENT: Failed to send DB command to server: %v", err)
 	}
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: goteleport-agent-db <config_file>")
+		os.Exit(1)
+	}
+
+	configFile := os.Args[1]
+	agent, err := NewGoTeleportAgent(configFile)
+	if err != nil {
+		log.Fatalf("Failed to create agent: %v", err)
+	}
+
+	if err := agent.Start(); err != nil {
+		log.Fatalf("Failed to start agent: %v", err)
+	}
+
+	// Keep running
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		input := strings.TrimSpace(scanner.Text())
+		if input == "quit" || input == "exit" {
+			break
+		}
+	}
+
+	agent.logger.Printf("🛑 Agent stopping...")
 }

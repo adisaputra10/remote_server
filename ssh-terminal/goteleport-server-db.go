@@ -275,6 +275,9 @@ func NewGoTeleportServerDB(configFile string) (*GoTeleportServerDB, error) {
 		logger:   logger,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
+			ReadBufferSize:  4096,
+			WriteBufferSize: 4096,
+			HandshakeTimeout: 10 * time.Second,
 		},
 	}
 
@@ -1230,15 +1233,76 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 	s.logEvent("TUNNEL_ESTABLISHED", "Tunnel session created", 
 		fmt.Sprintf("TunnelID: %s, AgentID: %s, TargetPort: %d", tunnelID, agentID, int(targetPort)))
 
+	// Configure WebSocket timeouts and keep-alive
+	conn.SetReadLimit(512 * 1024) // 512KB max message size
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	
+	// Set up ping/pong handler for keep-alive
+	conn.SetPongHandler(func(string) error {
+		s.logger.Printf("🏓 SERVER: Received pong from client")
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	// Start ping ticker
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	// Channel for cleanup
+	done := make(chan bool)
+
+	// Ping sender goroutine
+	go func() {
+		defer func() {
+			s.logger.Printf("🏓 SERVER: Ping goroutine exiting")
+		}()
+		for {
+			select {
+			case <-pingTicker.C:
+				s.logger.Printf("🏓 SERVER: Sending ping to client")
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if err := conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					s.logger.Printf("❌ SERVER: Ping failed: %v", err)
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	// Handle client data forwarding
 	for {
 		// Read data from client WebSocket
-		_, data, err := conn.ReadMessage()
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				s.logEvent("TUNNEL_ERROR", "Error reading from client", err.Error())
 			}
 			break
+		}
+
+		// Handle different message types
+		if msgType == websocket.PingMessage {
+			s.logger.Printf("🏓 SERVER: Received ping from client")
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteMessage(websocket.PongMessage, []byte{}); err != nil {
+				s.logger.Printf("❌ SERVER: Pong failed: %v", err)
+				break
+			}
+			continue
+		}
+
+		if msgType == websocket.PongMessage {
+			s.logger.Printf("🏓 SERVER: Received unexpected pong from client")
+			continue
+		}
+
+		if msgType != websocket.BinaryMessage {
+			s.logger.Printf("⚠️ SERVER: Unexpected message type: %d", msgType)
+			continue
 		}
 
 		s.logEvent("TUNNEL_DATA_IN", "Received data from client", 
@@ -1268,6 +1332,10 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
 		s.logger.Printf("✅ SERVER: Data sent to agent successfully")
 	}
+
+	// Cleanup
+	done <- true
+	close(done)
 
 	// Cleanup tunnel session
 	if agent.TunnelSessions != nil {
