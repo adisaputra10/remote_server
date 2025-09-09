@@ -10,11 +10,7 @@ RUN npm run build
 FROM nginx:alpine
 
 # Install wget for healthcheck, remove default nginx config and setup nginx user
-RUN apk add --no-cache wget && \
-    rm /etc/nginx/conf.d/default.conf && \
-    addgroup -g 101 -S nginx 2>/dev/null || true && \
-    adduser -S -D -H -u 101 -h /var/cache/nginx -s /sbin/nologin -G nginx -g nginx nginx 2>/dev/null || true
-
+RUN apk add --no-cache wget 
 # Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
