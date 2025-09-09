@@ -130,13 +130,15 @@ func NewGoTeleportAgent(configFile string) (*GoTeleportAgent, error) {
 		config.WorkingDir, _ = os.Getwd()
 	}
 
-	// Setup logger
+	// Setup logger - write to both file and stdout
 	logFile, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %v", err)
 	}
 
-	logger := log.New(logFile, "", log.LstdFlags)
+	// Create multi-writer for both file and stdout
+	multiWriter := io.MultiWriter(logFile, os.Stdout)
+	logger := log.New(multiWriter, "", log.LstdFlags)
 
 	agent := &GoTeleportAgent{
 		config:    &config,
@@ -254,7 +256,7 @@ func (a *GoTeleportAgent) heartbeat() {
 }
 
 func (a *GoTeleportAgent) handleMessage(msg *Message) {
-	// Log setiap request yang masuk
+	// Log setiap request yang masuk dengan detail
 	clientInfo := "unknown"
 	if msg.Metadata != nil {
 		if client, ok := msg.Metadata["client_ip"]; ok {
@@ -262,16 +264,30 @@ func (a *GoTeleportAgent) handleMessage(msg *Message) {
 		}
 	}
 	
+	// Enhanced logging untuk debugging
+	a.logger.Printf("🔄 INCOMING MESSAGE: Type=%s, SessionID=%s, AgentID=%s, ClientID=%s, From=%s", 
+		msg.Type, msg.SessionID, msg.AgentID, msg.ClientID, clientInfo)
+	
+	// Log metadata jika ada
+	if msg.Metadata != nil {
+		metadataJson, _ := json.Marshal(msg.Metadata)
+		a.logger.Printf("📋 MESSAGE METADATA: %s", string(metadataJson))
+	}
+	
 	a.logEvent("CLIENT_REQUEST", "Incoming request", fmt.Sprintf("Type: %s, From: %s, SessionID: %s", msg.Type, clientInfo, msg.SessionID))
 	
 	switch msg.Type {
 	case "command":
+		a.logger.Printf("⚡ Processing COMMAND message")
 		a.executeCommand(msg)
 	case "tunnel_start":
+		a.logger.Printf("🚇 Processing TUNNEL_START message")
 		a.handleTunnelStart(msg)
 	case "tunnel_data":
+		a.logger.Printf("📦 Processing TUNNEL_DATA message")
 		a.handleTunnelData(msg)
 	default:
+		a.logger.Printf("❓ Unknown message type: %s", msg.Type)
 		a.logEvent("MESSAGE", "Unknown message type", msg.Type)
 	}
 }
@@ -309,28 +325,43 @@ func (a *GoTeleportAgent) executeCommand(msg *Message) {
 // handleTunnelStart starts a database tunnel for NAT clients
 func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
 	sessionID := msg.SessionID
+	
+	a.logger.Printf("🚇 TUNNEL_START called with SessionID: %s", sessionID)
+	
 	if metadata := msg.Metadata; metadata != nil {
 		targetPort, _ := metadata["target_port"].(float64)
 		dbType, _ := metadata["db_type"].(string)
 		
+		a.logger.Printf("🚇 TUNNEL_START metadata: TargetPort=%d, DBType=%s", int(targetPort), dbType)
+		
 		a.logEvent("TUNNEL_START", "Starting database tunnel", 
 			fmt.Sprintf("SessionID: %s, TargetPort: %d, DBType: %s", sessionID, int(targetPort), dbType))
 		
-		// Find the database proxy for this port
+		// List available database proxies for debugging
 		a.mutex.RLock()
+		a.logger.Printf("🔍 Available database proxies:")
+		for name, p := range a.dbProxies {
+			a.logger.Printf("  - %s: Port %d, Active: %v", name, p.Config.LocalPort, p.Active)
+		}
+		
+		// Find the database proxy for this port
 		var proxy *DatabaseProxy
 		for _, p := range a.dbProxies {
 			if p.Config.LocalPort == int(targetPort) {
 				proxy = p
+				a.logger.Printf("✅ Found matching proxy for port %d", int(targetPort))
 				break
 			}
 		}
 		a.mutex.RUnlock()
 		
 		if proxy == nil {
+			a.logger.Printf("❌ Database proxy not found for port %d", int(targetPort))
 			a.logEvent("TUNNEL_ERROR", "Database proxy not found", fmt.Sprintf("Port: %d", int(targetPort)))
 			return
 		}
+		
+		a.logger.Printf("🚇 Proxy found: %s (Port: %d, Active: %v)", proxy.Config.Name, proxy.Config.LocalPort, proxy.Active)
 		
 		// Store tunnel session for future data forwarding
 		if a.sessions == nil {
@@ -355,8 +386,11 @@ func (a *GoTeleportAgent) handleTunnelStart(msg *Message) {
 		a.sessions[sessionID] = session
 		a.mutex.Unlock()
 		
+		a.logger.Printf("✅ TUNNEL_READY: Session stored successfully - SessionID: %s, Port: %d", sessionID, int(targetPort))
 		a.logEvent("TUNNEL_READY", "Database tunnel ready", 
 			fmt.Sprintf("SessionID: %s, Port: %d", sessionID, int(targetPort)))
+	} else {
+		a.logger.Printf("❌ TUNNEL_START: No metadata in message")
 	}
 }
 
