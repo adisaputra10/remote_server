@@ -14,7 +14,8 @@ func main() {
 	// Connect through the agent's MySQL proxy on port 3307
 	// Try different connection options
 	dsns := []string{
-		"root:rootpassword@tcp(localhost:3308)/mysql?timeout=5s",
+		"root:rootpassword@tcp(localhost:3308)/mysql?timeout=30s&readTimeout=30s&writeTimeout=30s",
+		"root:rootpassword@tcp(localhost:3308)/mysql?timeout=10s",
 	}
 
 	var db *sql.DB
