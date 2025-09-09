@@ -1,0 +1,40 @@
+# Build stage
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+# Copy go modules
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the agent binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o goteleport-agent-db ./goteleport-agent-db.go
+
+# Production image
+FROM alpine:3.18
+
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /app
+
+# Copy the binary
+COPY --from=builder /app/goteleport-agent-db .
+
+# Copy config files
+COPY agent-config-db.json .
+
+# Set execute permissions
+RUN chmod +x ./goteleport-agent-db
+
+# Create volume for data
+VOLUME ["/app/data"]
+
+# Expose ports
+EXPOSE 8080 3308 5435
+
+# Run the agent
+CMD ["./goteleport-agent-db"]

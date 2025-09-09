@@ -666,20 +666,20 @@ func (c *UnifiedClient) listAgents() {
 	c.refreshAgentList()
 	time.Sleep(500 * time.Millisecond) // Wait for response
 
-	fmt.Println("┌─────────────────────┬─────────────┬──────────┬──────────────────┐")
-	fmt.Println("│ Agent ID            │ Platform    │ Status   │ Last Seen        │")
-	fmt.Println("├─────────────────────┼─────────────┼──────────┼──────────────────┤")
+	fmt.Println("┌─────────────────────┬─────────────────────┬─────────────┬──────────┬──────────────────┐")
+	fmt.Println("│ Agent ID            │ Agent Name          │ Platform    │ Status   │ Last Seen        │")
+	fmt.Println("├─────────────────────┼─────────────────────┼─────────────┼──────────┼──────────────────┤")
 
 	if len(c.agentList) == 0 {
-		fmt.Println("│ (No agents available)                                      │")
+		fmt.Println("│ (No agents available)                                                                │")
 	} else {
 		for _, agent := range c.agentList {
-			fmt.Printf("│ %-19s │ %-11s │ %-8s │ %-16s │\n",
-				agent.ID, agent.Platform, agent.Status,
+			fmt.Printf("│ %-19s │ %-19s │ %-11s │ %-8s │ %-16s │\n",
+				agent.ID, agent.Name, agent.Platform, agent.Status,
 				agent.LastSeen.Format("15:04:05"))
 		}
 	}
-	fmt.Println("└─────────────────────┴─────────────┴──────────┴──────────────────┘")
+	fmt.Println("└─────────────────────┴─────────────────────┴─────────────┴──────────┴──────────────────┘")
 }
 
 func (c *UnifiedClient) createPortForward(localPort int, agentID, targetHost string, targetPort int) {
