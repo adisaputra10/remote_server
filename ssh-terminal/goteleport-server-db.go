@@ -1308,6 +1308,14 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 	case "heartbeat":
 		// Update last seen
 		agent.LastSeen = time.Now()
+	case "tunnel_ready":
+		// Agent confirms tunnel is ready
+		s.logEvent("TUNNEL_READY", "Agent tunnel ready", fmt.Sprintf("Agent: %s, SessionID: %s", agent.Name, msg.SessionID))
+		// Mark tunnel as ready for client connections
+		if agent.TunnelSessions != nil {
+			// Tunnel is ready, client can now send data
+			s.logger.Printf("🟢 TUNNEL_READY: Agent %s ready for tunnel %s", agent.Name, msg.SessionID)
+		}
 	case "tunnel_data":
 		// Forward tunnel data to client
 		if tunnelID := msg.SessionID; tunnelID != "" && agent.TunnelSessions != nil {
