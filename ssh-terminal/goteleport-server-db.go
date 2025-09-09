@@ -1324,10 +1324,20 @@ func (s *GoTeleportServerDB) handleAgentMessage(agent *Agent, msg *Message) {
 			s.logger.Printf("🟢 TUNNEL_READY: Agent %s ready for tunnel %s", agent.Name, msg.SessionID)
 		}
 	case "tunnel_data":
-		// Forward tunnel data to client
+		// Forward tunnel data to client - decode base64 first
 		if tunnelID := msg.SessionID; tunnelID != "" && agent.TunnelSessions != nil {
 			if clientConn := agent.TunnelSessions[tunnelID]; clientConn != nil {
-				if err := clientConn.WriteMessage(websocket.BinaryMessage, []byte(msg.Data)); err != nil {
+				// Decode base64 data from agent
+				data, err := base64.StdEncoding.DecodeString(msg.Data)
+				if err != nil {
+					s.logEvent("TUNNEL_ERROR", "Failed to decode agent response", err.Error())
+					return
+				}
+				
+				s.logEvent("TUNNEL_DATA", "Forwarding agent response to client", 
+					fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
+					
+				if err := clientConn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 					s.logEvent("TUNNEL_ERROR", "Failed to forward data to client", err.Error())
 					// Clean up broken connection
 					delete(agent.TunnelSessions, tunnelID)

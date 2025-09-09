@@ -420,12 +420,12 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	
 	a.logger.Printf("📤 TUNNEL_DATA: Sending %d bytes response back to server", n)
 	
-	// Send response back to server
+	// Send response back to server - encode with base64 for binary safety
 	responseMsg := Message{
 		Type:      "tunnel_data",
 		SessionID: sessionID,
 		AgentID:   a.agentID,
-		Data:      string(buffer[:n]),
+		Data:      base64.StdEncoding.EncodeToString(buffer[:n]),
 		Timestamp: time.Now(),
 	}
 	
