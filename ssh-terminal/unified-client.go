@@ -975,16 +975,22 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 			n, err := clientConn.Read(buffer)
 			if err != nil {
 				if err != io.EOF {
-					pf.Client.logger.Printf("Error reading from client: %v", err)
+					pf.Client.logger.Printf("❌ Error reading from client: %v", err)
+				} else {
+					pf.Client.logger.Printf("📤 Client connection closed (EOF)")
 				}
 				return
 			}
 
+			pf.Client.logger.Printf("📤 CLIENT->SERVER: Read %d bytes from client, sending to server", n)
+
 			// Send to server via WebSocket
 			if err := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
-				pf.Client.logger.Printf("Error sending to server: %v", err)
+				pf.Client.logger.Printf("❌ Error sending to server: %v", err)
 				return
 			}
+
+			pf.Client.logger.Printf("✅ CLIENT->SERVER: Sent %d bytes to server successfully", n)
 		}
 	}()
 
@@ -996,16 +1002,22 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-					pf.Client.logger.Printf("Error reading from server: %v", err)
+					pf.Client.logger.Printf("❌ Error reading from server: %v", err)
+				} else {
+					pf.Client.logger.Printf("📥 Server connection closed")
 				}
 				return
 			}
 
+			pf.Client.logger.Printf("📥 SERVER->CLIENT: Received %d bytes from server, sending to client", len(data))
+
 			// Send to client connection
 			if _, err := clientConn.Write(data); err != nil {
-				pf.Client.logger.Printf("Error writing to client: %v", err)
+				pf.Client.logger.Printf("❌ Error writing to client: %v", err)
 				return
 			}
+
+			pf.Client.logger.Printf("✅ SERVER->CLIENT: Sent %d bytes to client successfully", len(data))
 		}
 	}()
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1233,12 +1234,15 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 			break
 		}
 
-		// Forward data to agent via WebSocket
+		s.logEvent("TUNNEL_DATA", "Forwarding data to agent", 
+			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
+
+		// Forward data to agent via WebSocket - use base64 encoding for binary safety
 		forwardMsg := Message{
 			Type:      "tunnel_data",
 			AgentID:   agentID,
 			SessionID: tunnelID,
-			Data:      string(data),
+			Data:      base64.StdEncoding.EncodeToString(data),
 			Timestamp: time.Now(),
 		}
 
@@ -1246,6 +1250,9 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 			s.logEvent("TUNNEL_ERROR", "Error forwarding to agent", err.Error())
 			break
 		}
+
+		s.logEvent("TUNNEL_DATA", "Data forwarded to agent successfully", 
+			fmt.Sprintf("TunnelID: %s, DataLen: %d bytes", tunnelID, len(data)))
 	}
 
 	// Cleanup tunnel session

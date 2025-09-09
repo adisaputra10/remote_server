@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -391,8 +392,17 @@ func (a *GoTeleportAgent) handleTunnelData(msg *Message) {
 	
 	a.logger.Printf("✅ TUNNEL_DATA: Connected to database proxy, sending %d bytes", len(msg.Data))
 	
+	// Decode base64 data from server
+	data, err := base64.StdEncoding.DecodeString(msg.Data)
+	if err != nil {
+		a.logger.Printf("❌ TUNNEL_ERROR: Failed to decode base64 data: %v", err)
+		a.logEvent("TUNNEL_ERROR", "Failed to decode tunnel data", err.Error())
+		return
+	}
+	
+	a.logger.Printf("📦 TUNNEL_DATA: Decoded %d bytes, forwarding to database proxy", len(data))
+	
 	// Forward data to database proxy
-	data := []byte(msg.Data)
 	if _, err := conn.Write(data); err != nil {
 		a.logger.Printf("❌ TUNNEL_ERROR: Failed to write to proxy: %v", err)
 		a.logEvent("TUNNEL_ERROR", "Failed to write to database proxy", err.Error())
