@@ -1,0 +1,9 @@
+{
+  "server_url": "ws://168.231.119.242:8080/client",
+  "client_name": "UnifiedClient-SSH",
+  "log_file": "client.log",
+  "username": "admin",
+  "password": "password",
+  "auth_token": "teleport123",
+  "auto_reconnect": true
+}

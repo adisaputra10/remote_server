@@ -273,19 +273,27 @@ func (a *Agent) handleTunnelData(msg map[string]interface{}) {
 // createTunnel creates a new database tunnel
 func (a *Agent) createTunnel(tunnelID, tunnelType, remoteHost string, remotePort, localPort int) error {
 	a.logger.Printf("🔧 Creating tunnel: %s -> %s:%d", tunnelType, remoteHost, remotePort)
+	a.logger.Printf("🔍 Tunnel configuration:")
+	a.logger.Printf("  - Tunnel ID: %s", tunnelID)
+	a.logger.Printf("  - Tunnel Type: %s", tunnelType)
+	a.logger.Printf("  - Target: %s:%d", remoteHost, remotePort)
 
 	// Agent akan membuat listener di port 3307 (bukan port dari client)
 	agentLocalPort := 3307
 	localAddr := fmt.Sprintf("127.0.0.1:%d", agentLocalPort)
 
+	a.logger.Printf("🔌 Creating listener on: %s", localAddr)
+
 	// Create listener
 	listener, err := net.Listen("tcp", localAddr)
 	if err != nil {
+		a.logger.Printf("❌ Failed to create listener on %s: %v", localAddr, err)
 		return fmt.Errorf("failed to create listener: %v", err)
 	}
 
 	actualAddr := listener.Addr().String()
-	a.logger.Printf("📡 Agent listener created on: %s", actualAddr)
+	a.logger.Printf("📡 Agent listener created successfully on: %s", actualAddr)
+	a.logger.Printf("🎯 Tunnel will forward: %s -> %s:%d", actualAddr, remoteHost, remotePort)
 
 	// Create tunnel object
 	tunnel := &ActiveTunnel{
@@ -339,10 +347,13 @@ func (a *Agent) handleTunnelConnections(tunnel *ActiveTunnel, remoteHost string,
 func (a *Agent) handleTunnelConnection(tunnel *ActiveTunnel, clientConn net.Conn, remoteHost string, remotePort int) {
 	defer clientConn.Close()
 
-	a.logger.Printf("🌉 Handling connection for tunnel %s to %s:%d", tunnel.ID, remoteHost, remotePort)
+	clientAddr := clientConn.RemoteAddr().String()
+	a.logger.Printf("🌉 Handling connection for tunnel %s: %s -> %s:%d", tunnel.ID, clientAddr, remoteHost, remotePort)
 
 	// Connect to remote database
 	remoteAddr := fmt.Sprintf("%s:%d", remoteHost, remotePort)
+	a.logger.Printf("🔌 Connecting to remote database: %s", remoteAddr)
+	
 	remoteConn, err := net.Dial("tcp", remoteAddr)
 	if err != nil {
 		a.logger.Printf("❌ Failed to connect to remote database %s: %v", remoteAddr, err)
@@ -351,6 +362,7 @@ func (a *Agent) handleTunnelConnection(tunnel *ActiveTunnel, clientConn net.Conn
 	defer remoteConn.Close()
 
 	a.logger.Printf("✅ Connected to remote database: %s", remoteAddr)
+	a.logger.Printf("📡 Starting data relay: %s <-> %s", clientAddr, remoteAddr)
 
 	// Start bidirectional copying with query logging
 	done := make(chan bool, 2)
@@ -636,29 +648,44 @@ func generatePersistentID() string {
 func (a *Agent) copyWithQueryLogging(dst, src net.Conn, tunnelID, direction string) (int64, error) {
 	buffer := make([]byte, 32*1024) // 32KB buffer
 	var totalWritten int64
+	packetCount := 0
+
+	a.logger.Printf("📡 Starting data copy: %s for tunnel %s", direction, tunnelID)
 
 	for {
 		// Read from source
 		n, err := src.Read(buffer)
 		if err != nil {
 			if err == io.EOF {
+				a.logger.Printf("📡 Data copy finished: %s for tunnel %s (EOF)", direction, tunnelID)
 				break
 			}
+			a.logger.Printf("❌ Read error in %s for tunnel %s: %v", direction, tunnelID, err)
 			return totalWritten, err
 		}
 
-		// Log data if it looks like a query
+		packetCount++
+		a.logger.Printf("📦 [%s] Packet #%d: %d bytes for tunnel %s", direction, packetCount, n, tunnelID)
+
+		// Log data if it looks like a query (client to server)
 		if direction == "client->remote" && n > 5 {
 			a.logDatabaseQuery(buffer[:n], tunnelID, direction)
+		}
+
+		// Log hex dump for small packets (debugging)
+		if n <= 100 {
+			a.logger.Printf("📋 [%s] Hex dump: %x", direction, buffer[:n])
 		}
 
 		// Write to destination
 		written, err := dst.Write(buffer[:n])
 		if err != nil {
+			a.logger.Printf("❌ Write error in %s for tunnel %s: %v", direction, tunnelID, err)
 			return totalWritten, err
 		}
 
 		totalWritten += int64(written)
+		a.logger.Printf("✅ [%s] Successfully relayed %d bytes (total: %d) for tunnel %s", direction, written, totalWritten, tunnelID)
 	}
 
 	return totalWritten, nil
