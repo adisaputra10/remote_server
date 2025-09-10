@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -46,6 +47,7 @@ type Agent struct {
 	config    *Config
 	logger    *log.Logger
 	session   *transport.MuxSession
+	wsConn    *websocket.Conn  // Direct WebSocket connection for simple mode
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.RWMutex
@@ -129,8 +131,11 @@ func (a *Agent) Start() error {
 
 // connectToServer establishes connection to the server
 func (a *Agent) connectToServer() error {
+	a.logger.Printf("🔄 Parsing server URL: %s", a.config.ServerURL)
+	
 	serverURL, err := url.Parse(a.config.ServerURL)
 	if err != nil {
+		a.logger.Printf("❌ Invalid server URL: %v", err)
 		return fmt.Errorf("invalid server URL: %w", err)
 	}
 	
@@ -138,12 +143,15 @@ func (a *Agent) connectToServer() error {
 	switch serverURL.Scheme {
 	case "http":
 		serverURL.Scheme = "ws"
+		a.logger.Printf("🔄 Converting HTTP to WebSocket")
 	case "https":
 		serverURL.Scheme = "wss"
+		a.logger.Printf("🔄 Converting HTTPS to WebSocket Secure")
 	}
 	
 	// Add agent endpoint
-	serverURL.Path = "/ws/agent"
+	serverURL.Path = "/agent"
+	a.logger.Printf("🔄 Final WebSocket URL: %s", serverURL.String())
 	
 	// Setup WebSocket dialer
 	dialer := websocket.DefaultDialer
@@ -151,40 +159,84 @@ func (a *Agent) connectToServer() error {
 	
 	if a.config.Insecure {
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		a.logger.Printf("⚠️  TLS verification disabled")
 	}
 	
 	// Add auth header
 	headers := http.Header{}
 	if a.config.Token != "" {
 		headers.Set("Authorization", "Bearer "+a.config.Token)
+		a.logger.Printf("🔐 Adding authorization header")
 	}
 	
-	a.logger.Printf("🔌 Connecting to server: %s", serverURL.String())
+	a.logger.Printf("🔌 Attempting WebSocket connection...")
 	
-	// Connect
-	conn, _, err := dialer.Dial(serverURL.String(), headers)
+	// Connect directly with WebSocket (no yamux for now)
+	conn, resp, err := dialer.Dial(serverURL.String(), headers)
 	if err != nil {
+		a.logger.Printf("❌ WebSocket dial failed: %v", err)
+		if resp != nil {
+			a.logger.Printf("❌ HTTP Response: %d %s", resp.StatusCode, resp.Status)
+		}
 		return fmt.Errorf("websocket dial failed: %w", err)
 	}
 	
-	// Create multiplexed session
-	session, err := transport.NewMuxSession(conn, true)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("failed to create mux session: %w", err)
-	}
+	a.logger.Printf("✅ WebSocket connection established")
 	
+	// Store connection directly for simple mode
 	a.mu.Lock()
-	a.session = session
+	// Create a simple session wrapper
+	a.session = &transport.MuxSession{} // We'll use direct websocket for now
 	a.mu.Unlock()
 	
-	// Send registration
-	if err := a.sendRegistration(); err != nil {
-		session.Close()
+	a.logger.Printf("🔄 Sending registration to server...")
+	
+	// Send registration via direct websocket
+	if err := a.sendRegistrationDirect(conn); err != nil {
+		conn.Close()
+		a.logger.Printf("❌ Registration failed: %v", err)
 		return fmt.Errorf("failed to send registration: %w", err)
 	}
 	
-	a.logger.Printf("✅ Connected to server successfully")
+	// Store the connection for message handling
+	a.wsConn = conn
+	
+	a.logger.Printf("✅ Connected and registered to server successfully")
+	return nil
+}
+
+// sendRegistrationDirect sends registration via direct websocket
+func (a *Agent) sendRegistrationDirect(conn *websocket.Conn) error {
+	a.logger.Printf("📝 Preparing registration data...")
+	
+	registration := map[string]interface{}{
+		"type": "agent_register",
+		"data": map[string]interface{}{
+			"id":       a.config.ID,
+			"name":     a.config.Name,
+			"platform": a.config.Platform,
+			"version":  a.config.Version,
+			"token":    a.config.Token,
+		},
+	}
+	
+	a.logger.Printf("📋 Registration info: ID=%s, Name=%s, Platform=%s", 
+		a.config.ID, a.config.Name, a.config.Platform)
+	
+	data, err := json.Marshal(registration)
+	if err != nil {
+		a.logger.Printf("❌ Failed to marshal registration: %v", err)
+		return fmt.Errorf("failed to marshal registration: %w", err)
+	}
+	
+	a.logger.Printf("📤 Sending registration message [%d bytes]...", len(data))
+	
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		a.logger.Printf("❌ Failed to send registration: %v", err)
+		return fmt.Errorf("failed to send registration: %w", err)
+	}
+	
+	a.logger.Printf("✅ Registration sent successfully")
 	return nil
 }
 
@@ -232,35 +284,101 @@ func (a *Agent) sendMessage(msg *proto.Message) error {
 
 // handleMessages handles incoming messages
 func (a *Agent) handleMessages() {
+	a.logger.Printf("🎧 Starting message handler...")
 	defer a.logger.Printf("🔚 Message handler stopped")
 	
 	for {
 		select {
 		case <-a.ctx.Done():
+			a.logger.Printf("🛑 Context cancelled, stopping message handler")
 			return
 		default:
 		}
 		
 		a.mu.RLock()
-		session := a.session
+		conn := a.wsConn
 		a.mu.RUnlock()
 		
-		if session == nil {
+		if conn == nil {
+			a.logger.Printf("⏳ No connection available, waiting...")
 			time.Sleep(time.Second)
 			continue
 		}
 		
-		// Accept incoming streams
-		stream, err := session.AcceptStream()
+		// Read message from WebSocket directly
+		_, data, err := conn.ReadMessage()
 		if err != nil {
-			a.logger.Printf("❌ Failed to accept stream: %v", err)
+			a.logger.Printf("❌ Failed to read message: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
 		
-		// Handle stream in goroutine
-		go a.handleStream(stream)
+		a.logger.Printf("📨 Received message [%d bytes]", len(data))
+		
+		// Parse and handle message
+		go a.handleMessageData(data)
 	}
+}
+
+// handleMessageData processes incoming message data
+func (a *Agent) handleMessageData(data []byte) {
+	a.logger.Printf("� Processing message: %s", string(data))
+	
+	// Simple echo back for now (to test basic communication)
+	a.mu.RLock()
+	conn := a.wsConn
+	a.mu.RUnlock()
+	
+	if conn != nil {
+		a.logger.Printf("📤 Echoing message back to server...")
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			a.logger.Printf("❌ Failed to echo message: %v", err)
+		} else {
+			a.logger.Printf("✅ Message echoed successfully")
+		}
+	}
+}
+
+// handlePing responds to ping messages
+func (a *Agent) handlePing(msg map[string]interface{}) {
+	response := map[string]interface{}{
+		"type": "pong",
+		"data": "Agent is alive",
+	}
+	a.sendMessageDirect(response)
+}
+
+// handleTestMessage handles test messages
+func (a *Agent) handleTestMessage(msg map[string]interface{}) {
+	a.logger.Printf("🧪 Test message received: %v", msg["data"])
+	
+	response := map[string]interface{}{
+		"type": "test_response",
+		"data": fmt.Sprintf("Agent processed: %v", msg["data"]),
+	}
+	a.sendMessageDirect(response)
+}
+
+// sendMessageDirect sends message via direct websocket
+func (a *Agent) sendMessageDirect(msg map[string]interface{}) error {
+	a.mu.RLock()
+	conn := a.wsConn
+	a.mu.RUnlock()
+	
+	if conn == nil {
+		return fmt.Errorf("no websocket connection")
+	}
+	
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+	
+	return nil
 }
 
 // handleStream handles an individual stream
@@ -370,11 +488,19 @@ func (a *Agent) startHeartbeat() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			msg := proto.NewMessage(proto.MessageTypeAgentHeartbeat)
-			msg.AgentID = a.config.ID
+			heartbeat := map[string]interface{}{
+				"type": "heartbeat",
+				"data": map[string]interface{}{
+					"status":    "alive",
+					"timestamp": time.Now().Unix(),
+					"agent_id":  a.config.ID,
+				},
+			}
 			
-			if err := a.sendMessage(msg); err != nil {
+			if err := a.sendMessageDirect(heartbeat); err != nil {
 				a.logger.Printf("❌ Failed to send heartbeat: %v", err)
+			} else {
+				a.logger.Printf("💓 Heartbeat sent")
 			}
 		}
 	}

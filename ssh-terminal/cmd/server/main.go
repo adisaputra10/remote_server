@@ -46,8 +46,14 @@ func main() {
 	})
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
-	logger.Printf("Server starting on %s", addr)
-
+	logger.Printf("🚀 Server starting on %s", addr)
+	logger.Printf("📋 Server configuration:")
+	logger.Printf("   - Host: %s", *host)
+	logger.Printf("   - Port: %d", *port)
+	logger.Printf("   - Agent endpoint: /agent")
+	logger.Printf("   - Client endpoint: /client")
+	logger.Printf("   - Health endpoint: /health")
+	
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -59,67 +65,82 @@ func main() {
 
 	go func() {
 		<-sigChan
-		logger.Println("Shutting down server...")
+		logger.Println("🛑 Shutting down server...")
 		server.Close()
 	}()
 
+	logger.Printf("✅ Server ready! Waiting for connections...")
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Fatalf("Server failed: %v", err)
+		logger.Fatalf("❌ Server failed: %v", err)
 	}
 
-	logger.Println("Server stopped")
+	logger.Println("👋 Server stopped")
 }
 
 func handleAgentConnection(w http.ResponseWriter, r *http.Request, upgrader *websocket.Upgrader, logger *log.Logger) {
+	logger.Printf("🔗 New agent connection attempt from %s", r.RemoteAddr)
+	
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		logger.Printf("Agent upgrade failed: %v", err)
+		logger.Printf("❌ Agent upgrade failed: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	logger.Printf("Agent connected from %s", r.RemoteAddr)
+	logger.Printf("✅ Agent connected successfully from %s", r.RemoteAddr)
 
-	// Simple echo for now
+	// Handle messages
 	for {
 		messageType, p, err := conn.ReadMessage()
 		if err != nil {
-			logger.Printf("Agent read error: %v", err)
+			logger.Printf("❌ Agent read error from %s: %v", r.RemoteAddr, err)
 			break
 		}
 		
-		logger.Printf("Agent message: %s", string(p))
+		logger.Printf("📨 Agent message from %s [%d bytes]: %s", r.RemoteAddr, len(p), string(p))
 		
+		// Echo back
 		if err := conn.WriteMessage(messageType, p); err != nil {
-			logger.Printf("Agent write error: %v", err)
+			logger.Printf("❌ Agent write error to %s: %v", r.RemoteAddr, err)
 			break
 		}
+		
+		logger.Printf("📤 Echoed message back to agent %s", r.RemoteAddr)
 	}
+	
+	logger.Printf("🔌 Agent disconnected: %s", r.RemoteAddr)
 }
 
 func handleClientConnection(w http.ResponseWriter, r *http.Request, upgrader *websocket.Upgrader, logger *log.Logger) {
+	logger.Printf("🔗 New client connection attempt from %s", r.RemoteAddr)
+	
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		logger.Printf("Client upgrade failed: %v", err)
+		logger.Printf("❌ Client upgrade failed: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	logger.Printf("Client connected from %s", r.RemoteAddr)
+	logger.Printf("✅ Client connected successfully from %s", r.RemoteAddr)
 
-	// Simple echo for now
+	// Handle messages
 	for {
 		messageType, p, err := conn.ReadMessage()
 		if err != nil {
-			logger.Printf("Client read error: %v", err)
+			logger.Printf("❌ Client read error from %s: %v", r.RemoteAddr, err)
 			break
 		}
 		
-		logger.Printf("Client message: %s", string(p))
+		logger.Printf("📨 Client message from %s [%d bytes]: %s", r.RemoteAddr, len(p), string(p))
 		
+		// Echo back
 		if err := conn.WriteMessage(messageType, p); err != nil {
-			logger.Printf("Client write error: %v", err)
+			logger.Printf("❌ Client write error to %s: %v", r.RemoteAddr, err)
 			break
 		}
+		
+		logger.Printf("📤 Echoed message back to client %s", r.RemoteAddr)
 	}
+	
+	logger.Printf("🔌 Client disconnected: %s", r.RemoteAddr)
 }
