@@ -1,0 +1,55 @@
+{
+  "server_url": "ws://localhost:8080/agent",
+  "agent_name": "database-agent-1",
+  "platform": "windows",
+  "log_file": "agent-db.log",
+  "auth_token": "teleport123",
+  "metadata": {
+    "location": "datacenter-1",
+    "environment": "production"
+  },
+  "working_dir": "",
+  "allowed_users": ["admin", "dbuser"],
+  "database_proxies": [
+    {
+      "name": "mysql-main",
+      "local_port": 3307,
+      "target_host": "localhost",
+      "target_port": 3306,
+      "protocol": "mysql",
+      "enabled": true
+    },
+    {
+      "name": "mysql-backup",
+      "local_port": 33308,
+      "target_host": "192.168.1.100",
+      "target_port": 3306,
+      "protocol": "mysql",
+      "enabled": false
+    },
+    {
+      "name": "postgres-main",
+      "local_port": 5433,
+      "target_host": "localhost",
+      "target_port": 5432,
+      "protocol": "postgres",
+      "enabled": true
+    },
+    {
+      "name": "postgres-intercept",
+      "local_port": 5435,
+      "target_host": "localhost",
+      "target_port": 5432,
+      "protocol": "postgres",
+      "enabled": true
+    },
+    {
+      "name": "postgres-backup",
+      "local_port": 5434,
+      "target_host": "192.168.1.101",
+      "target_port": 5432,
+      "protocol": "postgres",
+      "enabled": false
+    }
+  ]
+}
