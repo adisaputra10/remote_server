@@ -957,7 +957,7 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	})
 	
 	// Start ping routine
-	pingTicker := time.NewTicker(25 * time.Second)
+	pingTicker := time.NewTicker(15 * time.Second)
 	defer pingTicker.Stop()
 	
 	pingDone := make(chan bool)

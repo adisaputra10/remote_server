@@ -150,7 +150,7 @@ func NewGoTeleportAgent(configFile string) (*GoTeleportAgent, error) {
 	agent := &GoTeleportAgent{
 		config:    config,
 		logger:    logger,
-		agentID:   generateAgentID(),
+		agentID:   generateAgentID(config.AgentName),
 		sessions:  make(map[string]*AgentSession),
 		dbProxies: make(map[string]*DatabaseProxy),
 	}
@@ -172,8 +172,16 @@ func loadConfig(filename string) (*AgentConfig, error) {
 	return &config, err
 }
 
-func generateAgentID() string {
-	return fmt.Sprintf("%x", time.Now().UnixNano())
+func generateAgentID(agentName string) string {
+	// Generate persistent ID based on agent name and platform
+	// This ensures the same agent always gets the same ID
+	data := fmt.Sprintf("%s-%s", agentName, runtime.GOOS)
+	hash := fmt.Sprintf("%x", []byte(data))
+	// Take first 16 characters to create a consistent ID
+	if len(hash) > 16 {
+		hash = hash[:16]
+	}
+	return hash
 }
 
 func (a *GoTeleportAgent) Run() error {
@@ -652,7 +660,7 @@ func (dp *DatabaseProxy) acceptConnections() {
 func (dp *DatabaseProxy) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	sessionID := generateAgentID()
+	sessionID := fmt.Sprintf("session_%x", time.Now().UnixNano())
 	clientIP := clientConn.RemoteAddr().String()
 
 	// Connect to target database
