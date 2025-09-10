@@ -216,6 +216,20 @@ func (s *Server) handleAgentConnection(w http.ResponseWriter, r *http.Request, u
 				}
 			}
 			s.mutex.RUnlock()
+		case "tunnel_data":
+			// Forward tunnel data from agent to client
+			s.logger.Printf("📤 Forwarding tunnel data from agent %s", msg.AgentID)
+			
+			// Find the client that should receive this tunnel data (for now, forward to all clients)
+			s.mutex.RLock()
+			for _, client := range s.clients {
+				if err := client.Conn.WriteJSON(msg); err != nil {
+					s.logger.Printf("❌ Failed to forward tunnel data to client: %v", err)
+				} else {
+					s.logger.Printf("✅ Tunnel data forwarded to client")
+				}
+			}
+			s.mutex.RUnlock()
 		}
 	}
 

@@ -27,6 +27,7 @@ type UnifiedClient struct {
 	currentAgent  string
 	selectedAgent string
 	portForwards  map[string]*UnifiedPortForward
+	activeTunnels map[string]net.Conn
 	mutex         sync.RWMutex
 	mode          string // "remote" or "port_forward"
 }
@@ -209,6 +210,38 @@ func (c *UnifiedClient) handleMessages() {
 			}
 		case "authenticated":
 			fmt.Printf("✅ Successfully authenticated as user: %s\n", c.config.Username)
+		case "tunnel_data":
+			c.handleTunnelData(msg)
+		}
+	}
+}
+
+func (c *UnifiedClient) handleTunnelData(msg Message) {
+	c.logger.Printf("📥 Received tunnel data from server")
+	
+	// Extract tunnel ID and data from message
+	if msg.Metadata != nil {
+		if tunnelID, ok := msg.Metadata["tunnel_id"].(string); ok {
+			if data, ok := msg.Metadata["data"].([]byte); ok {
+				c.logger.Printf("📥 Forwarding %d bytes to client for tunnel %s", len(data), tunnelID)
+				
+				// Find the client connection for this tunnel
+				c.mutex.RLock()
+				if clientConn, exists := c.activeTunnels[tunnelID]; exists {
+					c.mutex.RUnlock()
+					
+					// Write data to client connection
+					_, err := clientConn.Write(data)
+					if err != nil {
+						c.logger.Printf("❌ Failed to write data to client: %v", err)
+					} else {
+						c.logger.Printf("✅ Data written to client for tunnel %s", tunnelID)
+					}
+				} else {
+					c.mutex.RUnlock()
+					c.logger.Printf("⚠️ No active tunnel found for ID: %s", tunnelID)
+				}
+			}
 		}
 	}
 }
@@ -967,43 +1000,68 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	return nil
 }
 
-// relayDataThroughServer relays TCP data through WebSocket to server
+// relayDataThroughServer relays TCP data through WebSocket to server (bidirectional)
 func (pf *UnifiedPortForward) relayDataThroughServer(clientConn net.Conn, tunnelID string) error {
-	pf.Client.logger.Printf("🔀 Starting data relay for tunnel: %s", tunnelID)
+	pf.Client.logger.Printf("🔀 Starting bidirectional data relay for tunnel: %s", tunnelID)
 	
-	// For now, use a simple approach: read from client and send to server via WebSocket
-	// In a full implementation, this would be bidirectional data relay
+	done := make(chan bool, 2)
 	
-	buffer := make([]byte, 4096)
-	for {
-		// Read data from client
-		n, err := clientConn.Read(buffer)
-		if err != nil {
-			pf.Client.logger.Printf("🔚 Client connection closed: %v", err)
-			break
-		}
+	// Store the tunnel connection for response handling
+	pf.Client.mutex.Lock()
+	if pf.Client.activeTunnels == nil {
+		pf.Client.activeTunnels = make(map[string]net.Conn)
+	}
+	pf.Client.activeTunnels[tunnelID] = clientConn
+	pf.Client.mutex.Unlock()
+	
+	// Goroutine 1: Client → Server → Agent
+	go func() {
+		defer func() { done <- true }()
 		
-		if n > 0 {
-			pf.Client.logger.Printf("📤 Sending %d bytes to server for tunnel %s", n, tunnelID)
-			
-			// Send data to server via WebSocket
-			dataMsg := map[string]interface{}{
-				"type":      "tunnel_data",
-				"tunnel_id": tunnelID,
-				"data":      buffer[:n],
-				"timestamp": time.Now().Format(time.RFC3339),
-			}
-			
-			pf.Client.mutex.Lock()
-			sendErr := pf.Client.conn.WriteJSON(dataMsg)
-			pf.Client.mutex.Unlock()
-			
-			if sendErr != nil {
-				pf.Client.logger.Printf("❌ Failed to send data to server: %v", sendErr)
+		buffer := make([]byte, 4096)
+		for {
+			// Read data from client
+			n, err := clientConn.Read(buffer)
+			if err != nil {
+				pf.Client.logger.Printf("🔚 Client connection closed: %v", err)
 				break
 			}
+			
+			if n > 0 {
+				pf.Client.logger.Printf("📤 Sending %d bytes to server for tunnel %s", n, tunnelID)
+				
+				// Send data to server via WebSocket
+				dataMsg := map[string]interface{}{
+					"type":      "tunnel_data",
+					"tunnel_id": tunnelID,
+					"data":      buffer[:n],
+					"direction": "client_to_agent",
+					"timestamp": time.Now().Format(time.RFC3339),
+				}
+				
+				pf.Client.mutex.Lock()
+				sendErr := pf.Client.conn.WriteJSON(dataMsg)
+				pf.Client.mutex.Unlock()
+				
+				if sendErr != nil {
+					pf.Client.logger.Printf("❌ Failed to send data to server: %v", sendErr)
+					break
+				}
+			}
 		}
-	}
+	}()
 	
+	// Goroutine 2: Wait for data from server (Agent → Server → Client)
+	// This will be handled by the existing message handler when server sends tunnel_data back
+	
+	// Wait for connection to close
+	<-done
+	
+	// Cleanup
+	pf.Client.mutex.Lock()
+	delete(pf.Client.activeTunnels, tunnelID)
+	pf.Client.mutex.Unlock()
+	
+	pf.Client.logger.Printf("🏁 Data relay finished for tunnel: %s", tunnelID)
 	return nil
 }
