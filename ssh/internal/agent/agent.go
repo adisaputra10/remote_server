@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -629,6 +630,77 @@ func generatePersistentID() string {
 	data := fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano())
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:8])
+}
+
+// copyWithQueryLogging copies data between connections while logging database queries
+func (a *Agent) copyWithQueryLogging(dst, src net.Conn, tunnelID, direction string) (int64, error) {
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	var totalWritten int64
+
+	for {
+		// Read from source
+		n, err := src.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return totalWritten, err
+		}
+
+		// Log data if it looks like a query
+		if direction == "client->remote" && n > 5 {
+			a.logDatabaseQuery(buffer[:n], tunnelID, direction)
+		}
+
+		// Write to destination
+		written, err := dst.Write(buffer[:n])
+		if err != nil {
+			return totalWritten, err
+		}
+
+		totalWritten += int64(written)
+	}
+
+	return totalWritten, nil
+}
+
+// logDatabaseQuery attempts to extract and log database queries
+func (a *Agent) logDatabaseQuery(data []byte, tunnelID, direction string) {
+	// Simple MySQL query detection (COM_QUERY = 0x03)
+	if len(data) > 5 && data[4] == 0x03 {
+		// Extract query text (skip packet header + command byte)
+		query := string(data[5:])
+		// Clean up the query
+		query = strings.TrimSpace(query)
+		query = strings.ReplaceAll(query, "\n", " ")
+		query = strings.ReplaceAll(query, "\r", " ")
+		
+		// Only log if it's not empty and not just whitespace
+		if len(query) > 0 && strings.TrimSpace(query) != "" {
+			a.logger.Printf("🗂️  [QUERY] Tunnel %s: %s", tunnelID, query)
+		}
+	} else if len(data) > 20 {
+		// Check for common SQL keywords at the beginning
+		queryText := string(data)
+		upperQuery := strings.ToUpper(strings.TrimSpace(queryText))
+		
+		if strings.HasPrefix(upperQuery, "SELECT") || 
+		   strings.HasPrefix(upperQuery, "INSERT") || 
+		   strings.HasPrefix(upperQuery, "UPDATE") || 
+		   strings.HasPrefix(upperQuery, "DELETE") || 
+		   strings.HasPrefix(upperQuery, "SHOW") || 
+		   strings.HasPrefix(upperQuery, "DESC") ||
+		   strings.HasPrefix(upperQuery, "EXPLAIN") {
+			// Clean up the query
+			query := strings.TrimSpace(queryText)
+			query = strings.ReplaceAll(query, "\n", " ")
+			query = strings.ReplaceAll(query, "\r", " ")
+			
+			if len(query) > 0 {
+				a.logger.Printf("🗂️  [QUERY] Tunnel %s: %s", tunnelID, query)
+			}
+		}
+	}
 }
 
 // NewAgent creates a new agent
