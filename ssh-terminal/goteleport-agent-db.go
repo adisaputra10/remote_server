@@ -280,32 +280,97 @@ func (a *GoTeleportAgent) startPingRoutine() {
 	a.logger.Printf("🏓 AGENT: Starting ping routine")
 	
 	for range ticker.C {
-		if a.conn == nil {
+		a.mutex.RLock()
+		conn := a.conn
+		a.mutex.RUnlock()
+		
+		if conn == nil {
 			a.logger.Printf("🏓 AGENT: Connection is nil, stopping ping routine")
 			return
 		}
 		
 		a.logger.Printf("🏓 AGENT: Sending ping to server")
-		a.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := a.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if err := conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
 			a.logger.Printf("❌ AGENT: Ping failed: %v", err)
+			// Try to reconnect
+			go a.reconnectToServer()
 			return
 		}
-		a.conn.SetWriteDeadline(time.Time{})
+		conn.SetWriteDeadline(time.Time{})
 	}
 }
 
+// reconnectToServer attempts to reconnect to the server
+func (a *GoTeleportAgent) reconnectToServer() {
+	a.logger.Printf("🔄 AGENT: Attempting to reconnect to server...")
+	
+	// Close existing connection if any
+	a.mutex.Lock()
+	if a.conn != nil {
+		a.conn.Close()
+		a.conn = nil
+	}
+	a.mutex.Unlock()
+	
+	// Wait before attempting reconnection
+	time.Sleep(5 * time.Second)
+	
+	// Try to reconnect
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		if err := a.connectToServer(); err != nil {
+			a.logger.Printf("❌ AGENT: Reconnection attempt %d failed: %v", i+1, err)
+			time.Sleep(time.Duration(i+1) * 5 * time.Second) // Exponential backoff
+		} else {
+			a.logger.Printf("✅ AGENT: Successfully reconnected to server")
+			return
+		}
+	}
+	
+	a.logger.Printf("❌ AGENT: Failed to reconnect after %d attempts", maxRetries)
+}
+
 func (a *GoTeleportAgent) handleMessages() {
-	defer a.conn.Close()
+	defer func() {
+		a.mutex.Lock()
+		if a.conn != nil {
+			a.conn.Close()
+			a.conn = nil
+		}
+		a.mutex.Unlock()
+	}()
 
 	for {
-		var msg Message
-		if err := a.conn.ReadJSON(&msg); err != nil {
-			a.logger.Printf("❌ WebSocket read error: %v", err)
+		a.mutex.RLock()
+		conn := a.conn
+		a.mutex.RUnlock()
+		
+		if conn == nil {
+			a.logger.Printf("❌ AGENT: Connection is nil, exiting message handler")
 			break
 		}
 
-		a.logger.Printf("📨 Received message: Type=%s, SessionID=%s", msg.Type, msg.SessionID)
+		// Set read deadline to detect timeouts
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		
+		var msg Message
+		if err := conn.ReadJSON(&msg); err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				a.logger.Printf("📥 AGENT: WebSocket closed normally")
+			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				a.logger.Printf("⏰ AGENT: WebSocket read timeout, attempting reconnect")
+				go a.reconnectToServer()
+			} else {
+				a.logger.Printf("❌ AGENT: WebSocket read error: %v", err)
+				go a.reconnectToServer()
+			}
+			break
+		}
+		
+		conn.SetReadDeadline(time.Time{}) // Remove deadline after successful read
+
+		a.logger.Printf("📨 AGENT: Received message: Type=%s, SessionID=%s", msg.Type, msg.SessionID)
 		a.handleMessage(&msg)
 	}
 }

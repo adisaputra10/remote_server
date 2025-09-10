@@ -1021,19 +1021,27 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	pf.Client.logger.Printf("🔄 Starting bidirectional data transfer...")
 
 	// Start bidirectional data transfer
-	done := make(chan bool, 2)
+	done := make(chan bool)
+	var closeOnce sync.Once
 	
 	// Client -> Server
 	go func() {
 		defer func() { 
 			pf.Client.logger.Printf("📤 CLIENT->SERVER goroutine exiting")
-			done <- true 
+			closeOnce.Do(func() { close(done) })
 		}()
 		
 		// Buffer for reading from client
 		buffer := make([]byte, 4096)
 		
 		for {
+			// Check if we should exit
+			select {
+			case <-done:
+				return
+			default:
+			}
+			
 			// Set read timeout for client connection
 			clientConn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 			n, err := clientConn.Read(buffer)
@@ -1068,15 +1076,25 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	go func() {
 		defer func() { 
 			pf.Client.logger.Printf("📥 SERVER->CLIENT goroutine exiting")
-			done <- true 
+			closeOnce.Do(func() { close(done) })
 		}()
+		
 		for {
+			// Check if we should exit
+			select {
+			case <-done:
+				return
+			default:
+			}
+			
 			// Read from server via WebSocket with timeout
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			msgType, data, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					pf.Client.logger.Printf("📥 WebSocket closed normally")
+				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					pf.Client.logger.Printf("📥 WebSocket unexpected close: %v", err)
 				} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					pf.Client.logger.Printf("⏰ WebSocket read timeout, continuing...")
 					continue
@@ -1127,5 +1145,12 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	// Wait for either direction to close
 	<-done
 	pf.Client.logger.Printf("🔚 Tunnel connection ended")
+	
+	// Cleanup ping routine
+	select {
+	case pingDone <- true:
+	default:
+	}
+	
 	return nil
 }
