@@ -956,21 +956,46 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	// For MySQL: client -> agent:3307 -> localhost:3306
 	// For PostgreSQL: client -> agent:5433 -> localhost:5432
 	
-	var agentTunnelPort int
+	// Try to connect to agent tunnel (try multiple ports)
+	var agentConn net.Conn
+	var connectedPort int
+	
+	// Try ports 3307, 3308, 3309, etc.
 	if dbType == "mysql" {
-		agentTunnelPort = 3307 // Agent's MySQL tunnel port
+		for port := 3307; port <= 3320; port++ {
+			agentHost := pf.Client.getServerHost()
+			agentTunnelAddr := fmt.Sprintf("%s:%d", agentHost, port)
+			
+			pf.Client.logger.Printf("🔗 Trying to connect to agent tunnel: %s", agentTunnelAddr)
+			conn, dialErr := net.DialTimeout("tcp", agentTunnelAddr, 3*time.Second)
+			if dialErr == nil {
+				agentConn = conn
+				connectedPort = port
+				pf.Client.logger.Printf("✅ Connected to agent tunnel on port: %d", port)
+				break
+			} else {
+				pf.Client.logger.Printf("⚠️  Port %d not available, trying next...", port)
+			}
+		}
 	} else {
-		agentTunnelPort = 5433 // Agent's PostgreSQL tunnel port
+		// PostgreSQL
+		agentTunnelPort := 5433
+		agentHost := pf.Client.getServerHost()
+		agentTunnelAddr := fmt.Sprintf("%s:%d", agentHost, agentTunnelPort)
+		
+		pf.Client.logger.Printf("🔗 Connecting to agent tunnel: %s", agentTunnelAddr)
+		conn, dialErr := net.DialTimeout("tcp", agentTunnelAddr, 10*time.Second)
+		if dialErr == nil {
+			agentConn = conn
+			connectedPort = agentTunnelPort
+		}
 	}
 	
-	agentHost := pf.Client.getServerHost() // For now, assume agent is on same host as server
-	agentTunnelAddr := fmt.Sprintf("%s:%d", agentHost, agentTunnelPort)
-	
-	pf.Client.logger.Printf("🔗 Connecting to agent tunnel: %s", agentTunnelAddr)
-	agentConn, err := net.DialTimeout("tcp", agentTunnelAddr, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("failed to connect to agent tunnel: %v", err)
+	if agentConn == nil {
+		return fmt.Errorf("failed to connect to agent tunnel on any port")
 	}
+	
+	pf.Client.logger.Printf("🎯 Using agent tunnel on port: %d", connectedPort)
 	defer agentConn.Close()
 
 	// Proxy data between client and agent tunnel

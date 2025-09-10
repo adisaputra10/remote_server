@@ -278,17 +278,29 @@ func (a *Agent) createTunnel(tunnelID, tunnelType, remoteHost string, remotePort
 	a.logger.Printf("  - Tunnel Type: %s", tunnelType)
 	a.logger.Printf("  - Target: %s:%d", remoteHost, remotePort)
 
-	// Agent akan membuat listener di port 3307 (bukan port dari client)
-	agentLocalPort := 3307
-	localAddr := fmt.Sprintf("127.0.0.1:%d", agentLocalPort)
+	// Try to find available port starting from 3307
+	var listener net.Listener
+	var err error
+	var actualPort int
 
-	a.logger.Printf("🔌 Creating listener on: %s", localAddr)
+	// Try ports 3307, 3308, 3309, etc. until we find available one
+	for port := 3307; port <= 3320; port++ {
+		localAddr := fmt.Sprintf("127.0.0.1:%d", port)
+		a.logger.Printf("🔌 Trying to create listener on: %s", localAddr)
+		
+		listener, err = net.Listen("tcp", localAddr)
+		if err == nil {
+			actualPort = port
+			a.logger.Printf("✅ Successfully created listener on: %s", localAddr)
+			break
+		} else {
+			a.logger.Printf("⚠️  Port %d busy, trying next port...", port)
+		}
+	}
 
-	// Create listener
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		a.logger.Printf("❌ Failed to create listener on %s: %v", localAddr, err)
-		return fmt.Errorf("failed to create listener: %v", err)
+	if listener == nil {
+		a.logger.Printf("❌ Failed to find available port after trying 3307-3320")
+		return fmt.Errorf("failed to find available port: %v", err)
 	}
 
 	actualAddr := listener.Addr().String()
@@ -314,6 +326,7 @@ func (a *Agent) createTunnel(tunnelID, tunnelType, remoteHost string, remotePort
 	go a.handleTunnelConnections(tunnel, remoteHost, remotePort)
 
 	a.logger.Printf("✅ Tunnel created successfully: %s (listening on %s)", tunnelID, actualAddr)
+	a.logger.Printf("🎯 Ready to forward connections from port %d to %s:%d", actualPort, remoteHost, remotePort)
 
 	return nil
 }
