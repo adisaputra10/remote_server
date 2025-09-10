@@ -10,7 +10,7 @@ CONFIG_FILE=${CONFIG_FILE:-"server-config-db.json"}
 LOG_FILE=${LOG_FILE:-"server.log"}
 
 # Check if binary exists
-if [ ! -f "./tunnel-server" ]; then
+if [ ! -f "./build/linux/tunnel-server" ]; then
     echo "❌ tunnel-server binary not found!"
     echo "Please run build-linux.sh first or copy the binary to this directory"
     exit 1
@@ -56,7 +56,7 @@ echo "  - Log: $LOG_FILE"
 echo ""
 
 # Run server in background
-nohup ./tunnel-server \
+nohup ././build/linux/tunnel-server \
     -config="$CONFIG_FILE" \
     -port=$SERVER_PORT \
     -host="$SERVER_HOST" \
