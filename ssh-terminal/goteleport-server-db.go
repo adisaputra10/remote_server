@@ -275,9 +275,10 @@ func NewGoTeleportServerDB(configFile string) (*GoTeleportServerDB, error) {
 		logger:   logger,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
-			ReadBufferSize:  4096,
-			WriteBufferSize: 4096,
-			HandshakeTimeout: 10 * time.Second,
+			ReadBufferSize:  32768,  // 32KB buffer
+			WriteBufferSize: 32768,  // 32KB buffer
+			HandshakeTimeout: 30 * time.Second,
+			EnableCompression: false, // Disable compression for binary data
 		},
 	}
 
@@ -1154,7 +1155,28 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 		s.logEvent("TUNNEL_ERROR", "Failed to upgrade tunnel connection", err.Error())
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		s.logger.Printf("🔌 SERVER: Closing tunnel connection")
+		conn.Close()
+	}()
+
+	// Configure WebSocket for binary data
+	conn.SetReadLimit(1024 * 1024) // 1MB max message size
+	
+	// Setup ping/pong handlers
+	conn.SetPongHandler(func(string) error {
+		s.logger.Printf("🏓 SERVER: Received pong from tunnel client")
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+	
+	conn.SetPingHandler(func(message string) error {
+		s.logger.Printf("🏓 SERVER: Received ping from tunnel client, sending pong")
+		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		err := conn.WriteMessage(websocket.PongMessage, []byte(message))
+		conn.SetWriteDeadline(time.Time{})
+		return err
+	})
 
 	s.logEvent("TUNNEL_CONNECT", "Tunnel connection established", fmt.Sprintf("From: %s", r.RemoteAddr))
 
@@ -1274,15 +1296,29 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 
 	// Handle client data forwarding
 	for {
-		// Read data from client WebSocket
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		// Read data from client WebSocket with timeout
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			// Check for specific error types
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				s.logger.Printf("📝 SERVER: Client closed connection normally")
+				s.logEvent("TUNNEL_CLOSE", "Client closed connection", tunnelID)
+			} else if websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
+				s.logger.Printf("⚠️ SERVER: Client connection closed abnormally (1006)")
+				s.logEvent("TUNNEL_ERROR", "Abnormal client closure", fmt.Sprintf("TunnelID: %s, Error: %v", tunnelID, err))
+			} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				s.logger.Printf("❌ SERVER: Unexpected close error: %v", err)
+				s.logEvent("TUNNEL_ERROR", "Unexpected close error", err.Error())
+			} else {
+				s.logger.Printf("❌ SERVER: Error reading from client: %v", err)
 				s.logEvent("TUNNEL_ERROR", "Error reading from client", err.Error())
 			}
 			break
 		}
+		
+		// Clear read deadline after successful read
+		conn.SetReadDeadline(time.Time{})
 
 		// Handle different message types
 		if msgType == websocket.PingMessage {
