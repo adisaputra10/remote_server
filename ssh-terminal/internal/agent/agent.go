@@ -1,559 +1,533 @@
 package agent
 
 import (
-	"context"
-	"crypto/tls"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
-	"net/http"
 	"net/url"
-	"runtime"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	
-	"ssh-terminal/internal/proto"
-	"ssh-terminal/internal/transport"
 )
 
 // Config represents agent configuration
 type Config struct {
-	ID              string                    `json:"id"`
-	Name            string                    `json:"name"`
-	ServerURL       string                    `json:"server_url"`
-	Token           string                    `json:"token"`
-	Platform        string                    `json:"platform"`
-	Version         string                    `json:"version"`
-	LogFile         string                    `json:"log_file"`
-	DatabaseProxies []DatabaseProxyConfig     `json:"database_proxies"`
-	Metadata        map[string]string         `json:"metadata"`
-	Insecure        bool                      `json:"insecure"`
-}
-
-type DatabaseProxyConfig struct {
-	Name       string `json:"name"`
-	LocalPort  int    `json:"local_port"`
-	TargetHost string `json:"target_host"`
-	TargetPort int    `json:"target_port"`
-	Protocol   string `json:"protocol"`
-	Enabled    bool   `json:"enabled"`
+	ID        string `json:"id"`
+	ServerURL string `json:"server_url"`
 }
 
 // Agent represents the tunnel agent
 type Agent struct {
-	config    *Config
-	logger    *log.Logger
-	session   *transport.MuxSession
-	wsConn    *websocket.Conn  // Direct WebSocket connection for simple mode
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mu        sync.RWMutex
-	proxies   map[string]*DatabaseProxy
-	tunnels   map[string]*Tunnel
+	id       string
+	config   *Config
+	wsConn   *websocket.Conn
+	logger   *log.Logger
+	mu       sync.RWMutex
+	done     chan bool
+	tunnels  map[string]*ActiveTunnel
 }
 
-// DatabaseProxy handles database connections
-type DatabaseProxy struct {
-	Name       string
-	LocalPort  int
-	TargetHost string
-	TargetPort int
-	Protocol   string
-	listener   net.Listener
-	agent      *Agent
-	ctx        context.Context
-	cancel     context.CancelFunc
-}
-
-// Tunnel handles individual tunnel connections
-type Tunnel struct {
-	ID         string
-	AgentConn  net.Conn
-	TargetConn net.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-}
-
-// NewAgent creates a new agent
-func NewAgent(config *Config, logger *log.Logger) *Agent {
-	ctx, cancel := context.WithCancel(context.Background())
-	
-	// Generate persistent ID if not provided
-	if config.ID == "" {
-		config.ID = generatePersistentID(config.Name, runtime.GOOS)
-	}
-	
-	return &Agent{
-		config:  config,
-		logger:  logger,
-		ctx:     ctx,
-		cancel:  cancel,
-		proxies: make(map[string]*DatabaseProxy),
-		tunnels: make(map[string]*Tunnel),
-	}
-}
-
-// generatePersistentID creates a consistent ID based on name and platform
-func generatePersistentID(name, platform string) string {
-	data := fmt.Sprintf("%s-%s", name, platform)
-	hash := fmt.Sprintf("%x", []byte(data))
-	if len(hash) > 16 {
-		hash = hash[:16]
-	}
-	return hash
-}
-
-// Start starts the agent
-func (a *Agent) Start() error {
-	a.logger.Printf("🚀 Starting agent: %s (ID: %s)", a.config.Name, a.config.ID)
-	
-	// Start database proxies
-	if err := a.startDatabaseProxies(); err != nil {
-		return fmt.Errorf("failed to start database proxies: %w", err)
-	}
-	
-	// Connect to server
-	if err := a.connectToServer(); err != nil {
-		return fmt.Errorf("failed to connect to server: %w", err)
-	}
-	
-	// Start message handler
-	go a.handleMessages()
-	
-	// Start heartbeat
-	go a.startHeartbeat()
-	
-	return nil
-}
-
-// connectToServer establishes connection to the server
-func (a *Agent) connectToServer() error {
-	a.logger.Printf("🔄 Parsing server URL: %s", a.config.ServerURL)
-	
-	serverURL, err := url.Parse(a.config.ServerURL)
-	if err != nil {
-		a.logger.Printf("❌ Invalid server URL: %v", err)
-		return fmt.Errorf("invalid server URL: %w", err)
-	}
-	
-	// Convert HTTP(S) to WS(S)
-	switch serverURL.Scheme {
-	case "http":
-		serverURL.Scheme = "ws"
-		a.logger.Printf("🔄 Converting HTTP to WebSocket")
-	case "https":
-		serverURL.Scheme = "wss"
-		a.logger.Printf("🔄 Converting HTTPS to WebSocket Secure")
-	}
-	
-	// Add agent endpoint
-	serverURL.Path = "/agent"
-	a.logger.Printf("🔄 Final WebSocket URL: %s", serverURL.String())
-	
-	// Setup WebSocket dialer
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 30 * time.Second
-	
-	if a.config.Insecure {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		a.logger.Printf("⚠️  TLS verification disabled")
-	}
-	
-	// Add auth header
-	headers := http.Header{}
-	if a.config.Token != "" {
-		headers.Set("Authorization", "Bearer "+a.config.Token)
-		a.logger.Printf("🔐 Adding authorization header")
-	}
-	
-	a.logger.Printf("🔌 Attempting WebSocket connection...")
-	
-	// Connect directly with WebSocket (no yamux for now)
-	conn, resp, err := dialer.Dial(serverURL.String(), headers)
-	if err != nil {
-		a.logger.Printf("❌ WebSocket dial failed: %v", err)
-		if resp != nil {
-			a.logger.Printf("❌ HTTP Response: %d %s", resp.StatusCode, resp.Status)
-		}
-		return fmt.Errorf("websocket dial failed: %w", err)
-	}
-	
-	a.logger.Printf("✅ WebSocket connection established")
-	
-	// Store connection directly for simple mode
-	a.mu.Lock()
-	// Create a simple session wrapper
-	a.session = &transport.MuxSession{} // We'll use direct websocket for now
-	a.mu.Unlock()
-	
-	a.logger.Printf("🔄 Sending registration to server...")
-	
-	// Send registration via direct websocket
-	if err := a.sendRegistrationDirect(conn); err != nil {
-		conn.Close()
-		a.logger.Printf("❌ Registration failed: %v", err)
-		return fmt.Errorf("failed to send registration: %w", err)
-	}
-	
-	// Store the connection for message handling
-	a.wsConn = conn
-	
-	a.logger.Printf("✅ Connected and registered to server successfully")
-	return nil
-}
-
-// sendRegistrationDirect sends registration via direct websocket
-func (a *Agent) sendRegistrationDirect(conn *websocket.Conn) error {
-	a.logger.Printf("📝 Preparing registration data...")
-	
-	registration := map[string]interface{}{
-		"type": "agent_register",
-		"data": map[string]interface{}{
-			"id":       a.config.ID,
-			"name":     a.config.Name,
-			"platform": a.config.Platform,
-			"version":  a.config.Version,
-			"token":    a.config.Token,
-		},
-	}
-	
-	a.logger.Printf("📋 Registration info: ID=%s, Name=%s, Platform=%s", 
-		a.config.ID, a.config.Name, a.config.Platform)
-	
-	data, err := json.Marshal(registration)
-	if err != nil {
-		a.logger.Printf("❌ Failed to marshal registration: %v", err)
-		return fmt.Errorf("failed to marshal registration: %w", err)
-	}
-	
-	a.logger.Printf("📤 Sending registration message [%d bytes]...", len(data))
-	
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		a.logger.Printf("❌ Failed to send registration: %v", err)
-		return fmt.Errorf("failed to send registration: %w", err)
-	}
-	
-	a.logger.Printf("✅ Registration sent successfully")
-	return nil
-}
-
-// sendRegistration sends agent registration to server
-func (a *Agent) sendRegistration() error {
-	msg := proto.NewMessage(proto.MessageTypeAgentRegister)
-	msg.AgentID = a.config.ID
-	msg.Data = &proto.AgentInfo{
-		ID:       a.config.ID,
-		Name:     a.config.Name,
-		Platform: a.config.Platform,
-		Version:  a.config.Version,
-		Metadata: a.config.Metadata,
-		LastSeen: time.Now(),
-	}
-	
-	return a.sendMessage(msg)
-}
-
-// sendMessage sends a message to the server
-func (a *Agent) sendMessage(msg *proto.Message) error {
-	a.mu.RLock()
-	session := a.session
-	a.mu.RUnlock()
-	
-	if session == nil {
-		return fmt.Errorf("no active session")
-	}
-	
-	// Open control stream for messages
-	stream, err := session.OpenStream()
-	if err != nil {
-		return fmt.Errorf("failed to open stream: %w", err)
-	}
-	defer stream.Close()
-	
-	data, err := msg.ToJSON()
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-	
-	_, err = stream.Write(data)
-	return err
-}
-
-// handleMessages handles incoming messages
-func (a *Agent) handleMessages() {
-	a.logger.Printf("🎧 Starting message handler...")
-	defer a.logger.Printf("🔚 Message handler stopped")
-	
-	for {
-		select {
-		case <-a.ctx.Done():
-			a.logger.Printf("🛑 Context cancelled, stopping message handler")
-			return
-		default:
-		}
-		
-		a.mu.RLock()
-		conn := a.wsConn
-		a.mu.RUnlock()
-		
-		if conn == nil {
-			a.logger.Printf("⏳ No connection available, waiting...")
-			time.Sleep(time.Second)
-			continue
-		}
-		
-		// Read message from WebSocket directly
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			a.logger.Printf("❌ Failed to read message: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		
-		a.logger.Printf("📨 Received message [%d bytes]", len(data))
-		
-		// Parse and handle message
-		go a.handleMessageData(data)
-	}
+// ActiveTunnel represents an active tunnel connection
+type ActiveTunnel struct {
+	ID       string
+	Type     string // mysql, postgresql
+	LocalAddr string
+	RemoteAddr string
+	Listener net.Listener
+	Done     chan bool
 }
 
 // handleMessageData processes incoming message data
 func (a *Agent) handleMessageData(data []byte) {
-	a.logger.Printf("� Processing message: %s", string(data))
+	a.logger.Printf("🔍 Processing message: %s", string(data))
 	
-	// Simple echo back for now (to test basic communication)
+	// Parse message
+	var msg map[string]interface{}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		a.logger.Printf("❌ Failed to parse message: %v", err)
+		return
+	}
+	
+	msgType, ok := msg["type"].(string)
+	if !ok {
+		a.logger.Printf("❌ Invalid message type")
+		return
+	}
+	
+	// Handle different message types
+	switch msgType {
+	case "ping":
+		a.handlePing(msg)
+	case "test_message":
+		a.handleTestMessage(msg)
+	case "tunnel_request":
+		a.handleTunnelRequest(msg)
+	case "tunnel_close":
+		a.handleTunnelClose(msg)
+	default:
+		a.logger.Printf("⚠️ Unknown message type: %s", msgType)
+		// Echo back unknown messages
+		a.mu.RLock()
+		conn := a.wsConn
+		a.mu.RUnlock()
+		
+		if conn != nil {
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				a.logger.Printf("❌ Failed to echo message: %v", err)
+			}
+		}
+	}
+}
+
+// handlePing handles ping messages
+func (a *Agent) handlePing(msg map[string]interface{}) {
+	a.logger.Printf("🏓 Handling ping message")
+	
+	response := map[string]interface{}{
+		"type": "pong",
+		"agent_id": a.id,
+		"timestamp": time.Now().Unix(),
+	}
+	
+	a.sendMessage(response)
+}
+
+// handleTestMessage handles test messages
+func (a *Agent) handleTestMessage(msg map[string]interface{}) {
+	a.logger.Printf("🧪 Handling test message")
+	
+	// Echo back the test message
 	a.mu.RLock()
 	conn := a.wsConn
 	a.mu.RUnlock()
 	
 	if conn != nil {
-		a.logger.Printf("📤 Echoing message back to server...")
+		data, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.logger.Printf("❌ Failed to echo message: %v", err)
+			a.logger.Printf("❌ Failed to echo test message: %v", err)
 		} else {
-			a.logger.Printf("✅ Message echoed successfully")
+			a.logger.Printf("✅ Test message echoed successfully")
 		}
 	}
 }
 
-// handlePing responds to ping messages
-func (a *Agent) handlePing(msg map[string]interface{}) {
-	response := map[string]interface{}{
-		"type": "pong",
-		"data": "Agent is alive",
-	}
-	a.sendMessageDirect(response)
-}
-
-// handleTestMessage handles test messages
-func (a *Agent) handleTestMessage(msg map[string]interface{}) {
-	a.logger.Printf("🧪 Test message received: %v", msg["data"])
+// handleTunnelRequest handles tunnel creation requests
+func (a *Agent) handleTunnelRequest(msg map[string]interface{}) {
+	a.logger.Printf("🚇 Handling tunnel request")
 	
-	response := map[string]interface{}{
-		"type": "test_response",
-		"data": fmt.Sprintf("Agent processed: %v", msg["data"]),
+	// Extract tunnel parameters
+	tunnelID, _ := msg["tunnel_id"].(string)
+	tunnelType, _ := msg["tunnel_type"].(string)
+	remoteHost, _ := msg["remote_host"].(string)
+	remotePort, _ := msg["remote_port"].(float64)
+	localPort, _ := msg["local_port"].(float64)
+	
+	if tunnelID == "" || tunnelType == "" || remoteHost == "" {
+		a.logger.Printf("❌ Invalid tunnel request parameters")
+		a.sendTunnelResponse(tunnelID, "error", "Invalid parameters")
+		return
 	}
-	a.sendMessageDirect(response)
+	
+	a.logger.Printf("📋 Tunnel details: ID=%s, Type=%s, Remote=%s:%d, Local=:%d", 
+		tunnelID, tunnelType, remoteHost, int(remotePort), int(localPort))
+	
+	// Create tunnel
+	if err := a.createTunnel(tunnelID, tunnelType, remoteHost, int(remotePort), int(localPort)); err != nil {
+		a.logger.Printf("❌ Failed to create tunnel: %v", err)
+		a.sendTunnelResponse(tunnelID, "error", err.Error())
+		return
+	}
+	
+	a.logger.Printf("✅ Tunnel created successfully: %s", tunnelID)
+	a.sendTunnelResponse(tunnelID, "success", "Tunnel created")
 }
 
-// sendMessageDirect sends message via direct websocket
-func (a *Agent) sendMessageDirect(msg map[string]interface{}) error {
+// handleTunnelClose handles tunnel close requests
+func (a *Agent) handleTunnelClose(msg map[string]interface{}) {
+	a.logger.Printf("🚪 Handling tunnel close request")
+	
+	tunnelID, _ := msg["tunnel_id"].(string)
+	if tunnelID == "" {
+		a.logger.Printf("❌ Invalid tunnel close request - no tunnel ID")
+		return
+	}
+	
+	a.closeTunnel(tunnelID)
+	a.logger.Printf("✅ Tunnel closed: %s", tunnelID)
+}
+
+// createTunnel creates a new database tunnel
+func (a *Agent) createTunnel(tunnelID, tunnelType, remoteHost string, remotePort, localPort int) error {
+	a.logger.Printf("🔧 Creating tunnel: %s -> %s:%d", tunnelType, remoteHost, remotePort)
+	
+	// Determine local address
+	localAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
+	if localPort == 0 {
+		// Auto-assign port
+		localAddr = "127.0.0.1:0"
+	}
+	
+	// Create listener
+	listener, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		return fmt.Errorf("failed to create listener: %v", err)
+	}
+	
+	actualAddr := listener.Addr().String()
+	a.logger.Printf("📡 Listener created on: %s", actualAddr)
+	
+	// Create tunnel object
+	tunnel := &ActiveTunnel{
+		ID:        tunnelID,
+		Type:      tunnelType,
+		LocalAddr: actualAddr,
+		RemoteAddr: fmt.Sprintf("%s:%d", remoteHost, remotePort),
+		Listener:  listener,
+		Done:      make(chan bool),
+	}
+	
+	// Store tunnel
+	a.mu.Lock()
+	a.tunnels[tunnelID] = tunnel
+	a.mu.Unlock()
+	
+	// Start accepting connections
+	go a.handleTunnelConnections(tunnel, remoteHost, remotePort)
+	
+	return nil
+}
+
+// handleTunnelConnections handles incoming connections for a tunnel
+func (a *Agent) handleTunnelConnections(tunnel *ActiveTunnel, remoteHost string, remotePort int) {
+	a.logger.Printf("👂 Starting to accept connections for tunnel: %s", tunnel.ID)
+	
+	for {
+		select {
+		case <-tunnel.Done:
+			a.logger.Printf("🛑 Stopping tunnel connections: %s", tunnel.ID)
+			return
+		default:
+			// Accept connection
+			conn, err := tunnel.Listener.Accept()
+			if err != nil {
+				a.logger.Printf("❌ Failed to accept connection for tunnel %s: %v", tunnel.ID, err)
+				continue
+			}
+			
+			a.logger.Printf("🔗 New connection accepted for tunnel: %s", tunnel.ID)
+			
+			// Handle connection in goroutine
+			go a.handleTunnelConnection(tunnel, conn, remoteHost, remotePort)
+		}
+	}
+}
+
+// handleTunnelConnection handles a single tunnel connection
+func (a *Agent) handleTunnelConnection(tunnel *ActiveTunnel, clientConn net.Conn, remoteHost string, remotePort int) {
+	defer clientConn.Close()
+	
+	a.logger.Printf("🌉 Handling connection for tunnel %s to %s:%d", tunnel.ID, remoteHost, remotePort)
+	
+	// Connect to remote database
+	remoteAddr := fmt.Sprintf("%s:%d", remoteHost, remotePort)
+	remoteConn, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		a.logger.Printf("❌ Failed to connect to remote database %s: %v", remoteAddr, err)
+		return
+	}
+	defer remoteConn.Close()
+	
+	a.logger.Printf("✅ Connected to remote database: %s", remoteAddr)
+	
+	// Start bidirectional copying
+	done := make(chan bool, 2)
+	
+	// Copy client -> remote
+	go func() {
+		defer func() { done <- true }()
+		written, err := io.Copy(remoteConn, clientConn)
+		if err != nil {
+			a.logger.Printf("❌ Error copying client->remote for tunnel %s: %v", tunnel.ID, err)
+		} else {
+			a.logger.Printf("📤 Copied %d bytes client->remote for tunnel %s", written, tunnel.ID)
+		}
+	}()
+	
+	// Copy remote -> client
+	go func() {
+		defer func() { done <- true }()
+		written, err := io.Copy(clientConn, remoteConn)
+		if err != nil {
+			a.logger.Printf("❌ Error copying remote->client for tunnel %s: %v", tunnel.ID, err)
+		} else {
+			a.logger.Printf("📥 Copied %d bytes remote->client for tunnel %s", written, tunnel.ID)
+		}
+	}()
+	
+	// Wait for either direction to finish
+	<-done
+	a.logger.Printf("🏁 Connection finished for tunnel: %s", tunnel.ID)
+}
+
+// closeTunnel closes a tunnel
+func (a *Agent) closeTunnel(tunnelID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
+	tunnel, exists := a.tunnels[tunnelID]
+	if !exists {
+		a.logger.Printf("⚠️ Tunnel not found: %s", tunnelID)
+		return
+	}
+	
+	a.logger.Printf("🚪 Closing tunnel: %s", tunnelID)
+	
+	// Close listener
+	if tunnel.Listener != nil {
+		tunnel.Listener.Close()
+	}
+	
+	// Signal done
+	close(tunnel.Done)
+	
+	// Remove from map
+	delete(a.tunnels, tunnelID)
+	
+	a.logger.Printf("✅ Tunnel closed: %s", tunnelID)
+}
+
+// sendMessage sends a message to the server
+func (a *Agent) sendMessage(msg map[string]interface{}) error {
 	a.mu.RLock()
 	conn := a.wsConn
 	a.mu.RUnlock()
 	
 	if conn == nil {
-		return fmt.Errorf("no websocket connection")
+		return fmt.Errorf("no WebSocket connection")
 	}
 	
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return fmt.Errorf("failed to marshal message: %v", err)
 	}
 	
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+		return fmt.Errorf("failed to send message: %v", err)
 	}
 	
 	return nil
 }
 
-// handleStream handles an individual stream
-func (a *Agent) handleStream(stream net.Conn) {
-	defer stream.Close()
-	
-	// Read message
-	buffer := make([]byte, 64*1024) // 64KB buffer
-	n, err := stream.Read(buffer)
-	if err != nil {
-		a.logger.Printf("❌ Failed to read from stream: %v", err)
-		return
+// sendTunnelResponse sends a tunnel response message
+func (a *Agent) sendTunnelResponse(tunnelID, status, message string) {
+	response := map[string]interface{}{
+		"type": "tunnel_response",
+		"tunnel_id": tunnelID,
+		"status": status,
+		"message": message,
+		"agent_id": a.id,
+		"timestamp": time.Now().Unix(),
 	}
 	
-	// Parse message
-	msg, err := proto.FromJSON(buffer[:n])
-	if err != nil {
-		a.logger.Printf("❌ Failed to parse message: %v", err)
-		return
-	}
-	
-	// Handle message based on type
-	switch msg.Type {
-	case proto.MessageTypeTunnelStart:
-		a.handleTunnelStart(msg, stream)
-	case proto.MessageTypeClientCommand:
-		a.handleCommand(msg, stream)
-	default:
-		a.logger.Printf("⚠️ Unknown message type: %s", msg.Type)
+	if err := a.sendMessage(response); err != nil {
+		a.logger.Printf("❌ Failed to send tunnel response: %v", err)
+	} else {
+		a.logger.Printf("📤 Sent tunnel response: %s - %s", tunnelID, status)
 	}
 }
 
-// handleTunnelStart handles tunnel start requests
-func (a *Agent) handleTunnelStart(msg *proto.Message, agentStream net.Conn) {
-	tunnelReq, ok := msg.Data.(*proto.TunnelRequest)
-	if !ok {
-		a.logger.Printf("❌ Invalid tunnel request data")
-		return
-	}
+// readLoop reads messages from WebSocket connection
+func (a *Agent) readLoop() {
+	defer func() {
+		a.logger.Printf("👋 WebSocket read loop ended")
+		a.done <- true
+	}()
 	
-	a.logger.Printf("🔄 Starting tunnel to %s:%d", tunnelReq.TargetHost, tunnelReq.TargetPort)
+	a.logger.Printf("👂 Starting WebSocket read loop...")
 	
-	// Connect to target
-	targetAddr := fmt.Sprintf("%s:%d", tunnelReq.TargetHost, tunnelReq.TargetPort)
-	targetConn, err := net.Dial("tcp", targetAddr)
-	if err != nil {
-		a.logger.Printf("❌ Failed to connect to target %s: %v", targetAddr, err)
+	for {
+		a.mu.RLock()
+		conn := a.wsConn
+		a.mu.RUnlock()
 		
-		// Send error response
-		errorMsg := proto.NewMessage(proto.MessageTypeTunnelError)
-		errorMsg.SessionID = msg.SessionID
-		errorMsg.Error = err.Error()
-		a.sendMessage(errorMsg)
-		return
+		if conn == nil {
+			a.logger.Printf("❌ No WebSocket connection in read loop")
+			return
+		}
+		
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			a.logger.Printf("❌ Failed to read WebSocket message: %v", err)
+			return
+		}
+		
+		a.logger.Printf("📥 Received message: %s", string(message))
+		
+		// Process message
+		go a.handleMessageData(message)
+	}
+}
+
+// Connect connects to the server
+func (a *Agent) Connect() error {
+	a.logger.Printf("🔗 Connecting to server: %s", a.config.ServerURL)
+	
+	// Parse server URL
+	serverURL, err := url.Parse(a.config.ServerURL)
+	if err != nil {
+		return fmt.Errorf("invalid server URL: %v", err)
 	}
 	
-	// Send ready response
-	readyMsg := proto.NewMessage(proto.MessageTypeTunnelReady)
-	readyMsg.SessionID = msg.SessionID
-	a.sendMessage(readyMsg)
-	
-	// Create tunnel
-	tunnel := &Tunnel{
-		ID:         msg.SessionID,
-		AgentConn:  agentStream,
-		TargetConn: targetConn,
+	// Convert HTTP/HTTPS to WS/WSS
+	switch serverURL.Scheme {
+	case "http":
+		serverURL.Scheme = "ws"
+	case "https":
+		serverURL.Scheme = "wss"
 	}
-	tunnel.ctx, tunnel.cancel = context.WithCancel(a.ctx)
+	
+	// Add WebSocket endpoint path
+	serverURL.Path = "/ws/agent"
+	
+	wsURL := serverURL.String()
+	a.logger.Printf("📡 WebSocket URL: %s", wsURL)
+	
+	// Connect to WebSocket
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to WebSocket: %v", err)
+	}
 	
 	a.mu.Lock()
-	a.tunnels[tunnel.ID] = tunnel
+	a.wsConn = conn
 	a.mu.Unlock()
 	
-	// Start bidirectional copy
-	go tunnel.start()
-}
-
-// handleCommand handles command execution requests
-func (a *Agent) handleCommand(msg *proto.Message, stream net.Conn) {
-	command, ok := msg.Data.(string)
-	if !ok {
-		a.logger.Printf("❌ Invalid command data")
-		return
+	a.logger.Printf("✅ WebSocket connected successfully")
+	
+	// Send registration message
+	regMsg := map[string]interface{}{
+		"type":      "register",
+		"agent_id":  a.id,
+		"timestamp": time.Now().Unix(),
 	}
 	
-	a.logger.Printf("📋 Executing command: %s", command)
+	if err := a.sendMessage(regMsg); err != nil {
+		return fmt.Errorf("failed to send registration: %v", err)
+	}
 	
-	// Execute command (implement as needed)
-	result := fmt.Sprintf("Command executed: %s", command)
+	a.logger.Printf("📤 Registration message sent")
 	
-	// Send response
-	response := proto.NewMessage(proto.MessageTypeResponse)
-	response.SessionID = msg.SessionID
-	response.Data = result
+	// Start read loop
+	go a.readLoop()
 	
-	responseData, _ := response.ToJSON()
-	stream.Write(responseData)
+	// Start heartbeat
+	go a.heartbeatLoop()
+	
+	return nil
 }
 
-// startHeartbeat sends periodic heartbeats
-func (a *Agent) startHeartbeat() {
+// heartbeatLoop sends periodic heartbeat messages
+func (a *Agent) heartbeatLoop() {
+	a.logger.Printf("💓 Starting heartbeat loop...")
+	
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	
 	for {
 		select {
-		case <-a.ctx.Done():
-			return
 		case <-ticker.C:
+			a.logger.Printf("💓 Sending heartbeat...")
+			
 			heartbeat := map[string]interface{}{
-				"type": "heartbeat",
-				"data": map[string]interface{}{
-					"status":    "alive",
-					"timestamp": time.Now().Unix(),
-					"agent_id":  a.config.ID,
-				},
+				"type":      "heartbeat",
+				"agent_id":  a.id,
+				"timestamp": time.Now().Unix(),
 			}
 			
-			if err := a.sendMessageDirect(heartbeat); err != nil {
+			if err := a.sendMessage(heartbeat); err != nil {
 				a.logger.Printf("❌ Failed to send heartbeat: %v", err)
 			} else {
-				a.logger.Printf("💓 Heartbeat sent")
+				a.logger.Printf("✅ Heartbeat sent")
 			}
+			
+		case <-a.done:
+			a.logger.Printf("🛑 Stopping heartbeat loop")
+			return
 		}
 	}
 }
 
-// startDatabaseProxies starts all configured database proxies
-func (a *Agent) startDatabaseProxies() error {
-	for _, proxyConfig := range a.config.DatabaseProxies {
-		if !proxyConfig.Enabled {
-			continue
-		}
-		
-		proxy := &DatabaseProxy{
-			Name:       proxyConfig.Name,
-			LocalPort:  proxyConfig.LocalPort,
-			TargetHost: proxyConfig.TargetHost,
-			TargetPort: proxyConfig.TargetPort,
-			Protocol:   proxyConfig.Protocol,
-			agent:      a,
-		}
-		proxy.ctx, proxy.cancel = context.WithCancel(a.ctx)
-		
-		if err := proxy.start(); err != nil {
-			return fmt.Errorf("failed to start proxy %s: %w", proxy.Name, err)
-		}
-		
-		a.proxies[proxy.Name] = proxy
-		a.logger.Printf("✅ Database proxy %s started on port %d", proxy.Name, proxy.LocalPort)
+// Run starts the agent
+func (a *Agent) Run() error {
+	a.logger.Printf("🚀 Starting agent: %s", a.id)
+	
+	// Connect to server
+	if err := a.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
 	}
 	
+	a.logger.Printf("🎯 Agent ready to accept tunnel requests!")
+	a.logger.Printf("🎯 Supported tunnel types: mysql, postgresql")
+	
+	// Wait for done signal
+	<-a.done
+	
+	a.logger.Printf("🛑 Agent stopping...")
+	
+	// Close all tunnels
+	a.mu.Lock()
+	for tunnelID := range a.tunnels {
+		a.closeTunnel(tunnelID)
+	}
+	a.mu.Unlock()
+	
+	// Close WebSocket connection
+	a.mu.RLock()
+	if a.wsConn != nil {
+		a.wsConn.Close()
+	}
+	a.mu.RUnlock()
+	
+	a.logger.Printf("👋 Agent stopped")
 	return nil
 }
 
 // Stop stops the agent
 func (a *Agent) Stop() {
-	a.logger.Printf("🛑 Stopping agent")
-	a.cancel()
+	a.logger.Printf("🛑 Stopping agent...")
+	close(a.done)
+}
+
+// generatePersistentID generates a persistent agent ID
+func generatePersistentID() string {
+	// Use hostname + MAC address + timestamp for uniqueness
+	hostname, _ := os.Hostname()
 	
-	// Close session
-	a.mu.Lock()
-	if a.session != nil {
-		a.session.Close()
-		a.session = nil
+	// Simple hash-based ID generation
+	data := fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano())
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:8])
+}
+
+// NewAgent creates a new agent
+func NewAgent(config *Config, logger *log.Logger) *Agent {
+	// Generate persistent ID if not provided
+	if config.ID == "" {
+		config.ID = generatePersistentID()
+		logger.Printf("📝 Generated new agent ID: %s", config.ID)
 	}
-	a.mu.Unlock()
 	
-	// Stop proxies
-	for _, proxy := range a.proxies {
-		proxy.stop()
-	}
-	
-	// Stop tunnels
-	for _, tunnel := range a.tunnels {
-		tunnel.stop()
+	return &Agent{
+		id:      config.ID,
+		config:  config,
+		logger:  logger,
+		done:    make(chan bool),
+		tunnels: make(map[string]*ActiveTunnel),
 	}
 }

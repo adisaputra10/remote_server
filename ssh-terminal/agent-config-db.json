@@ -1,5 +1,5 @@
 {
-  "server_url": "ws://168.231.119.242:8080/ws/agent",
+  "server_url": "ws://localhost:8080/agent",
   "agent_name": "database-agent-1",
   "platform": "windows",
   "log_file": "agent-db.log",

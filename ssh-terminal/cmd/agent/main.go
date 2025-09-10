@@ -39,31 +39,27 @@ func main() {
 		logger.Fatalf("Failed to load config: %v", err)
 	}
 	
-	// Override log file from config if not set via flag
-	if *logFile == "" && config.LogFile != "" {
-		file, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err != nil {
-			logger.Fatalf("Failed to open config log file: %v", err)
-		}
-		defer file.Close()
-		logger = log.New(file, "[AGENT] ", log.LstdFlags|log.Lmicroseconds)
-	}
+	logger.Printf("🔧 Loaded config: ID=%s, ServerURL=%s", config.ID, config.ServerURL)
 	
 	if *verbose {
 		logger.Printf("🔧 Loaded configuration: %+v", config)
 	}
 	
 	// Create agent
+	logger.Printf("🔧 Creating agent...")
 	ag := agent.NewAgent(config, logger)
-	
-	// Start agent
-	if err := ag.Start(); err != nil {
-		logger.Fatalf("Failed to start agent: %v", err)
-	}
 	
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	
+	// Start agent in goroutine
+	logger.Printf("🚀 Starting agent...")
+	go func() {
+		if err := ag.Run(); err != nil {
+			logger.Printf("❌ Agent error: %v", err)
+		}
+	}()
 	
 	logger.Printf("🚀 Agent started successfully. Press Ctrl+C to stop.")
 	
@@ -88,17 +84,6 @@ func loadConfig(filename string) (*agent.Config, error) {
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to decode config: %w", err)
-	}
-	
-	// Set defaults
-	if config.Platform == "" {
-		config.Platform = "unknown"
-	}
-	if config.Version == "" {
-		config.Version = "1.0.0"
-	}
-	if config.Metadata == nil {
-		config.Metadata = make(map[string]string)
 	}
 	
 	return &config, nil

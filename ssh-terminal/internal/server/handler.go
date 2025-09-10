@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+	"crypto/rand"
+	"encoding/hex"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
