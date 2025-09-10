@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -248,10 +249,27 @@ func (a *Agent) handleTunnelData(msg map[string]interface{}) {
 	a.logger.Printf("📡 Handling tunnel data")
 
 	tunnelID, _ := msg["tunnel_id"].(string)
+	encodedData, _ := msg["data"].(string)
+	direction, _ := msg["direction"].(string)
+	
 	if tunnelID == "" {
 		a.logger.Printf("❌ Invalid tunnel data - no tunnel ID")
 		return
 	}
+
+	if encodedData == "" {
+		a.logger.Printf("❌ Invalid tunnel data - no data")
+		return
+	}
+
+	// Decode base64 data
+	data, err := base64.StdEncoding.DecodeString(encodedData)
+	if err != nil {
+		a.logger.Printf("❌ Failed to decode tunnel data: %v", err)
+		return
+	}
+
+	a.logger.Printf("📡 Processing %d bytes for tunnel %s (direction: %s)", len(data), tunnelID, direction)
 
 	// Get tunnel
 	a.mu.RLock()
@@ -265,9 +283,65 @@ func (a *Agent) handleTunnelData(msg map[string]interface{}) {
 
 	a.logger.Printf("🌉 Processing tunnel data for tunnel: %s -> %s", tunnelID, tunnel.RemoteAddr)
 	
-	// For now, we'll implement a simple version that connects directly to MySQL
-	// In a full implementation, this would handle bidirectional data streaming
-	// through the WebSocket connection
+	if direction == "client_to_agent" {
+		// Forward data from client to MySQL
+		a.logger.Printf("🔄 Forwarding data to MySQL server: %s", tunnel.RemoteAddr)
+		a.forwardDataToDatabase(tunnelID, data, tunnel.RemoteAddr)
+	}
+}
+
+// forwardDataToDatabase forwards data to the database and sends response back
+func (a *Agent) forwardDataToDatabase(tunnelID string, data []byte, remoteAddr string) {
+	a.logger.Printf("🔗 Connecting to database: %s", remoteAddr)
+	
+	// Connect to MySQL
+	conn, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		a.logger.Printf("❌ Failed to connect to database %s: %v", remoteAddr, err)
+		return
+	}
+	defer conn.Close()
+
+	a.logger.Printf("✅ Connected to database: %s", remoteAddr)
+
+	// Send data to MySQL
+	_, err = conn.Write(data)
+	if err != nil {
+		a.logger.Printf("❌ Failed to write to database: %v", err)
+		return
+	}
+	
+	a.logger.Printf("📤 Sent %d bytes to database", len(data))
+
+	// Read response from MySQL
+	response := make([]byte, 4096)
+	n, err := conn.Read(response)
+	if err != nil {
+		a.logger.Printf("❌ Failed to read from database: %v", err)
+		return
+	}
+
+	if n > 0 {
+		a.logger.Printf("📥 Received %d bytes from database", n)
+		
+		// Encode response as base64
+		encodedResponse := base64.StdEncoding.EncodeToString(response[:n])
+		
+		// Send response back to client via server
+		responseMsg := map[string]interface{}{
+			"type":      "tunnel_data",
+			"tunnel_id": tunnelID,
+			"data":      encodedResponse,
+			"direction": "agent_to_client",
+			"timestamp": time.Now().Format(time.RFC3339),
+		}
+		
+		if err := a.sendMessage(responseMsg); err != nil {
+			a.logger.Printf("❌ Failed to send response to server: %v", err)
+		} else {
+			a.logger.Printf("✅ Response sent to server for tunnel %s", tunnelID)
+		}
+	}
 }
 
 // createTunnel creates a new database tunnel

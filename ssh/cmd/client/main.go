@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -222,7 +223,14 @@ func (c *UnifiedClient) handleTunnelData(msg Message) {
 	// Extract tunnel ID and data from message
 	if msg.Metadata != nil {
 		if tunnelID, ok := msg.Metadata["tunnel_id"].(string); ok {
-			if data, ok := msg.Metadata["data"].([]byte); ok {
+			if encodedData, ok := msg.Metadata["data"].(string); ok {
+				// Decode base64 data
+				data, err := base64.StdEncoding.DecodeString(encodedData)
+				if err != nil {
+					c.logger.Printf("❌ Failed to decode tunnel data: %v", err)
+					return
+				}
+				
 				c.logger.Printf("📥 Forwarding %d bytes to client for tunnel %s", len(data), tunnelID)
 				
 				// Find the client connection for this tunnel
@@ -231,9 +239,9 @@ func (c *UnifiedClient) handleTunnelData(msg Message) {
 					c.mutex.RUnlock()
 					
 					// Write data to client connection
-					_, err := clientConn.Write(data)
-					if err != nil {
-						c.logger.Printf("❌ Failed to write data to client: %v", err)
+					_, writeErr := clientConn.Write(data)
+					if writeErr != nil {
+						c.logger.Printf("❌ Failed to write data to client: %v", writeErr)
 					} else {
 						c.logger.Printf("✅ Data written to client for tunnel %s", tunnelID)
 					}
@@ -1030,11 +1038,14 @@ func (pf *UnifiedPortForward) relayDataThroughServer(clientConn net.Conn, tunnel
 			if n > 0 {
 				pf.Client.logger.Printf("📤 Sending %d bytes to server for tunnel %s", n, tunnelID)
 				
+				// Encode data as base64 for JSON transmission
+				encodedData := base64.StdEncoding.EncodeToString(buffer[:n])
+				
 				// Send data to server via WebSocket
 				dataMsg := map[string]interface{}{
 					"type":      "tunnel_data",
 					"tunnel_id": tunnelID,
-					"data":      buffer[:n],
+					"data":      encodedData,
 					"direction": "client_to_agent",
 					"timestamp": time.Now().Format(time.RFC3339),
 				}
