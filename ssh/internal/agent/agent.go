@@ -278,6 +278,39 @@ func (a *Agent) createTunnel(tunnelID, tunnelType, remoteHost string, remotePort
 	a.logger.Printf("  - Tunnel Type: %s", tunnelType)
 	a.logger.Printf("  - Target: %s:%d", remoteHost, remotePort)
 
+	targetAddr := fmt.Sprintf("%s:%d", remoteHost, remotePort)
+
+	// Check if we already have a tunnel for this target
+	a.mu.Lock()
+	for existingID, existingTunnel := range a.tunnels {
+		if existingTunnel.RemoteAddr == targetAddr && existingTunnel.Type == tunnelType {
+			a.logger.Printf("♻️  Found existing tunnel for %s: %s (listening on %s)", 
+				targetAddr, existingID, existingTunnel.LocalAddr)
+			a.logger.Printf("✅ Reusing existing tunnel instead of creating new one")
+			
+			// Update tunnel ID mapping to new ID but keep same listener
+			a.tunnels[tunnelID] = existingTunnel
+			a.mu.Unlock()
+			return nil
+		}
+	}
+	
+	// Close old tunnels for the same type to avoid too many listeners
+	var tunnelsToClose []string
+	for existingID, existingTunnel := range a.tunnels {
+		if existingTunnel.Type == tunnelType {
+			tunnelsToClose = append(tunnelsToClose, existingID)
+		}
+	}
+	a.mu.Unlock()
+
+	// Close old tunnels
+	for _, oldTunnelID := range tunnelsToClose {
+		a.logger.Printf("🧹 Closing old tunnel: %s", oldTunnelID)
+		a.closeTunnel(oldTunnelID)
+	}
+
+	// Now create new tunnel
 	// Try to find available port starting from 3307
 	var listener net.Listener
 	var err error
