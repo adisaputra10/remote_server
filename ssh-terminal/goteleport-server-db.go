@@ -1297,7 +1297,7 @@ func (s *GoTeleportServerDB) handleTunnelConnection(w http.ResponseWriter, r *ht
 	// Handle client data forwarding
 	for {
 		// Read data from client WebSocket with timeout
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			// Check for specific error types

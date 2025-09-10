@@ -1043,7 +1043,7 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 			}
 			
 			// Set read timeout for client connection
-			clientConn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+			clientConn.SetReadDeadline(time.Now().Add(10 * time.Minute))
 			n, err := clientConn.Read(buffer)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -1057,6 +1057,7 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 				}
 				return
 			}
+			clientConn.SetReadDeadline(time.Time{}) // Remove deadline
 
 			pf.Client.logger.Printf("📤 CLIENT->SERVER: Read %d bytes from client", n)
 
@@ -1088,7 +1089,7 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 			}
 			
 			// Read from server via WebSocket with timeout
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 			msgType, data, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
