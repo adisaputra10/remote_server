@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -951,70 +950,60 @@ func (pf *UnifiedPortForward) createTunnelThroughServer(clientConn net.Conn, age
 	// Wait for tunnel response from agent (through server)
 	pf.Client.logger.Printf("⏳ Waiting for tunnel response...")
 	
-	// For now, let's assume tunnel is created successfully 
-	// Agent should create tunnel and we connect to agent's tunnel port
-	// For MySQL: client -> agent:3307 -> localhost:3306
-	// For PostgreSQL: client -> agent:5433 -> localhost:5432
+	// Wait for actual tunnel response from server
+	// In the current implementation, we'll wait briefly and assume success
+	time.Sleep(1 * time.Second)
 	
-	// Try to connect to agent tunnel (try multiple ports)
-	var agentConn net.Conn
-	var connectedPort int
+	pf.Client.logger.Printf("🌉 Starting data relay through server WebSocket...")
 	
-	// Try ports 3307, 3308, 3309, etc.
-	if dbType == "mysql" {
-		for port := 3307; port <= 3320; port++ {
-			agentHost := pf.Client.getServerHost()
-			agentTunnelAddr := fmt.Sprintf("%s:%d", agentHost, port)
+	// Relay data between client connection and server WebSocket
+	// This will forward data to agent through server
+	err = pf.relayDataThroughServer(clientConn, tunnelID)
+	if err != nil {
+		pf.Client.logger.Printf("❌ Data relay failed: %v", err)
+		return err
+	}
+	
+	return nil
+}
+
+// relayDataThroughServer relays TCP data through WebSocket to server
+func (pf *UnifiedPortForward) relayDataThroughServer(clientConn net.Conn, tunnelID string) error {
+	pf.Client.logger.Printf("🔀 Starting data relay for tunnel: %s", tunnelID)
+	
+	// For now, use a simple approach: read from client and send to server via WebSocket
+	// In a full implementation, this would be bidirectional data relay
+	
+	buffer := make([]byte, 4096)
+	for {
+		// Read data from client
+		n, err := clientConn.Read(buffer)
+		if err != nil {
+			pf.Client.logger.Printf("🔚 Client connection closed: %v", err)
+			break
+		}
+		
+		if n > 0 {
+			pf.Client.logger.Printf("📤 Sending %d bytes to server for tunnel %s", n, tunnelID)
 			
-			pf.Client.logger.Printf("🔗 Trying to connect to agent tunnel: %s", agentTunnelAddr)
-			conn, dialErr := net.DialTimeout("tcp", agentTunnelAddr, 3*time.Second)
-			if dialErr == nil {
-				agentConn = conn
-				connectedPort = port
-				pf.Client.logger.Printf("✅ Connected to agent tunnel on port: %d", port)
+			// Send data to server via WebSocket
+			dataMsg := map[string]interface{}{
+				"type":      "tunnel_data",
+				"tunnel_id": tunnelID,
+				"data":      buffer[:n],
+				"timestamp": time.Now().Format(time.RFC3339),
+			}
+			
+			pf.Client.mutex.Lock()
+			sendErr := pf.Client.conn.WriteJSON(dataMsg)
+			pf.Client.mutex.Unlock()
+			
+			if sendErr != nil {
+				pf.Client.logger.Printf("❌ Failed to send data to server: %v", sendErr)
 				break
-			} else {
-				pf.Client.logger.Printf("⚠️  Port %d not available, trying next...", port)
 			}
 		}
-	} else {
-		// PostgreSQL
-		agentTunnelPort := 5433
-		agentHost := pf.Client.getServerHost()
-		agentTunnelAddr := fmt.Sprintf("%s:%d", agentHost, agentTunnelPort)
-		
-		pf.Client.logger.Printf("🔗 Connecting to agent tunnel: %s", agentTunnelAddr)
-		conn, dialErr := net.DialTimeout("tcp", agentTunnelAddr, 10*time.Second)
-		if dialErr == nil {
-			agentConn = conn
-			connectedPort = agentTunnelPort
-		}
 	}
-	
-	if agentConn == nil {
-		return fmt.Errorf("failed to connect to agent tunnel on any port")
-	}
-	
-	pf.Client.logger.Printf("🎯 Using agent tunnel on port: %d", connectedPort)
-	defer agentConn.Close()
-
-	// Proxy data between client and agent tunnel
-	done := make(chan bool, 2)
-
-	// Copy client -> agent  
-	go func() {
-		defer func() { done <- true }()
-		io.Copy(agentConn, clientConn)
-	}()
-
-	// Copy agent -> client
-	go func() {
-		defer func() { done <- true }()
-		io.Copy(clientConn, agentConn)
-	}()
-
-	// Wait for either direction to finish
-	<-done
 	
 	return nil
 }

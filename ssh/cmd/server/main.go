@@ -390,6 +390,28 @@ func (s *Server) handleClientConnection(w http.ResponseWriter, r *http.Request, 
 				conn.WriteJSON(response)
 				s.logger.Printf("✅ Session created: %s for client %s -> agent %s", sessionID, msg.ClientID, agentID)
 			}
+		case "tunnel_data":
+			// Forward tunnel data to agent
+			s.logger.Printf("📡 Received tunnel data from client")
+			
+			agentID, _ := rawMsg["agent_id"].(string)
+			tunnelID, _ := rawMsg["tunnel_id"].(string)
+			
+			s.mutex.RLock()
+			agent, exists := s.agents[agentID]
+			s.mutex.RUnlock()
+
+			if !exists {
+				s.logger.Printf("❌ Tunnel data failed: agent %s not found", agentID)
+			} else {
+				// Forward the tunnel data to the agent
+				s.logger.Printf("📤 Forwarding tunnel data to agent %s for tunnel %s", agentID, tunnelID)
+				if err := agent.Conn.WriteJSON(rawMsg); err != nil {
+					s.logger.Printf("❌ Failed to forward tunnel data to agent %s: %v", agentID, err)
+				} else {
+					s.logger.Printf("✅ Tunnel data forwarded to agent %s", agentID)
+				}
+			}
 		}
 	}
 
