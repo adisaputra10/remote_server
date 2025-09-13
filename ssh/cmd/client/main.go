@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -34,6 +35,14 @@ func main() {
 		agentID      = flag.String("agent", "", "Target agent ID")
 		targetAddr   = flag.String("target", "", "Target address (e.g., 127.0.0.1:22)")
 		interactive  = flag.Bool("i", false, "Interactive mode")
+		
+		// New port configuration options
+		portRange    = flag.String("port-range", "", "Port range for auto allocation (e.g., 2222:2230)")
+		autoPort     = flag.Bool("auto-port", false, "Automatically allocate available port")
+		portMap      = flag.String("map", "", "Port mapping (e.g., 2222:22,3306:3306)")
+		multiTunnels = flag.String("tunnels", "", "JSON file with multiple tunnel configurations")
+		localHost    = flag.String("local-host", "127.0.0.1", "Local host to bind (default: 127.0.0.1)")
+		startPort    = flag.Int("start-port", 2222, "Starting port for auto allocation")
 	)
 	flag.Parse()
 
@@ -68,23 +77,45 @@ func main() {
 	if *interactive {
 		// Interactive mode
 		client.interactiveMode()
+	} else if *multiTunnels != "" {
+		// Multiple tunnels from JSON file
+		if err := client.setupMultipleTunnels(*multiTunnels); err != nil {
+			log.Error("❌ Failed to setup multiple tunnels: %v", err)
+			os.Exit(1)
+		}
+	} else if *portMap != "" {
+		// Port mapping mode
+		if err := client.setupPortMapping(*portMap, *agentID); err != nil {
+			log.Error("❌ Failed to setup port mapping: %v", err)
+			os.Exit(1)
+		}
 	} else if *localAddr != "" && *agentID != "" && *targetAddr != "" {
-		// Direct tunnel mode
-		if err := client.createTunnel(*localAddr, *agentID, *targetAddr); err != nil {
+		// Direct tunnel mode with optional auto-port
+		localAddress := *localAddr
+		if *autoPort {
+			localAddress = client.findAvailablePort(*localHost, *startPort)
+		}
+		
+		if err := client.createTunnel(localAddress, *agentID, *targetAddr); err != nil {
 			log.Error("❌ Failed to create tunnel: %v", err)
 			os.Exit(1)
 		}
-
-		// Wait for interrupt
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		<-c
+	} else if *portRange != "" && *agentID != "" && *targetAddr != "" {
+		// Port range mode
+		if err := client.setupPortRange(*portRange, *agentID, *targetAddr); err != nil {
+			log.Error("❌ Failed to setup port range: %v", err)
+			os.Exit(1)
+		}
+	} else if *autoPort && *agentID != "" && *targetAddr != "" {
+		// Auto-port mode
+		localAddress := client.findAvailablePort(*localHost, *startPort)
+		if err := client.createTunnel(localAddress, *agentID, *targetAddr); err != nil {
+			log.Error("❌ Failed to create tunnel: %v", err)
+			os.Exit(1)
+		}
 	} else {
-		// Show usage
-		fmt.Println("Usage:")
-		fmt.Println("  Interactive mode: -i")
-		fmt.Println("  Direct tunnel:    -L :2222 -agent agent_id -target 127.0.0.1:22")
-		flag.Usage()
+		// Show enhanced usage
+		client.showUsage()
 		os.Exit(1)
 	}
 
@@ -376,4 +407,200 @@ func (c *TunnelClient) disconnect() {
 		c.transport.SendMessage(msg)
 		c.transport.Close()
 	}
+}
+
+// New enhanced port management functions
+
+func (c *TunnelClient) findAvailablePort(host string, startPort int) string {
+	for port := startPort; port < startPort+100; port++ {
+		addr := fmt.Sprintf("%s:%d", host, port)
+		if c.isPortAvailable(addr) {
+			c.logger.Info("🔍 Found available port: %s", addr)
+			return addr
+		}
+	}
+	// Fallback to :0 for OS allocation
+	c.logger.Warn("⚠️ No port found in range, using OS allocation")
+	return fmt.Sprintf("%s:0", host)
+}
+
+func (c *TunnelClient) isPortAvailable(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
+func (c *TunnelClient) setupPortMapping(portMap, agentID string) error {
+	if agentID == "" {
+		return fmt.Errorf("agent ID required for port mapping")
+	}
+
+	mappings := strings.Split(portMap, ",")
+	for _, mapping := range mappings {
+		parts := strings.Split(strings.TrimSpace(mapping), ":")
+		if len(parts) != 2 {
+			c.logger.Warn("⚠️ Invalid port mapping: %s (expected format: localport:remoteport)", mapping)
+			continue
+		}
+
+		localPort := strings.TrimSpace(parts[0])
+		remotePort := strings.TrimSpace(parts[1])
+		
+		localAddr := fmt.Sprintf(":%s", localPort)
+		targetAddr := fmt.Sprintf("127.0.0.1:%s", remotePort)
+
+		c.logger.Info("🔀 Setting up port mapping: %s -> %s", localAddr, targetAddr)
+		
+		if err := c.createTunnel(localAddr, agentID, targetAddr); err != nil {
+			c.logger.Error("❌ Failed to create tunnel for mapping %s: %v", mapping, err)
+			continue
+		}
+	}
+
+	// Wait for interrupt
+	c.waitForInterrupt()
+	return nil
+}
+
+func (c *TunnelClient) setupPortRange(portRange, agentID, targetAddr string) error {
+	parts := strings.Split(portRange, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid port range format (expected start:end, got %s)", portRange)
+	}
+
+	startPort, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid start port: %v", err)
+	}
+
+	endPort, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid end port: %v", err)
+	}
+
+	if startPort >= endPort {
+		return fmt.Errorf("start port must be less than end port")
+	}
+
+	c.logger.Info("🔢 Setting up port range: %d-%d for target %s", startPort, endPort, targetAddr)
+
+	// Create tunnels for the port range
+	for port := startPort; port <= endPort; port++ {
+		localAddr := fmt.Sprintf(":%d", port)
+		
+		c.logger.Info("🚇 Creating tunnel: %s -> %s via %s", localAddr, targetAddr, agentID)
+		
+		if err := c.createTunnel(localAddr, agentID, targetAddr); err != nil {
+			c.logger.Error("❌ Failed to create tunnel for port %d: %v", port, err)
+			continue
+		}
+	}
+
+	// Wait for interrupt
+	c.waitForInterrupt()
+	return nil
+}
+
+type TunnelConfig struct {
+	Name       string `json:"name"`
+	LocalAddr  string `json:"local_addr"`
+	AgentID    string `json:"agent_id"`
+	TargetAddr string `json:"target_addr"`
+	AutoPort   bool   `json:"auto_port"`
+}
+
+type MultiTunnelConfig struct {
+	Tunnels []TunnelConfig `json:"tunnels"`
+}
+
+func (c *TunnelClient) setupMultipleTunnels(configFile string) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %v", err)
+	}
+
+	var config MultiTunnelConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config file: %v", err)
+	}
+
+	c.logger.Info("🔧 Setting up %d tunnels from config", len(config.Tunnels))
+
+	for _, tunnelConfig := range config.Tunnels {
+		localAddr := tunnelConfig.LocalAddr
+		if tunnelConfig.AutoPort {
+			host := "127.0.0.1"
+			if strings.Contains(localAddr, ":") {
+				parts := strings.Split(localAddr, ":")
+				if len(parts) > 0 && parts[0] != "" {
+					host = parts[0]
+				}
+			}
+			localAddr = c.findAvailablePort(host, 2222)
+		}
+
+		c.logger.Info("🚇 Creating tunnel '%s': %s -> %s via %s", 
+			tunnelConfig.Name, localAddr, tunnelConfig.TargetAddr, tunnelConfig.AgentID)
+
+		if err := c.createTunnel(localAddr, tunnelConfig.AgentID, tunnelConfig.TargetAddr); err != nil {
+			c.logger.Error("❌ Failed to create tunnel '%s': %v", tunnelConfig.Name, err)
+			continue
+		}
+	}
+
+	// Wait for interrupt
+	c.waitForInterrupt()
+	return nil
+}
+
+func (c *TunnelClient) waitForInterrupt() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+}
+
+func (c *TunnelClient) showUsage() {
+	fmt.Println("\n🚇 Tunnel Client - Enhanced Port Configuration")
+	fmt.Println("Usage modes:")
+	fmt.Println("")
+	fmt.Println("1️⃣  Interactive mode:")
+	fmt.Println("   tunnel-client -relay-url ws://server:8080/ws/client -i")
+	fmt.Println("")
+	fmt.Println("2️⃣  Direct tunnel:")
+	fmt.Println("   tunnel-client -L :2222 -agent agent_id -target 127.0.0.1:22")
+	fmt.Println("")
+	fmt.Println("3️⃣  Auto-port allocation:")
+	fmt.Println("   tunnel-client -auto-port -agent agent_id -target 127.0.0.1:22")
+	fmt.Println("   tunnel-client -auto-port -start-port 3000 -agent agent_id -target 127.0.0.1:22")
+	fmt.Println("")
+	fmt.Println("4️⃣  Port mapping (multiple ports):")
+	fmt.Println("   tunnel-client -map '2222:22,3306:3306,5432:5432' -agent agent_id")
+	fmt.Println("")
+	fmt.Println("5️⃣  Multiple tunnels from JSON config:")
+	fmt.Println("   tunnel-client -tunnels config.json")
+	fmt.Println("")
+	fmt.Println("Config file example (config.json):")
+	fmt.Println(`{
+  "tunnels": [
+    {
+      "name": "SSH",
+      "local_addr": ":2222",
+      "agent_id": "prod-server",
+      "target_addr": "127.0.0.1:22"
+    },
+    {
+      "name": "MySQL",
+      "local_addr": ":3306", 
+      "agent_id": "db-server",
+      "target_addr": "127.0.0.1:3306",
+      "auto_port": true
+    }
+  ]
+}`)
+	fmt.Println("")
+	fmt.Println("Options:")
+	flag.PrintDefaults()
 }

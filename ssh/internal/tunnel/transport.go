@@ -23,17 +23,21 @@ type Transport struct {
 	mu       sync.RWMutex
 	closed   bool
 	streams  map[string]net.Conn
+	
+	// Database query logging callback
+	queryLogger func(data []byte, targetAddr string)
 }
 
 func NewTransport(wsConn *websocket.Conn, isClient bool, log *logger.Logger) (*Transport, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	transport := &Transport{
-		conn:    wsConn,
-		logger:  log,
-		ctx:     ctx,
-		cancel:  cancel,
-		streams: make(map[string]net.Conn),
+		conn:        wsConn,
+		logger:      log,
+		ctx:         ctx,
+		cancel:      cancel,
+		streams:     make(map[string]net.Conn),
+		queryLogger: nil, // Will be set by agent if needed
 	}
 
 	// Create yamux session over WebSocket
@@ -176,6 +180,12 @@ func (t *Transport) handleIncomingStreams() {
 	}
 }
 
+func (t *Transport) SetQueryLogger(logger func(data []byte, targetAddr string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.queryLogger = logger
+}
+
 func (t *Transport) handleStream(streamID string, stream net.Conn) {
 	defer func() {
 		stream.Close()
@@ -203,7 +213,13 @@ func (t *Transport) handleStream(streamID string, stream net.Conn) {
 		}
 		
 		t.logger.Debug("Stream data [%s]: %d bytes", streamID, n)
-		// Process stream data here
+		
+		// Log database queries if logger is set
+		if t.queryLogger != nil {
+			// Try to detect if this is database traffic
+			data := buffer[:n]
+			t.queryLogger(data, "unknown") // targetAddr will be passed from tunnel context
+		}
 	}
 }
 

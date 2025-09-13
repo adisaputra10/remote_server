@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -16,22 +17,29 @@ import (
 )
 
 type TunnelAgent struct {
-	id       string
-	name     string
-	relayURL string
-	logger   *logger.Logger
-	insecure bool
-	allows   []string
+	id        string
+	name      string
+	relayURL  string
+	logger    *logger.Logger
+	insecure  bool
+	allows    []string
 	transport *tunnel.Transport
+	
+	// Database query logging
+	dbLogger    *logger.Logger
+	queryLog    bool
+	queryFilter []string
 }
 
 func main() {
 	var (
-		id       = flag.String("id", "", "Agent ID (auto-generated if empty)")
-		name     = flag.String("name", "", "Agent name (defaults to hostname)")
-		relayURL = flag.String("relay-url", "wss://localhost:8443/ws/agent", "Relay server WebSocket URL")
-		insecure = flag.Bool("insecure", false, "Skip TLS certificate verification")
-		allow    = flag.String("allow", "127.0.0.1:22,127.0.0.1:3306,127.0.0.1:5432", "Comma-separated list of allowed target addresses")
+		id          = flag.String("id", "", "Agent ID (auto-generated if empty)")
+		name        = flag.String("name", "", "Agent name (defaults to hostname)")
+		relayURL    = flag.String("relay-url", "wss://localhost:8443/ws/agent", "Relay server WebSocket URL")
+		insecure    = flag.Bool("insecure", false, "Skip TLS certificate verification")
+		allow       = flag.String("allow", "127.0.0.1:22,127.0.0.1:3306,127.0.0.1:5432", "Comma-separated list of allowed target addresses")
+		logQueries  = flag.Bool("log-queries", true, "Enable database query logging")
+		queryFilter = flag.String("query-filter", "SELECT,INSERT,UPDATE,DELETE", "Comma-separated list of query types to log")
 	)
 	flag.Parse()
 
@@ -63,13 +71,25 @@ func main() {
 		allows[i] = strings.TrimSpace(addr)
 	}
 
+	// Parse query filter
+	var filters []string
+	if *logQueries {
+		filters = strings.Split(*queryFilter, ",")
+		for i, filter := range filters {
+			filters[i] = strings.TrimSpace(strings.ToUpper(filter))
+		}
+	}
+
 	agent := &TunnelAgent{
-		id:       agentID,
-		name:     agentName,
-		relayURL: *relayURL,
-		logger:   log,
-		insecure: *insecure,
-		allows:   allows,
+		id:          agentID,
+		name:        agentName,
+		relayURL:    *relayURL,
+		logger:      log,
+		insecure:    *insecure,
+		allows:      allows,
+		dbLogger:    logger.New("DB-QUERY"),
+		queryLog:    *logQueries,
+		queryFilter: filters,
 	}
 
 	log.Info("🚀 Starting tunnel agent")
@@ -77,6 +97,13 @@ func main() {
 	log.Info("📋 Agent Name: %s", agentName)
 	log.Info("📋 Relay URL: %s", *relayURL)
 	log.Info("📋 Allowed targets: %v", allows)
+	
+	if *logQueries {
+		log.Info("📊 Database query logging: ENABLED")
+		log.Info("📊 Query filters: %v", filters)
+	} else {
+		log.Info("📊 Database query logging: DISABLED")
+	}
 
 	// Connect to relay
 	if err := agent.connect(); err != nil {
@@ -122,6 +149,14 @@ func (a *TunnelAgent) connect() error {
 	}
 
 	a.transport = transport
+
+	// Set up database query logging if enabled
+	if a.queryLog {
+		transport.SetQueryLogger(func(data []byte, targetAddr string) {
+			a.logDatabaseQuery(data, targetAddr)
+		})
+		a.logger.Info("📊 Query logger attached to transport")
+	}
 
 	// Register with relay
 	if err := a.register(); err != nil {
@@ -296,4 +331,150 @@ func (a *TunnelAgent) disconnect() {
 		a.transport.SendMessage(msg)
 		a.transport.Close()
 	}
+}
+
+// Database Query Logging Functions
+
+func (a *TunnelAgent) logDatabaseQuery(data []byte, targetAddr string) {
+	if !a.queryLog {
+		return
+	}
+
+	query := string(data)
+	
+	// Detect database type by port
+	dbType := a.detectDatabaseType(targetAddr)
+	
+	// Extract and parse SQL queries
+	if dbType == "mysql" || dbType == "postgresql" {
+		a.parseSQLQuery(query, dbType, targetAddr)
+	} else if dbType == "mongodb" {
+		a.parseMongoQuery(query, targetAddr)
+	}
+}
+
+func (a *TunnelAgent) detectDatabaseType(targetAddr string) string {
+	if strings.Contains(targetAddr, ":3306") {
+		return "mysql"
+	} else if strings.Contains(targetAddr, ":5432") {
+		return "postgresql"
+	} else if strings.Contains(targetAddr, ":27017") {
+		return "mongodb"
+	} else if strings.Contains(targetAddr, ":1433") {
+		return "sqlserver"
+	} else if strings.Contains(targetAddr, ":1521") {
+		return "oracle"
+	}
+	return "unknown"
+}
+
+func (a *TunnelAgent) parseSQLQuery(query, dbType, targetAddr string) {
+	// Remove extra whitespace and newlines
+	cleanQuery := regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(query), " ")
+	
+	if len(cleanQuery) < 3 {
+		return
+	}
+
+	// Extract query type (first word)
+	queryType := strings.ToUpper(strings.Split(cleanQuery, " ")[0])
+	
+	// Check if query type should be logged
+	if !a.shouldLogQueryType(queryType) {
+		return
+	}
+
+	// Extract table name for common queries
+	tableName := a.extractTableName(cleanQuery, queryType)
+	
+	// Log the query with metadata
+	a.dbLogger.Info("🗄️ [%s] %s Query: %s", dbType, queryType, a.sanitizeQuery(cleanQuery))
+	a.dbLogger.Info("📊 Target: %s | Table: %s | Size: %d bytes", targetAddr, tableName, len(query))
+	
+	// Log detailed query for debugging (truncated if too long)
+	if len(cleanQuery) > 500 {
+		a.dbLogger.Debug("📝 Full Query: %s...", cleanQuery[:500])
+	} else {
+		a.dbLogger.Debug("📝 Full Query: %s", cleanQuery)
+	}
+}
+
+func (a *TunnelAgent) parseMongoQuery(query, targetAddr string) {
+	a.dbLogger.Info("🍃 [MongoDB] Query to %s: %d bytes", targetAddr, len(query))
+	
+	// Try to extract MongoDB operations
+	if strings.Contains(query, "find") {
+		a.dbLogger.Info("📊 Operation: FIND")
+	} else if strings.Contains(query, "insert") {
+		a.dbLogger.Info("📊 Operation: INSERT")
+	} else if strings.Contains(query, "update") {
+		a.dbLogger.Info("📊 Operation: UPDATE")
+	} else if strings.Contains(query, "delete") {
+		a.dbLogger.Info("📊 Operation: DELETE")
+	}
+}
+
+func (a *TunnelAgent) shouldLogQueryType(queryType string) bool {
+	if len(a.queryFilter) == 0 {
+		return true // Log all if no filter
+	}
+	
+	for _, filter := range a.queryFilter {
+		if filter == queryType {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *TunnelAgent) extractTableName(query, queryType string) string {
+	query = strings.ToUpper(query)
+	
+	switch queryType {
+	case "SELECT":
+		re := regexp.MustCompile(`FROM\s+([^\s]+)`)
+		matches := re.FindStringSubmatch(query)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	case "INSERT":
+		re := regexp.MustCompile(`INSERT\s+INTO\s+([^\s]+)`)
+		matches := re.FindStringSubmatch(query)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	case "UPDATE":
+		re := regexp.MustCompile(`UPDATE\s+([^\s]+)`)
+		matches := re.FindStringSubmatch(query)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	case "DELETE":
+		re := regexp.MustCompile(`DELETE\s+FROM\s+([^\s]+)`)
+		matches := re.FindStringSubmatch(query)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	}
+	return "unknown"
+}
+
+func (a *TunnelAgent) sanitizeQuery(query string) string {
+	// Remove potential sensitive data (basic sanitization)
+	sanitized := query
+	
+	// Replace common password patterns
+	patterns := []string{
+		`PASSWORD\s*=\s*'[^']+'`,
+		`PASSWORD\s*=\s*"[^"]+"`,
+		`PWD\s*=\s*'[^']+'`,
+		`PWD\s*=\s*"[^"]+"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		sanitized = re.ReplaceAllString(sanitized, "PASSWORD='***'")
+	}
+	
+	return sanitized
 }
