@@ -1,10 +1,13 @@
 package main
 
 import (
+    "bytes"
+    "encoding/json"
     "fmt"
     "io"
     "log"
     "net"
+    "net/http"
     "net/url"
     "os"
     "os/signal"
@@ -27,10 +30,22 @@ type Client struct {
     sessions   map[string]net.Conn
     dbLoggers  map[string]*common.DatabaseQueryLogger
     targets    map[string]string  // sessionID -> target
+    agentIDs   map[string]string  // sessionID -> agentID
     mutex      sync.RWMutex
     logger     *common.Logger
     running    bool
     heartbeat  *time.Ticker
+}
+
+type QueryLogData struct {
+    SessionID   string `json:"session_id"`
+    ClientID    string `json:"client_id"`
+    AgentID     string `json:"agent_id"`
+    Direction   string `json:"direction"`
+    Protocol    string `json:"protocol"`
+    Operation   string `json:"operation"`
+    TableName   string `json:"table_name"`
+    QueryText   string `json:"query_text"`
 }
 
 func NewClient(id, name, relayURL string) *Client {
@@ -41,6 +56,7 @@ func NewClient(id, name, relayURL string) *Client {
         sessions:  make(map[string]net.Conn),
         dbLoggers: make(map[string]*common.DatabaseQueryLogger),
         targets:   make(map[string]string),
+        agentIDs:  make(map[string]string),
         logger:    common.NewLogger(fmt.Sprintf("CLIENT-%s", id)),
     }
 }
@@ -183,6 +199,9 @@ func (c *Client) handleData(msg *common.Message) {
     // Log database response if logger exists
     if dbExists {
         dbLogger.LogData(msg.Data, "AGENT->CLIENT", msg.SessionID)
+        
+        // Database response logging is now handled by the DatabaseQueryLogger callback
+        // No need for manual parsing here
     }
 
     // Forward data to local connection
@@ -232,9 +251,31 @@ func (c *Client) handleLocalConnection(conn net.Conn, agentID, target string) {
     c.mutex.Lock()
     c.sessions[sessionID] = conn
     // Create database query logger for this session
-    c.dbLoggers[sessionID] = common.NewDatabaseQueryLogger(c.logger, target)
-    // Store target for this session
+    dbLogger := common.NewDatabaseQueryLogger(c.logger, target)
+    // Set callback to send clean query data to relay
+    dbLogger.SetCallback(func(sessionID, operation, tableName, query, protocol, direction string) {
+        c.mutex.RLock()
+        agentID := c.agentIDs[sessionID]
+        c.mutex.RUnlock()
+        
+        if agentID != "" {
+            logData := QueryLogData{
+                SessionID: sessionID,
+                ClientID:  c.id,
+                AgentID:   agentID,
+                Direction: direction,
+                Protocol:  protocol,
+                Operation: operation,
+                TableName: tableName,
+                QueryText: query,
+            }
+            c.sendQueryLogToAPI(logData)
+        }
+    })
+    c.dbLoggers[sessionID] = dbLogger
+    // Store target and agent for this session
     c.targets[sessionID] = target
+    c.agentIDs[sessionID] = agentID
     c.mutex.Unlock()
 
     c.logger.Info("New local connection accepted, session: %s, target: %s", sessionID, target)
@@ -288,15 +329,8 @@ func (c *Client) forwardFromLocal(sessionID string, conn net.Conn) {
             if dbExists {
                 dbLogger.LogData(buffer[:n], "CLIENT->AGENT", sessionID)
                 
-                // Also extract and send query to relay if it looks like SQL
-                queryText := string(buffer[:n])
-                if operation, tableName := c.extractSQLInfo(queryText); operation != "" {
-                    c.mutex.RLock()
-                    target := c.targets[sessionID]
-                    c.mutex.RUnlock()
-                    protocol := c.detectProtocol(target)
-                    c.sendDatabaseQuery(sessionID, queryText, operation, tableName, protocol)
-                }
+                // Database query logging is now handled by the DatabaseQueryLogger callback
+                // No need for manual parsing here
             }
             
             dataMsg := common.NewMessage(common.MsgTypeData)
@@ -343,6 +377,12 @@ func (c *Client) closeSession(sessionID string) {
         delete(c.targets, sessionID)
         c.logger.Debug("Target mapping cleaned up for session: %s", sessionID)
     }
+    
+    // Clean up agent ID mapping
+    if _, exists := c.agentIDs[sessionID]; exists {
+        delete(c.agentIDs, sessionID)
+        c.logger.Debug("Agent ID mapping cleaned up for session: %s", sessionID)
+    }
 }
 
 func (c *Client) sendMessage(msg *common.Message) error {
@@ -354,20 +394,37 @@ func (c *Client) sendMessage(msg *common.Message) error {
     return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (c *Client) sendDatabaseQuery(sessionID, query, operation, tableName, protocol string) {
-    msg := common.NewMessage(common.MsgTypeDBQuery)
-    msg.ClientID = c.id
-    msg.SessionID = sessionID
-    msg.DBQuery = query
-    msg.DBOperation = operation
-    msg.DBTable = tableName
-    msg.DBProtocol = protocol
-    
-    if err := c.sendMessage(msg); err != nil {
-        c.logger.Error("Failed to send database query log: %v", err)
-    } else {
-        c.logger.Debug("Sent database query log: %s %s %s", operation, tableName, protocol)
+func (c *Client) sendQueryLogToAPI(logData QueryLogData) {
+    // Parse relay URL to get the base URL
+    u, err := url.Parse(c.relayURL)
+    if err != nil {
+        c.logger.Error("Failed to parse relay URL: %v", err)
+        return
     }
+    
+    // Convert ws:// to http://
+    apiURL := strings.Replace(u.String(), "ws://", "http://", 1)
+    apiURL = strings.Replace(apiURL, "/ws/client", "/api/log-query", 1)
+    
+    jsonData, err := json.Marshal(logData)
+    if err != nil {
+        c.logger.Error("Failed to marshal query log data: %v", err)
+        return
+    }
+    
+    resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+    if err != nil {
+        c.logger.Error("Failed to send query log to API: %v", err)
+        return
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        c.logger.Error("API returned error status: %d", resp.StatusCode)
+        return
+    }
+    
+    c.logger.Debug("Successfully sent query log via API: %s %s", logData.Operation, logData.Protocol)
 }
 
 func (c *Client) extractSQLInfo(queryText string) (operation, tableName string) {
@@ -423,6 +480,25 @@ func (c *Client) extractSQLInfo(queryText string) (operation, tableName string) 
     }
     
     return operation, tableName
+}
+
+func (c *Client) isValidSQL(queryText string) bool {
+    // Check if string contains mostly printable characters and SQL keywords
+    if len(queryText) < 3 {
+        return false
+    }
+    
+    // Check for common SQL keywords
+    upperQuery := strings.ToUpper(strings.TrimSpace(queryText))
+    sqlKeywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "SHOW", "DESCRIBE", "EXPLAIN", "COMMIT", "ROLLBACK", "START", "BEGIN", "PREPARE", "EXECUTE"}
+    
+    for _, keyword := range sqlKeywords {
+        if strings.HasPrefix(upperQuery, keyword) {
+            return true
+        }
+    }
+    
+    return false
 }
 
 func (c *Client) detectProtocol(target string) string {

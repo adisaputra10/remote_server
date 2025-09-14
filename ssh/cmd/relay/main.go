@@ -66,6 +66,17 @@ type Session struct {
     Created  time.Time
 }
 
+type QueryLogRequest struct {
+    SessionID   string `json:"session_id"`
+    ClientID    string `json:"client_id"`
+    AgentID     string `json:"agent_id"`
+    Direction   string `json:"direction"`
+    Protocol    string `json:"protocol"`
+    Operation   string `json:"operation"`
+    TableName   string `json:"table_name"`
+    QueryText   string `json:"query_text"`
+}
+
 var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool {
         return true // Allow connections from any origin
@@ -159,9 +170,9 @@ func (rs *RelayServer) initDatabase() {
             client_id VARCHAR(100),
             direction VARCHAR(20),
             protocol VARCHAR(20),
-            operation VARCHAR(50),
+            operation VARCHAR(100),
             table_name VARCHAR(100),
-            query_text TEXT,
+            query_text LONGTEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
     }
@@ -233,6 +244,13 @@ func (rs *RelayServer) initDatabase() {
 
 // Add missing logConnection method
 func (rs *RelayServer) logConnection(connType, agentID, clientID, event, details string) {
+    // Clean all string parameters before inserting
+    connType = rs.cleanString(connType)
+    agentID = rs.cleanString(agentID)
+    clientID = rs.cleanString(clientID)
+    event = rs.cleanOperation(event) // Use cleanOperation for event field as it might contain operations
+    details = rs.cleanString(details)
+    
     _, err := rs.db.Exec(
         "INSERT INTO connection_logs (type, agent_id, client_id, event, details) VALUES (?, ?, ?, ?, ?)",
         connType, agentID, clientID, event, details,
@@ -242,13 +260,162 @@ func (rs *RelayServer) logConnection(connType, agentID, clientID, event, details
     }
 }
 
+// cleanString removes unwanted characters and trims whitespace
+func (rs *RelayServer) cleanString(s string) string {
+    if s == "" {
+        return s
+    }
+    
+    // Trim whitespace
+    s = strings.TrimSpace(s)
+    
+    // Remove specific unwanted characters
+    unwantedChars := []string{"&", "?", "#", "�", "<", ">", "\"", "'", "`", "|", "\\", "/", "*", "%", "$", "!", "@", "^", "~"}
+    for _, char := range unwantedChars {
+        s = strings.ReplaceAll(s, char, "")
+    }
+    
+    // Remove HTML entities manually
+    htmlEntities := map[string]string{
+        "&amp;":  "",
+        "&lt;":   "",
+        "&gt;":   "",
+        "&quot;": "",
+        "&apos;": "",
+        "&#39;":  "",
+        "&#34;":  "",
+    }
+    for entity, replacement := range htmlEntities {
+        s = strings.ReplaceAll(s, entity, replacement)
+    }
+    
+    // Remove control characters (except newlines and tabs which might be useful in queries)
+    cleaned := strings.Map(func(r rune) rune {
+        // Remove control characters
+        if r < 32 && r != '\n' && r != '\t' && r != '\r' {
+            return -1
+        }
+        // Remove non-printable Unicode characters
+        if r > 126 && r < 160 {
+            return -1
+        }
+        // Remove Unicode replacement character and other problematic characters
+        if r == 0xFFFD || r == 0x00A0 || r == 0x200B || r == 0x200C || r == 0x200D {
+            return -1
+        }
+        return r
+    }, s)
+    
+    // Trim again after cleaning
+    cleaned = strings.TrimSpace(cleaned)
+    
+    // Remove multiple spaces and replace with single space
+    for strings.Contains(cleaned, "  ") {
+        cleaned = strings.ReplaceAll(cleaned, "  ", " ")
+    }
+    
+    return cleaned
+}
+
+// cleanOperation specifically cleans database operation strings
+func (rs *RelayServer) cleanOperation(operation string) string {
+    if operation == "" {
+        return operation
+    }
+    
+    // First apply general cleaning
+    operation = rs.cleanString(operation)
+    
+    // Remove common prefixes that appear before SQL operations
+    prefixesToRemove := []string{"=", "1", "?", "#", "&", "$", "@", "!", "*", "+", "-", "~", "`", "'", "\"", "(", ")", "[", "]", "{", "}", "<", ">", "|", "\\", "/", ":", ";", ",", "."}
+    
+    // Keep removing prefixes until we find a clean operation
+    for {
+        originalOperation := operation
+        
+        for _, prefix := range prefixesToRemove {
+            if strings.HasPrefix(operation, prefix) {
+                operation = strings.TrimPrefix(operation, prefix)
+                operation = strings.TrimSpace(operation)
+            }
+        }
+        
+        // If no change was made, break the loop
+        if operation == originalOperation {
+            break
+        }
+    }
+    
+    // Ensure the operation starts with a valid SQL keyword
+    validOperations := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "EXPLAIN", "DESCRIBE", "SHOW", "SET", "USE", "GRANT", "REVOKE", "TRUNCATE", "REPLACE"}
+    
+    operationUpper := strings.ToUpper(operation)
+    for _, validOp := range validOperations {
+        if strings.HasPrefix(operationUpper, validOp) {
+            // Return the operation starting with the valid keyword
+            return validOp + operation[len(validOp):]
+        }
+    }
+    
+    // If no valid operation found, return cleaned string
+    return operation
+}
+
+// isAllowedOperation checks if an operation should be saved to database
+func (rs *RelayServer) isAllowedOperation(operation string) bool {
+    if operation == "" {
+        return false
+    }
+    
+    // Convert to uppercase for comparison
+    op := strings.ToUpper(strings.TrimSpace(operation))
+    
+    // List of allowed operations to save to database (as requested by user)
+    allowedOps := []string{
+        "DROP_TABLE", "DROP", "CREATE", "ALTER", "DESCRIBE", "EXPLAIN", 
+        "UPDATE", "PREPARE", "BEGIN_TRANSACTION", "DELETE", "CREATE_TABLE", 
+        "ALTER_TABLE", "TRUNCATE",
+        // Additional common SQL operations that are useful to track
+        "SELECT", "INSERT", "COMMIT", "ROLLBACK", "SHOW", "USE", 
+        "CREATE_INDEX", "DROP_INDEX",
+    }
+    
+    // Check if operation starts with any allowed operation
+    for _, allowedOp := range allowedOps {
+        if strings.HasPrefix(op, allowedOp) {
+            return true
+        }
+    }
+    
+    rs.logger.Debug("Operation '%s' not in allowed list, skipping", operation)
+    return false
+}
+
 func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, protocol, operation, tableName, queryText string) {
+    // Clean all string parameters before processing
+    sessionID = rs.cleanString(sessionID)
+    agentID = rs.cleanString(agentID)
+    clientID = rs.cleanString(clientID)
+    direction = rs.cleanString(direction)
+    protocol = rs.cleanString(protocol)
+    operation = rs.cleanOperation(operation) // Use special cleaning for operation
+    tableName = rs.cleanString(tableName)
+    queryText = rs.cleanString(queryText)
+    
+    // Check if this operation should be saved to database
+    if !rs.isAllowedOperation(operation) {
+        rs.logger.Debug("Skipping operation '%s' - not in allowed list", operation)
+        return
+    }
+    
     _, err := rs.db.Exec(
         "INSERT INTO tunnel_logs (session_id, agent_id, client_id, direction, protocol, operation, table_name, query_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         sessionID, agentID, clientID, direction, protocol, operation, tableName, queryText,
     )
     if err != nil {
         rs.logger.Error("Failed to log tunnel query: %v", err)
+    } else {
+        rs.logger.Debug("Logged operation '%s' to database", operation)
     }
 }
 
@@ -577,6 +744,7 @@ func (rs *RelayServer) setupRoutes() {
     http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
     http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
     http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
+    http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
     
     // Health endpoint
     http.HandleFunc("/health", rs.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -871,17 +1039,17 @@ func (rs *RelayServer) handleAPITunnelLogs(w http.ResponseWriter, r *http.Reques
             continue
         }
         
-        // Clean HTML entities from query text
-        cleanedQueryText := cleanHTMLEntities(queryText.String)
+        // Clean HTML entities and trim whitespace from query text
+        cleanedQueryText := rs.cleanString(cleanHTMLEntities(queryText.String))
         
         log := map[string]interface{}{
-            "session_id":  sessionID.String,
-            "agent_id":    agentID.String,
-            "client_id":   clientID.String,
-            "direction":   direction.String,
-            "protocol":    protocol.String,
-            "operation":   operation.String,
-            "table_name":  tableName.String,
+            "session_id":  rs.cleanString(sessionID.String),
+            "agent_id":    rs.cleanString(agentID.String),
+            "client_id":   rs.cleanString(clientID.String),
+            "direction":   rs.cleanString(direction.String),
+            "protocol":    rs.cleanString(protocol.String),
+            "operation":   rs.cleanOperation(operation.String),
+            "table_name":  rs.cleanString(tableName.String),
             "query_text":  cleanedQueryText,
             "timestamp":   timestamp,
         }
@@ -890,6 +1058,38 @@ func (rs *RelayServer) handleAPITunnelLogs(w http.ResponseWriter, r *http.Reques
     
     w.Header().Set("Content-Type", "application/json")
     json.NewEncoder(w).Encode(logs)
+}
+
+// Handle API for logging database queries from clients
+func (rs *RelayServer) handleAPILogQuery(w http.ResponseWriter, r *http.Request) {
+    if r.Method != "POST" {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    
+    var req QueryLogRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+        return
+    }
+    
+    // Validate required fields
+    if req.SessionID == "" || req.ClientID == "" {
+        http.Error(w, "Missing required fields: session_id, client_id", http.StatusBadRequest)
+        return
+    }
+    
+    // Log the query
+    rs.logTunnelQuery(req.SessionID, req.AgentID, req.ClientID, req.Direction, req.Protocol, req.Operation, req.TableName, req.QueryText)
+    
+    // Return success response
+    response := map[string]interface{}{
+        "status":  "success",
+        "message": "Query logged successfully",
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(response)
 }
 
 // CORS Middleware

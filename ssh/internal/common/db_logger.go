@@ -22,19 +22,28 @@ const (
 type DatabaseQueryLogger struct {
     logger   *Logger
     protocol DatabaseProtocol
+    target   string
+    callback func(sessionID, operation, tableName, query, protocol, direction string)
 }
 
 // NewDatabaseQueryLogger creates a new database query logger
 func NewDatabaseQueryLogger(logger *Logger, target string) *DatabaseQueryLogger {
-    protocol := DetectProtocol(target)
+    protocol := detectProtocol(target)
     return &DatabaseQueryLogger{
         logger:   logger,
         protocol: protocol,
+        target:   target,
+        callback: nil,
     }
 }
 
-// DetectProtocol detects the database protocol based on target port
-func DetectProtocol(target string) DatabaseProtocol {
+// SetCallback sets a callback function to be called when queries are detected
+func (dql *DatabaseQueryLogger) SetCallback(callback func(sessionID, operation, tableName, query, protocol, direction string)) {
+    dql.callback = callback
+}
+
+// detectProtocol determines the database protocol based on target address
+func detectProtocol(target string) DatabaseProtocol {
     if strings.Contains(target, ":22") {
         return ProtocolSSH
     }
@@ -115,22 +124,43 @@ func (dql *DatabaseQueryLogger) analyzeMySQLPacket(data []byte, direction string
                 dql.logger.Info("[%s] MySQL %s - Session: %s - SQL: %s", 
                     direction, queryType, sessionID, query)
             }
+            
+            // Call callback if set
+            if dql.callback != nil {
+                dql.callback(sessionID, queryType, tableName, query, "mysql", direction)
+            }
         }
     case 0x01: // COM_QUIT
         dql.logger.Info("[%s] MySQL QUIT - Session: %s", direction, sessionID)
+        // Call callback if set
+        if dql.callback != nil {
+            dql.callback(sessionID, "QUIT", "", "", "mysql", direction)
+        }
     case 0x02: // COM_INIT_DB
         if len(data) > 5 {
             database := string(data[5:])
             dql.logger.Info("[%s] MySQL USE DATABASE - Session: %s - DB: %s", direction, sessionID, database)
+            // Call callback if set
+            if dql.callback != nil {
+                dql.callback(sessionID, "USE_DATABASE", database, database, "mysql", direction)
+            }
         }
     case 0x16: // COM_STMT_PREPARE
         if len(data) > 5 {
             query := string(data[5:])
             query = dql.cleanQuery(query)
             dql.logger.Info("[%s] MySQL PREPARE - Session: %s - SQL: %s", direction, sessionID, query)
+            
+            // Call callback if set
+            if dql.callback != nil {
+                _ = dql.detectSQLOperation(query) // We already detected the operation type above
+                tableName := dql.extractTableName(query)
+                dql.callback(sessionID, "PREPARE", tableName, query, "mysql", direction)
+            }
         }
     case 0x17: // COM_STMT_EXECUTE
         dql.logger.Info("[%s] MySQL EXECUTE - Session: %s", direction, sessionID)
+        // EXECUTE operations are not logged to database to keep table clean
     }
 }
 
