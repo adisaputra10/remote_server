@@ -8,6 +8,7 @@ import (
     "net/url"
     "os"
     "os/signal"
+    "strings"
     "sync"
     "syscall"
     "time"
@@ -20,22 +21,26 @@ import (
 
 type Client struct {
     id         string
+    name       string
     relayURL   string
     conn       *websocket.Conn
     sessions   map[string]net.Conn
     dbLoggers  map[string]*common.DatabaseQueryLogger
+    targets    map[string]string  // sessionID -> target
     mutex      sync.RWMutex
     logger     *common.Logger
     running    bool
     heartbeat  *time.Ticker
 }
 
-func NewClient(id, relayURL string) *Client {
+func NewClient(id, name, relayURL string) *Client {
     return &Client{
         id:        id,
+        name:      name,
         relayURL:  relayURL,
         sessions:  make(map[string]net.Conn),
         dbLoggers: make(map[string]*common.DatabaseQueryLogger),
+        targets:   make(map[string]string),
         logger:    common.NewLogger(fmt.Sprintf("CLIENT-%s", id)),
     }
 }
@@ -59,6 +64,7 @@ func (c *Client) connect() error {
     // Register with relay
     registerMsg := common.NewMessage(common.MsgTypeRegister)
     registerMsg.ClientID = c.id
+    registerMsg.ClientName = c.name
     if err := c.sendMessage(registerMsg); err != nil {
         return fmt.Errorf("failed to register: %v", err)
     }
@@ -227,6 +233,8 @@ func (c *Client) handleLocalConnection(conn net.Conn, agentID, target string) {
     c.sessions[sessionID] = conn
     // Create database query logger for this session
     c.dbLoggers[sessionID] = common.NewDatabaseQueryLogger(c.logger, target)
+    // Store target for this session
+    c.targets[sessionID] = target
     c.mutex.Unlock()
 
     c.logger.Info("New local connection accepted, session: %s, target: %s", sessionID, target)
@@ -279,6 +287,16 @@ func (c *Client) forwardFromLocal(sessionID string, conn net.Conn) {
             
             if dbExists {
                 dbLogger.LogData(buffer[:n], "CLIENT->AGENT", sessionID)
+                
+                // Also extract and send query to relay if it looks like SQL
+                queryText := string(buffer[:n])
+                if operation, tableName := c.extractSQLInfo(queryText); operation != "" {
+                    c.mutex.RLock()
+                    target := c.targets[sessionID]
+                    c.mutex.RUnlock()
+                    protocol := c.detectProtocol(target)
+                    c.sendDatabaseQuery(sessionID, queryText, operation, tableName, protocol)
+                }
             }
             
             dataMsg := common.NewMessage(common.MsgTypeData)
@@ -319,6 +337,12 @@ func (c *Client) closeSession(sessionID string) {
         delete(c.dbLoggers, sessionID)
         c.logger.Debug("Database logger cleaned up for session: %s", sessionID)
     }
+    
+    // Clean up target mapping
+    if _, exists := c.targets[sessionID]; exists {
+        delete(c.targets, sessionID)
+        c.logger.Debug("Target mapping cleaned up for session: %s", sessionID)
+    }
 }
 
 func (c *Client) sendMessage(msg *common.Message) error {
@@ -330,13 +354,101 @@ func (c *Client) sendMessage(msg *common.Message) error {
     return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
+func (c *Client) sendDatabaseQuery(sessionID, query, operation, tableName, protocol string) {
+    msg := common.NewMessage(common.MsgTypeDBQuery)
+    msg.ClientID = c.id
+    msg.SessionID = sessionID
+    msg.DBQuery = query
+    msg.DBOperation = operation
+    msg.DBTable = tableName
+    msg.DBProtocol = protocol
+    
+    if err := c.sendMessage(msg); err != nil {
+        c.logger.Error("Failed to send database query log: %v", err)
+    } else {
+        c.logger.Debug("Sent database query log: %s %s %s", operation, tableName, protocol)
+    }
+}
+
+func (c *Client) extractSQLInfo(queryText string) (operation, tableName string) {
+    // Simple SQL parser - extract operation and table name
+    query := strings.TrimSpace(strings.ToUpper(queryText))
+    
+    // Skip MySQL protocol headers and binary data
+    if len(query) < 10 || query[0] < 32 {
+        return "", ""
+    }
+    
+    words := strings.Fields(query)
+    if len(words) < 2 {
+        return "", ""
+    }
+    
+    operation = words[0]
+    
+    switch operation {
+    case "SELECT":
+        // Find FROM keyword
+        for i, word := range words {
+            if word == "FROM" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    case "INSERT":
+        // Find INTO keyword
+        for i, word := range words {
+            if word == "INTO" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    case "UPDATE", "DELETE":
+        // Table name usually follows UPDATE or DELETE FROM
+        if len(words) > 1 {
+            if operation == "DELETE" && words[1] == "FROM" && len(words) > 2 {
+                tableName = strings.Trim(words[2], ",();")
+            } else if operation == "UPDATE" {
+                tableName = strings.Trim(words[1], ",();")
+            }
+        }
+    case "CREATE", "DROP", "ALTER":
+        // Find table name after TABLE keyword
+        for i, word := range words {
+            if word == "TABLE" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    }
+    
+    return operation, tableName
+}
+
+func (c *Client) detectProtocol(target string) string {
+    if strings.Contains(target, ":3306") {
+        return "mysql"
+    }
+    if strings.Contains(target, ":5432") {
+        return "postgresql"
+    }
+    if strings.Contains(target, ":27017") {
+        return "mongodb"
+    }
+    if strings.Contains(target, ":6379") {
+        return "redis"
+    }
+    return "unknown"
+}
+
 func main() {
     var (
-        clientID  string
-        relayURL  string
-        localAddr string
-        agentID   string
-        target    string
+        clientID   string
+        clientName string
+        relayURL   string
+        localAddr  string
+        agentID    string
+        target     string
         interactive bool
     )
 
@@ -348,8 +460,12 @@ func main() {
             if clientID == "" {
                 clientID = common.GenerateID()
             }
+            
+            if clientName == "" {
+                clientName = fmt.Sprintf("client-%s", clientID[:8])
+            }
 
-            client := NewClient(clientID, relayURL)
+            client := NewClient(clientID, clientName, relayURL)
             
             // Setup signal handling for graceful shutdown
             sigChan := make(chan os.Signal, 1)
@@ -425,6 +541,7 @@ func main() {
     }
 
     rootCmd.Flags().StringVarP(&clientID, "client-id", "c", "", "Client ID (auto-generated if not provided)")
+    rootCmd.Flags().StringVarP(&clientName, "name", "n", "", "Client name (auto-generated if not provided)")
     rootCmd.Flags().StringVarP(&relayURL, "relay-url", "r", "ws://localhost:8080/ws/client", "Relay server WebSocket URL")
     rootCmd.Flags().StringVarP(&localAddr, "local", "L", "", "Local address to listen on (e.g., :2222)")
     rootCmd.Flags().StringVarP(&agentID, "agent", "a", "", "Target agent ID")

@@ -16,18 +16,26 @@ const (
     MsgTypeClose       MessageType = "close"
     MsgTypeHeartbeat   MessageType = "heartbeat"
     MsgTypeError       MessageType = "error"
+    MsgTypeDBQuery     MessageType = "db_query"
 )
 
 // Message represents a message exchanged between relay, agent, and client
 type Message struct {
-    Type      MessageType `json:"type"`
-    AgentID   string      `json:"agent_id,omitempty"`
-    ClientID  string      `json:"client_id,omitempty"`
-    SessionID string      `json:"session_id,omitempty"`
-    Target    string      `json:"target,omitempty"`
-    Data      []byte      `json:"data,omitempty"`
-    Error     string      `json:"error,omitempty"`
-    Timestamp int64       `json:"timestamp"`
+    Type       MessageType `json:"type"`
+    AgentID    string      `json:"agent_id,omitempty"`
+    ClientID   string      `json:"client_id,omitempty"`
+    ClientName string      `json:"client_name,omitempty"`
+    SessionID  string      `json:"session_id,omitempty"`
+    Target     string      `json:"target,omitempty"`
+    Data       []byte      `json:"data,omitempty"`
+    Error      string      `json:"error,omitempty"`
+    Timestamp  int64       `json:"timestamp"`
+    
+    // Database query specific fields
+    DBQuery     string `json:"db_query,omitempty"`
+    DBOperation string `json:"db_operation,omitempty"`
+    DBTable     string `json:"db_table,omitempty"`
+    DBProtocol  string `json:"db_protocol,omitempty"`
 }
 
 // NewMessage creates a new message

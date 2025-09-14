@@ -1,13 +1,422 @@
-# SSH Tunnel dengan Database Query Logging
+# SSH Tunnel System
 
-Sistem SSH tunnel lengkap dengan capability untuk mencatat semua query database yang melewati tunnel.
+A comprehensive SSH tunnel system inspired by Teleport, built with Go. This system provides secure remote access through WebSocket-based tunneling with advanced logging, web dashboard, and database integration.
 
-## 🌟 Fitur Utama
+## 🏗️ Architecture
 
-### ✅ **Core Features**
-- **SSH Tunnel Forwarder** seperti Teleport/ngrok
-- **Real-time Database Query Logging** 
-- **Multi-Protocol Support** (MySQL, PostgreSQL, Redis, MongoDB, SSH)
+```
+┌─────────────────┐    WebSocket     ┌─────────────────┐    SSH/TCP     ┌─────────────────┐
+│                 │ ◄──────────────► │                 │ ◄────────────► │                 │
+│     CLIENT      │                  │      RELAY      │                │      AGENT      │
+│                 │                  │                 │                │                 │
+│ - Connect to    │                  │ - WebSocket Hub │                │ - SSH Server    │
+│   remote server │                  │ - Web Dashboard │                │ - Local Services│
+│ - Port forward  │                  │ - Database Log  │                │ - Port Forward  │
+│ - Authentication│                  │ - Authentication│                │ - Monitoring    │
+└─────────────────┘                  └─────────────────┘                └─────────────────┘
+                                              │
+                                              ▼
+                                     ┌─────────────────┐
+                                     │   MySQL DB      │
+                                     │                 │
+                                     │ - Connection    │
+                                     │   Logs          │
+                                     │ - Query Logs    │
+                                     │ - Agent Status  │
+                                     │ - Client Status │
+                                     └─────────────────┘
+```
+
+## 🚀 Features
+
+### Core Features
+- **WebSocket-based tunneling** - Real-time, bidirectional communication
+- **Multi-component architecture** - Relay, Agent, and Client components
+- **SSH forwarding** - Secure shell access through tunnels
+- **Port forwarding** - Forward local ports through secure tunnels
+
+### Advanced Features
+- **Web Dashboard** - Real-time monitoring and management interface
+- **Database Logging** - All connections and queries logged to MySQL
+- **Authentication System** - Admin login for dashboard access
+- **Real-time Monitoring** - Live status of agents, clients, and connections
+- **File Logging** - Comprehensive logging to files for debugging
+- **Environment Configuration** - Easy deployment with .env configuration
+
+### Dashboard Features
+- **Agent Status** - View all connected agents and their status
+- **Client Status** - Monitor active client connections
+- **Connection Logs** - Real-time view of all tunnel activities
+- **Database Query Logs** - Monitor all database queries through tunnels
+- **Administrative Interface** - Secure login and management
+
+## 📋 Prerequisites
+
+- **Go 1.21+** - [Download Go](https://golang.org/dl/)
+- **MySQL 8.0+** - Database for logging (can use Docker)
+- **Git** - For cloning the repository
+- **PowerShell** - For running setup scripts (Windows)
+
+## 🛠️ Quick Setup
+
+### 1. Clone and Initialize
+```powershell
+git clone <repository-url>
+cd ssh-tunnel-system
+go mod tidy
+```
+
+### 2. Database Setup
+```powershell
+# Option A: Automated setup with Docker
+.\setup-database.bat
+
+# Option B: Manual MySQL setup
+# Create database 'logs' and configure user access
+```
+
+### 3. Configuration
+```powershell
+# Edit .env file with your settings
+notepad .env
+```
+
+Example `.env` configuration:
+```env
+# Database Configuration
+DB_CONNECTION_STRING=root:root@tcp(localhost:3306)/logs?parseTime=true
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=root
+DB_NAME=logs
+
+# Admin User for Dashboard
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123
+```
+
+### 4. Start System
+```powershell
+# Start all components
+.\start-system.bat
+
+# Or start relay only
+.\start-relay.bat
+```
+
+## 🎯 Usage
+
+### Starting Individual Components
+
+#### Relay Server
+```powershell
+.\bin\relay.exe serve
+```
+- WebSocket endpoint: `ws://localhost:8080/ws`
+- Dashboard: `http://localhost:8080`
+- Default login: `admin` / `admin123`
+
+#### Agent (on remote server)
+```powershell
+.\bin\agent.exe --server ws://relay-server:8080/ws --id agent1
+```
+
+#### Client (local machine)
+```powershell
+.\bin\client.exe --server ws://relay-server:8080/ws --target localhost:22
+```
+
+### Dashboard Access
+
+1. **Open Dashboard**: Navigate to `http://localhost:8080`
+2. **Login**: Use credentials from `.env` (default: admin/admin123)
+3. **Monitor**: View agents, clients, and logs in real-time
+
+### SSH Through Tunnel
+
+Once client is connected:
+```bash
+ssh username@localhost -p 2222
+```
+
+## 📁 Project Structure
+
+```
+ssh-tunnel-system/
+├── cmd/
+│   ├── relay/          # Relay server implementation
+│   ├── agent/          # Agent implementation  
+│   └── client/         # Client implementation
+├── internal/
+│   └── common/         # Shared utilities
+│       ├── logger.go   # File logging
+│       ├── message.go  # WebSocket messages
+│       └── db_logger.go # Database logging
+├── logs/               # Log files (auto-created)
+├── bin/                # Compiled binaries (auto-created)
+├── .env                # Environment configuration
+├── setup-database.bat  # Database setup script
+├── start-system.bat    # System launcher
+├── start-relay.bat     # Relay-only launcher
+├── monitor.bat         # Monitoring and debug tool
+├── load-env.bat        # Environment loader
+└── README.md          # This file
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DB_CONNECTION_STRING` | Full MySQL connection string | `root:root@tcp(localhost:3306)/logs?parseTime=true` |
+| `DB_HOST` | MySQL host | `localhost` |
+| `DB_PORT` | MySQL port | `3306` |
+| `DB_USER` | MySQL user | `root` |
+| `DB_PASSWORD` | MySQL password | `root` |
+| `DB_NAME` | MySQL database | `logs` |
+| `ADMIN_USERNAME` | Dashboard admin username | `admin` |
+| `ADMIN_PASSWORD` | Dashboard admin password | `admin123` |
+
+### Component Arguments
+
+#### Relay
+```powershell
+relay.exe serve [--port 8080] [--dashboard-port 8081]
+```
+
+#### Agent
+```powershell
+agent.exe --server ws://host:port/ws --id agent-name [--ssh-port 22]
+```
+
+#### Client  
+```powershell
+client.exe --server ws://host:port/ws --target host:port [--local-port 2222]
+```
+
+## 🔍 Monitoring & Debugging
+
+### Monitor Tool
+```powershell
+.\monitor.bat
+```
+
+Features:
+- System status overview
+- Real-time log viewing
+- Database connection testing
+- Process management
+- Network port checking
+
+### Log Files
+- **Relay**: `logs/relay.log`
+- **Agent**: `logs/agent.log` 
+- **Client**: `logs/client.log`
+
+### Database Tables
+- **agents** - Connected agent information
+- **clients** - Connected client information  
+- **connections** - Connection event logs
+- **queries** - Database query logs through tunnels
+
+## 🐳 Docker Support
+
+### MySQL with Docker
+```powershell
+# Automated setup
+.\setup-database.bat
+
+# Manual setup
+docker run -d --name mysql-tunnel \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_DATABASE=logs \
+  -p 3306:3306 \
+  mysql:8.0
+```
+
+### Full System with Docker Compose
+```yaml
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: logs
+    ports:
+      - "3306:3306"
+    
+  relay:
+    build: .
+    depends_on:
+      - mysql
+    ports:
+      - "8080:8080"
+    environment:
+      DB_CONNECTION_STRING: root:root@tcp(mysql:3306)/logs?parseTime=true
+```
+
+## 🔒 Security
+
+### Dashboard Authentication
+- Admin login required for dashboard access
+- Configurable username/password via environment variables
+- Session-based authentication
+
+### Network Security
+- WebSocket connections over secure protocols
+- Connection logging and monitoring
+- Agent/client authentication through relay
+
+### Database Security
+- All connections logged with timestamps
+- Query logging for audit trails
+- Configurable database credentials
+
+## 🚀 Deployment
+
+### Production Deployment
+
+1. **Configure Environment**
+   ```powershell
+   # Create production .env
+   cp .env .env.production
+   # Edit with production settings
+   ```
+
+2. **Build for Production**
+   ```powershell
+   go build -ldflags="-s -w" -o bin/relay.exe ./cmd/relay
+   go build -ldflags="-s -w" -o bin/agent.exe ./cmd/agent  
+   go build -ldflags="-s -w" -o bin/client.exe ./cmd/client
+   ```
+
+3. **Deploy Components**
+   - **Relay**: Deploy on central server with public access
+   - **Agent**: Deploy on target servers (behind firewalls)
+   - **Client**: Run locally or on jump hosts
+
+### High Availability
+
+For production environments:
+- Run multiple relay instances behind load balancer
+- Use MySQL cluster for database reliability
+- Monitor with external health checks
+- Implement automatic restarts for components
+
+## 🛠️ Development
+
+### Building from Source
+```powershell
+# Install dependencies
+go mod tidy
+
+# Build all components
+go build -o bin/relay.exe ./cmd/relay
+go build -o bin/agent.exe ./cmd/agent
+go build -o bin/client.exe ./cmd/client
+
+# Run tests
+go test ./...
+```
+
+### Adding Features
+
+1. **New WebSocket Messages**: Update `internal/common/message.go`
+2. **Database Schema**: Modify database initialization in relay
+3. **Dashboard Pages**: Add routes and templates to relay
+4. **Logging**: Extend `internal/common/logger.go` and `db_logger.go`
+
+## 📚 API Reference
+
+### WebSocket API
+
+#### Connection
+```
+ws://relay-host:8080/ws
+```
+
+#### Message Types
+- `agent_register` - Agent registration
+- `client_register` - Client registration  
+- `tunnel_data` - Tunnel data transfer
+- `tunnel_close` - Close tunnel connection
+
+### REST API
+
+#### Dashboard Endpoints
+- `GET /` - Dashboard home page
+- `POST /login` - Admin authentication
+- `GET /agents` - List connected agents (JSON)
+- `GET /clients` - List connected clients (JSON)
+- `GET /logs` - Connection logs (JSON)
+
+## ❓ Troubleshooting
+
+### Common Issues
+
+**Database Connection Failed**
+```powershell
+# Check MySQL status
+.\monitor.bat
+# Select option 5 (Test Database Connection)
+
+# Verify configuration
+notepad .env
+```
+
+**WebSocket Connection Failed**
+```powershell
+# Check if relay is running
+.\monitor.bat
+# Select option 1 (Show System Status)
+
+# Check firewall settings
+netsh advfirewall firewall add rule name="SSH Tunnel" dir=in action=allow protocol=TCP localport=8080
+```
+
+**Dashboard Not Accessible**
+```powershell
+# Test dashboard
+.\monitor.bat  
+# Select option 6 (Test Web Dashboard)
+
+# Check logs
+.\monitor.bat
+# Select option 2 (View Recent Logs - Relay)
+```
+
+### Debug Mode
+
+Enable verbose logging by setting environment variable:
+```powershell
+$env:DEBUG = "true"
+.\start-system.bat
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/your-repo/issues)
+- **Documentation**: See this README and inline code comments
+- **Debugging**: Use `monitor.bat` for system diagnostics
+
+---
+
+Built with ❤️ using Go, WebSockets, and MySQL
 - **Session Management** dengan unique tracking
 - **File-based Logging** untuk debugging dan monitoring
 - **WebSocket Communication** untuk low-latency

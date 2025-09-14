@@ -8,6 +8,7 @@ import (
     "net/url"
     "os"
     "os/signal"
+    "strings"
     "sync"
     "syscall"
     "time"
@@ -24,6 +25,7 @@ type Agent struct {
     conn       *websocket.Conn
     sessions   map[string]net.Conn
     dbLoggers  map[string]*common.DatabaseQueryLogger
+    targets    map[string]string  // sessionID -> target
     mutex      sync.RWMutex
     logger     *common.Logger
     running    bool
@@ -36,6 +38,7 @@ func NewAgent(id, relayURL string) *Agent {
         relayURL:  relayURL,
         sessions:  make(map[string]net.Conn),
         dbLoggers: make(map[string]*common.DatabaseQueryLogger),
+        targets:   make(map[string]string),
         logger:    common.NewLogger(fmt.Sprintf("AGENT-%s", id)),
     }
 }
@@ -183,6 +186,8 @@ func (a *Agent) handleConnect(msg *common.Message) {
     a.sessions[msg.SessionID] = conn
     // Create database query logger for this session
     a.dbLoggers[msg.SessionID] = common.NewDatabaseQueryLogger(a.logger, msg.Target)
+    // Store target for this session
+    a.targets[msg.SessionID] = msg.Target
     a.mutex.Unlock()
 
     a.logger.Info("Successfully connected to target %s for session %s", msg.Target, msg.SessionID)
@@ -207,6 +212,16 @@ func (a *Agent) handleData(msg *common.Message) {
     // Log database query if logger exists
     if dbExists {
         dbLogger.LogData(msg.Data, "CLIENT->TARGET", msg.SessionID)
+        
+        // Also extract and send query to relay if it looks like SQL
+        queryText := string(msg.Data)
+        if operation, tableName := a.extractSQLInfo(queryText); operation != "" {
+            a.mutex.RLock()
+            target := a.targets[msg.SessionID]
+            a.mutex.RUnlock()
+            protocol := a.detectProtocol(target)
+            a.sendDatabaseQuery(msg.SessionID, queryText, operation, tableName, protocol)
+        }
     }
 
     // Forward data to target
@@ -290,6 +305,12 @@ func (a *Agent) closeSession(sessionID string) {
         delete(a.dbLoggers, sessionID)
         a.logger.Debug("Database logger cleaned up for session: %s", sessionID)
     }
+    
+    // Clean up target mapping
+    if _, exists := a.targets[sessionID]; exists {
+        delete(a.targets, sessionID)
+        a.logger.Debug("Target mapping cleaned up for session: %s", sessionID)
+    }
 }
 
 func (a *Agent) sendMessage(msg *common.Message) error {
@@ -299,6 +320,93 @@ func (a *Agent) sendMessage(msg *common.Message) error {
     }
 
     return a.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func (a *Agent) sendDatabaseQuery(sessionID, query, operation, tableName, protocol string) {
+    msg := common.NewMessage(common.MsgTypeDBQuery)
+    msg.AgentID = a.id
+    msg.SessionID = sessionID
+    msg.DBQuery = query
+    msg.DBOperation = operation
+    msg.DBTable = tableName
+    msg.DBProtocol = protocol
+    
+    if err := a.sendMessage(msg); err != nil {
+        a.logger.Error("Failed to send database query log: %v", err)
+    } else {
+        a.logger.Debug("Sent database query log: %s %s %s", operation, tableName, protocol)
+    }
+}
+
+func (a *Agent) extractSQLInfo(queryText string) (operation, tableName string) {
+    // Simple SQL parser - extract operation and table name
+    query := strings.TrimSpace(strings.ToUpper(queryText))
+    
+    // Skip MySQL protocol headers and binary data
+    if len(query) < 10 || query[0] < 32 {
+        return "", ""
+    }
+    
+    words := strings.Fields(query)
+    if len(words) < 2 {
+        return "", ""
+    }
+    
+    operation = words[0]
+    
+    switch operation {
+    case "SELECT":
+        // Find FROM keyword
+        for i, word := range words {
+            if word == "FROM" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    case "INSERT":
+        // Find INTO keyword
+        for i, word := range words {
+            if word == "INTO" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    case "UPDATE", "DELETE":
+        // Table name usually follows UPDATE or DELETE FROM
+        if len(words) > 1 {
+            if operation == "DELETE" && words[1] == "FROM" && len(words) > 2 {
+                tableName = strings.Trim(words[2], ",();")
+            } else if operation == "UPDATE" {
+                tableName = strings.Trim(words[1], ",();")
+            }
+        }
+    case "CREATE", "DROP", "ALTER":
+        // Find table name after TABLE keyword
+        for i, word := range words {
+            if word == "TABLE" && i+1 < len(words) {
+                tableName = strings.Trim(words[i+1], ",();")
+                break
+            }
+        }
+    }
+    
+    return operation, tableName
+}
+
+func (a *Agent) detectProtocol(target string) string {
+    if strings.Contains(target, ":3306") {
+        return "mysql"
+    }
+    if strings.Contains(target, ":5432") {
+        return "postgresql"
+    }
+    if strings.Contains(target, ":27017") {
+        return "mongodb"
+    }
+    if strings.Contains(target, ":6379") {
+        return "redis"
+    }
+    return "unknown"
 }
 
 func main() {

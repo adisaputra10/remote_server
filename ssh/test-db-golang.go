@@ -17,9 +17,9 @@ func main() {
 	// Database connection parameters
 	// Using tunnel port 3307 instead of direct MySQL port 3306
 	dsn := "root:root@tcp(localhost:3307)/db?parseTime=true"
-	
+
 	fmt.Printf("Connecting to MySQL via tunnel: %s\n", dsn)
-	
+
 	// Connect to database
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -32,30 +32,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ Error connecting to database: %v", err)
 	}
-	
+
 	fmt.Println("✅ Connected to database successfully!")
 	fmt.Println("")
 
 	// 1. DDL Operations (Data Definition Language)
 	fmt.Println("📋 Testing DDL Operations...")
 	testDDLOperations(db)
-	
+
 	// 2. DML Operations (Data Manipulation Language)
 	fmt.Println("📋 Testing DML Operations...")
 	testDMLOperations(db)
-	
+
 	// 3. Transaction Operations
 	fmt.Println("📋 Testing Transaction Operations...")
 	testTransactionOperations(db)
-	
+
 	// 4. Administrative Operations
 	fmt.Println("📋 Testing Administrative Operations...")
 	testAdministrativeOperations(db)
-	
+
 	// 5. Cleanup
 	fmt.Println("📋 Cleaning up...")
 	testCleanupOperations(db)
-	
+
 	fmt.Println("")
 	fmt.Println("✅ All database operations completed!")
 	fmt.Println("📊 Check logs/AGENT-*.log for comprehensive query logging")
@@ -63,7 +63,7 @@ func main() {
 
 func testDDLOperations(db *sql.DB) {
 	fmt.Println("  🔧 Creating test table...")
-	
+
 	// CREATE TABLE operation
 	createTableSQL := `CREATE TABLE IF NOT EXISTS test_users (
 		id INT PRIMARY KEY AUTO_INCREMENT,
@@ -72,14 +72,14 @@ func testDDLOperations(db *sql.DB) {
 		age INT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)`
-	
+
 	_, err := db.Exec(createTableSQL)
 	if err != nil {
 		log.Printf("⚠️  Error creating table: %v", err)
 	} else {
 		fmt.Println("    ✅ Table 'test_users' created")
 	}
-	
+
 	// ALTER TABLE operation
 	fmt.Println("  🔧 Altering table structure...")
 	alterTableSQL := "ALTER TABLE test_users ADD COLUMN last_login TIMESTAMP NULL"
@@ -89,7 +89,7 @@ func testDDLOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Column 'last_login' added")
 	}
-	
+
 	// CREATE INDEX operation
 	fmt.Println("  🔧 Creating index...")
 	createIndexSQL := "CREATE INDEX idx_username ON test_users(username)"
@@ -99,20 +99,20 @@ func testDDLOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Index 'idx_username' created")
 	}
-	
+
 	time.Sleep(1 * time.Second)
 }
 
 func testDMLOperations(db *sql.DB) {
 	// INSERT operations
 	fmt.Println("  📝 Inserting test data...")
-	
+
 	users := []map[string]interface{}{
 		{"username": "john_doe", "email": "john@example.com", "age": 30},
 		{"username": "jane_smith", "email": "jane@example.com", "age": 25},
 		{"username": "bob_wilson", "email": "bob@example.com", "age": 35},
 	}
-	
+
 	for _, user := range users {
 		insertSQL := "INSERT INTO test_users (username, email, age) VALUES (?, ?, ?)"
 		result, err := db.Exec(insertSQL, user["username"], user["email"], user["age"])
@@ -123,10 +123,10 @@ func testDMLOperations(db *sql.DB) {
 			fmt.Printf("    ✅ User '%s' inserted with ID: %d\n", user["username"], id)
 		}
 	}
-	
+
 	// SELECT operations
 	fmt.Println("  🔍 Selecting data...")
-	
+
 	// Simple SELECT
 	selectSQL := "SELECT id, username, email, age FROM test_users WHERE age > ?"
 	rows, err := db.Query(selectSQL, 25)
@@ -147,7 +147,7 @@ func testDMLOperations(db *sql.DB) {
 		}
 		rows.Close()
 	}
-	
+
 	// UPDATE operations
 	fmt.Println("  ✏️  Updating data...")
 	updateSQL := "UPDATE test_users SET last_login = NOW(), age = ? WHERE username = ?"
@@ -158,7 +158,7 @@ func testDMLOperations(db *sql.DB) {
 		rowsAffected, _ := result.RowsAffected()
 		fmt.Printf("    ✅ Updated user 'john_doe', rows affected: %d\n", rowsAffected)
 	}
-	
+
 	// DELETE operations
 	fmt.Println("  🗑️  Deleting data...")
 	deleteSQL := "DELETE FROM test_users WHERE username = ?"
@@ -169,20 +169,20 @@ func testDMLOperations(db *sql.DB) {
 		rowsAffected, _ := result.RowsAffected()
 		fmt.Printf("    ✅ Deleted user 'bob_wilson', rows affected: %d\n", rowsAffected)
 	}
-	
+
 	time.Sleep(1 * time.Second)
 }
 
 func testTransactionOperations(db *sql.DB) {
 	fmt.Println("  🔄 Testing transaction with COMMIT...")
-	
+
 	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
 		log.Printf("⚠️  Error beginning transaction: %v", err)
 		return
 	}
-	
+
 	// Insert in transaction
 	insertSQL := "INSERT INTO test_users (username, email, age) VALUES (?, ?, ?)"
 	_, err = tx.Exec(insertSQL, "alice_cooper", "alice@example.com", 28)
@@ -191,7 +191,7 @@ func testTransactionOperations(db *sql.DB) {
 		tx.Rollback()
 		return
 	}
-	
+
 	// Update in transaction
 	updateSQL := "UPDATE test_users SET age = ? WHERE username = ?"
 	_, err = tx.Exec(updateSQL, 26, "jane_smith")
@@ -200,7 +200,7 @@ func testTransactionOperations(db *sql.DB) {
 		tx.Rollback()
 		return
 	}
-	
+
 	// Commit transaction
 	err = tx.Commit()
 	if err != nil {
@@ -208,16 +208,16 @@ func testTransactionOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Transaction committed successfully")
 	}
-	
+
 	// Test transaction with ROLLBACK
 	fmt.Println("  🔄 Testing transaction with ROLLBACK...")
-	
+
 	tx2, err := db.Begin()
 	if err != nil {
 		log.Printf("⚠️  Error beginning rollback transaction: %v", err)
 		return
 	}
-	
+
 	// Insert in transaction
 	_, err = tx2.Exec(insertSQL, "temp_user", "temp@example.com", 99)
 	if err != nil {
@@ -225,7 +225,7 @@ func testTransactionOperations(db *sql.DB) {
 		tx2.Rollback()
 		return
 	}
-	
+
 	// Rollback transaction
 	err = tx2.Rollback()
 	if err != nil {
@@ -233,14 +233,14 @@ func testTransactionOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Transaction rolled back successfully")
 	}
-	
+
 	time.Sleep(1 * time.Second)
 }
 
 func testAdministrativeOperations(db *sql.DB) {
 	// SHOW operations
 	fmt.Println("  📊 Testing SHOW operations...")
-	
+
 	// Show tables
 	rows, err := db.Query("SHOW TABLES")
 	if err != nil {
@@ -254,7 +254,7 @@ func testAdministrativeOperations(db *sql.DB) {
 		}
 		rows.Close()
 	}
-	
+
 	// DESCRIBE operation
 	fmt.Println("  📊 Testing DESCRIBE operation...")
 	rows, err = db.Query("DESCRIBE test_users")
@@ -269,7 +269,7 @@ func testAdministrativeOperations(db *sql.DB) {
 		}
 		rows.Close()
 	}
-	
+
 	// EXPLAIN operation
 	fmt.Println("  📊 Testing EXPLAIN operation...")
 	rows, err = db.Query("EXPLAIN SELECT * FROM test_users WHERE username = 'john_doe'")
@@ -279,7 +279,7 @@ func testAdministrativeOperations(db *sql.DB) {
 		fmt.Println("    📋 Query execution plan generated")
 		rows.Close()
 	}
-	
+
 	time.Sleep(1 * time.Second)
 }
 
@@ -292,7 +292,7 @@ func testCleanupOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Index dropped")
 	}
-	
+
 	// TRUNCATE TABLE
 	fmt.Println("  🧹 Truncating table...")
 	_, err = db.Exec("TRUNCATE TABLE test_users")
@@ -301,7 +301,7 @@ func testCleanupOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Table truncated")
 	}
-	
+
 	// DROP TABLE
 	fmt.Println("  🧹 Dropping table...")
 	_, err = db.Exec("DROP TABLE IF EXISTS test_users")
@@ -310,6 +310,6 @@ func testCleanupOperations(db *sql.DB) {
 	} else {
 		fmt.Println("    ✅ Table dropped")
 	}
-	
+
 	time.Sleep(1 * time.Second)
 }

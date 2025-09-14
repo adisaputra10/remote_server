@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ssh-tunnel-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_NAME:-logs}
+      MYSQL_USER: ${DB_USER:-tunnel}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-root}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - tunnel-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  relay:
+    build: .
+    container_name: ssh-tunnel-relay
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_STRING: ${DB_USER:-root}:${DB_PASSWORD:-root}@tcp(mysql:3306)/${DB_NAME:-logs}?parseTime=true
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+      DB_NAME: ${DB_NAME:-logs}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+    ports:
+      - "8080:8080"
+    networks:
+      - tunnel-network
+    volumes:
+      - relay_logs:/logs
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  agent:
+    build: .
+    container_name: ssh-tunnel-agent
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    entrypoint: ["/agent"]
+    command: ["--server", "ws://relay:8080/ws", "--id", "docker-agent"]
+    networks:
+      - tunnel-network
+    volumes:
+      - agent_logs:/logs
+    # Uncomment and modify if you need to expose SSH from the container
+    # ports:
+    #   - "2222:22"
+
+  # Example client service (uncomment if needed)
+  # client:
+  #   build: .
+  #   container_name: ssh-tunnel-client
+  #   restart: unless-stopped
+  #   depends_on:
+  #     relay:
+  #       condition: service_healthy
+  #   entrypoint: ["/client"]
+  #   command: ["--server", "ws://relay:8080/ws", "--target", "host.docker.internal:22"]
+  #   networks:
+  #     - tunnel-network
+  #   volumes:
+  #     - client_logs:/logs
+  #   ports:
+  #     - "2222:2222"
+
+networks:
+  tunnel-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  relay_logs:
+    driver: local
+  agent_logs:
+    driver: local
+  client_logs:
+    driver: local
