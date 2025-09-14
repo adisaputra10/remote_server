@@ -1,55 +1,44 @@
 #!/bin/bash
-# Build script for Tunnel System (Linux/macOS)
+# Build script for SSH Tunnel components
 
-echo "🚀 Building Tunnel System..."
+echo "Building SSH Tunnel components..."
 
-# Create directories
-mkdir -p bin logs
+# Create bin directory if it doesn't exist
+mkdir -p bin
 
-# Download dependencies
-echo "📦 Downloading dependencies..."
-go mod download
-go mod tidy
-
-# Build relay server
-echo "🏗️ Building relay server..."
+# Build Relay Server
+echo "Building Relay Server..."
 go build -o bin/tunnel-relay ./cmd/relay
+if [ $? -ne 0 ]; then
+    echo "Failed to build relay server"
+    exit 1
+fi
+echo "Relay Server built successfully: bin/tunnel-relay"
 
-# Build tunnel agent
-echo "🏗️ Building tunnel agent..."
-go build -o bin/tunnel-agent ./cmd/tunnel-agent
+# Build Agent
+echo "Building Agent..."
+go build -o bin/tunnel-agent ./cmd/agent
+if [ $? -ne 0 ]; then
+    echo "Failed to build agent"
+    exit 1
+fi
+echo "Agent built successfully: bin/tunnel-agent"
 
-# Build tunnel client
-echo "🏗️ Building tunnel client..."
-go build -o bin/tunnel-client ./cmd/tunnel-client
+# Build Client
+echo "Building Client..."
+go build -o bin/tunnel-client ./cmd/client
+if [ $? -ne 0 ]; then
+    echo "Failed to build client"
+    exit 1
+fi
+echo "Client built successfully: bin/tunnel-client"
 
-echo "✅ Build complete!"
 echo ""
-echo "📂 Binaries created in bin/ directory:"
-echo "  - tunnel-relay"
-echo "  - tunnel-agent"  
-echo "  - tunnel-client"
+echo "All components built successfully!"
 echo ""
-echo "🚀 Usage Examples:"
+echo "Available executables:"
+echo "  bin/tunnel-relay  - Relay server"
+echo "  bin/tunnel-agent  - SSH agent"  
+echo "  bin/tunnel-client - Tunnel client"
 echo ""
-echo "1️⃣ Start Relay Server:"
-echo "   ./bin/tunnel-relay -addr :8443"
-echo ""
-echo "2️⃣ Start Agent (on remote server behind NAT):"
-echo "   ./bin/tunnel-agent -id my-agent -name \"My Server\" -relay-url ws://relay-server:8443/ws/agent"
-echo ""
-echo "3️⃣ Use Client (interactive mode):"
-echo "   ./bin/tunnel-client -relay-url ws://relay-server:8443/ws/client -i"
-echo ""
-echo "4️⃣ Use Client (direct tunnel):"
-echo "   ./bin/tunnel-client -L 2222 -agent my-agent -target 127.0.0.1:22 -relay-url ws://relay-server:8443/ws/client"
-echo ""
-echo "📋 Common Targets:"
-echo "   SSH:        127.0.0.1:22"
-echo "   MySQL:      127.0.0.1:3306"
-echo "   PostgreSQL: 127.0.0.1:5432"
-echo ""
-echo "📊 Monitoring:"
-echo "   Health:     http://relay-server:8443/health"
-echo "   Agents:     http://relay-server:8443/api/agents"
-echo "   Tunnels:    http://relay-server:8443/api/tunnels"
+echo "Run with -h flag to see usage options for each component."

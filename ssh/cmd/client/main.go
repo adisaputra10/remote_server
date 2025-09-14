@@ -1,606 +1,437 @@
 package main
 
 import (
-	"crypto/tls"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"net"
-	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
+    "fmt"
+    "io"
+    "log"
+    "net"
+    "net/url"
+    "os"
+    "os/signal"
+    "sync"
+    "syscall"
+    "time"
 
-	"github.com/gorilla/websocket"
-	"remote-tunnel/internal/logger"
-	"remote-tunnel/internal/tunnel"
+    "ssh-tunnel/internal/common"
+
+    "github.com/gorilla/websocket"
+    "github.com/spf13/cobra"
 )
 
-type TunnelClient struct {
-	relayURL     string
-	logger       *logger.Logger
-	insecure     bool
-	transport    *tunnel.Transport
-	tunnels      map[string]*tunnel.ClientTunnel
-	agents       []*tunnel.AgentInfo
+type Client struct {
+    id         string
+    relayURL   string
+    conn       *websocket.Conn
+    sessions   map[string]net.Conn
+    dbLoggers  map[string]*common.DatabaseQueryLogger
+    mutex      sync.RWMutex
+    logger     *common.Logger
+    running    bool
+    heartbeat  *time.Ticker
+}
+
+func NewClient(id, relayURL string) *Client {
+    return &Client{
+        id:        id,
+        relayURL:  relayURL,
+        sessions:  make(map[string]net.Conn),
+        dbLoggers: make(map[string]*common.DatabaseQueryLogger),
+        logger:    common.NewLogger(fmt.Sprintf("CLIENT-%s", id)),
+    }
+}
+
+func (c *Client) connect() error {
+    _, err := url.Parse(c.relayURL)
+    if err != nil {
+        return fmt.Errorf("invalid relay URL: %v", err)
+    }
+
+    c.logger.Info("Connecting to relay server: %s", c.relayURL)
+    
+    conn, _, err := websocket.DefaultDialer.Dial(c.relayURL, nil)
+    if err != nil {
+        return fmt.Errorf("failed to connect to relay: %v", err)
+    }
+
+    c.conn = conn
+    c.running = true
+
+    // Register with relay
+    registerMsg := common.NewMessage(common.MsgTypeRegister)
+    registerMsg.ClientID = c.id
+    if err := c.sendMessage(registerMsg); err != nil {
+        return fmt.Errorf("failed to register: %v", err)
+    }
+
+    c.logger.Info("Successfully connected and registered with relay")
+    return nil
+}
+
+func (c *Client) start() error {
+    if err := c.connect(); err != nil {
+        return err
+    }
+
+    // Start heartbeat
+    c.heartbeat = time.NewTicker(30 * time.Second)
+    go c.heartbeatLoop()
+
+    // Start message handler
+    go c.messageLoop()
+
+    c.logger.Info("Client started successfully")
+    return nil
+}
+
+func (c *Client) stop() {
+    c.running = false
+    
+    if c.heartbeat != nil {
+        c.heartbeat.Stop()
+    }
+
+    if c.conn != nil {
+        c.conn.Close()
+    }
+
+    // Close all sessions
+    c.mutex.Lock()
+    for sessionID, conn := range c.sessions {
+        conn.Close()
+        delete(c.sessions, sessionID)
+    }
+    c.mutex.Unlock()
+
+    c.logger.Info("Client stopped")
+}
+
+func (c *Client) heartbeatLoop() {
+    for c.running {
+        select {
+        case <-c.heartbeat.C:
+            heartbeatMsg := common.NewMessage(common.MsgTypeHeartbeat)
+            heartbeatMsg.ClientID = c.id
+            if err := c.sendMessage(heartbeatMsg); err != nil {
+                c.logger.Error("Failed to send heartbeat: %v", err)
+            }
+        }
+    }
+}
+
+func (c *Client) messageLoop() {
+    defer c.stop()
+
+    for c.running {
+        _, messageData, err := c.conn.ReadMessage()
+        if err != nil {
+            if c.running {
+                c.logger.Error("Failed to read message: %v", err)
+            }
+            break
+        }
+
+        message, err := common.FromJSON(messageData)
+        if err != nil {
+            c.logger.Error("Failed to parse message: %v", err)
+            continue
+        }
+
+        c.handleMessage(message)
+    }
+}
+
+func (c *Client) handleMessage(msg *common.Message) {
+    c.logger.Debug("Received message: %s", msg.String())
+
+    switch msg.Type {
+    case common.MsgTypeRegister:
+        c.logger.Debug("Registration confirmation received")
+    case common.MsgTypeData:
+        c.handleData(msg)
+    case common.MsgTypeClose:
+        c.handleClose(msg)
+    case common.MsgTypeError:
+        c.handleError(msg)
+    case common.MsgTypeHeartbeat:
+        // Heartbeat response received
+        c.logger.Debug("Heartbeat response received")
+    default:
+        c.logger.Error("Unknown message type: %s", msg.Type)
+    }
+}
+
+func (c *Client) handleData(msg *common.Message) {
+    c.mutex.RLock()
+    conn, exists := c.sessions[msg.SessionID]
+    dbLogger, dbExists := c.dbLoggers[msg.SessionID]
+    c.mutex.RUnlock()
+
+    if !exists {
+        c.logger.Error("Session not found: %s - message from agent may be late", msg.SessionID)
+        c.logger.Debug("Available sessions: %d", len(c.sessions))
+        return
+    }
+
+    c.logger.Debug("Received data for session %s: %d bytes", msg.SessionID, len(msg.Data))
+
+    // Log database response if logger exists
+    if dbExists {
+        dbLogger.LogData(msg.Data, "AGENT->CLIENT", msg.SessionID)
+    }
+
+    // Forward data to local connection
+    if _, err := conn.Write(msg.Data); err != nil {
+        c.logger.Error("Failed to write to local connection for session %s: %v", msg.SessionID, err)
+        c.closeSession(msg.SessionID)
+    } else {
+        c.logger.Debug("Successfully forwarded %d bytes to local connection", len(msg.Data))
+    }
+}
+
+func (c *Client) handleClose(msg *common.Message) {
+    c.logger.Info("Remote closed session: %s", msg.SessionID)
+    c.closeSession(msg.SessionID)
+}
+
+func (c *Client) handleError(msg *common.Message) {
+    c.logger.Error("Received error: %s", msg.Error)
+    if msg.SessionID != "" {
+        c.closeSession(msg.SessionID)
+    }
+}
+
+func (c *Client) startLocalListener(localAddr, agentID, target string) error {
+    listener, err := net.Listen("tcp", localAddr)
+    if err != nil {
+        return fmt.Errorf("failed to listen on %s: %v", localAddr, err)
+    }
+    defer listener.Close()
+
+    c.logger.Info("Local tunnel listening on %s -> Agent: %s, Target: %s", localAddr, agentID, target)
+
+    for {
+        conn, err := listener.Accept()
+        if err != nil {
+            c.logger.Error("Failed to accept connection: %v", err)
+            continue
+        }
+
+        go c.handleLocalConnection(conn, agentID, target)
+    }
+}
+
+func (c *Client) handleLocalConnection(conn net.Conn, agentID, target string) {
+    sessionID := common.GenerateID()
+    
+    c.mutex.Lock()
+    c.sessions[sessionID] = conn
+    // Create database query logger for this session
+    c.dbLoggers[sessionID] = common.NewDatabaseQueryLogger(c.logger, target)
+    c.mutex.Unlock()
+
+    c.logger.Info("New local connection accepted, session: %s, target: %s", sessionID, target)
+    c.logger.Debug("Local connection from: %s", conn.RemoteAddr().String())
+
+    // Send connect request to relay
+    connectMsg := common.NewMessage(common.MsgTypeConnect)
+    connectMsg.SessionID = sessionID
+    connectMsg.ClientID = c.id
+    connectMsg.AgentID = agentID
+    connectMsg.Target = target
+
+    c.logger.Info("Sending connect request to relay - Agent: %s, Target: %s", agentID, target)
+
+    if err := c.sendMessage(connectMsg); err != nil {
+        c.logger.Error("Failed to send connect message: %v", err)
+        conn.Close()
+        c.closeSession(sessionID)
+        return
+    }
+
+    // Start forwarding data from local connection to relay
+    c.forwardFromLocal(sessionID, conn)
+}
+
+func (c *Client) forwardFromLocal(sessionID string, conn net.Conn) {
+    defer c.closeSession(sessionID)
+
+    c.logger.Debug("Starting data forwarding from local connection for session %s", sessionID)
+    buffer := make([]byte, 32*1024) // 32KB buffer
+
+    for {
+        n, err := conn.Read(buffer)
+        if err != nil {
+            if err != io.EOF {
+                c.logger.Error("Failed to read from local connection for session %s: %v", sessionID, err)
+            } else {
+                c.logger.Debug("Local connection closed for session %s", sessionID)
+            }
+            break
+        }
+
+        if n > 0 {
+            c.logger.Debug("Read %d bytes from local connection for session %s", n, sessionID)
+            
+            // Log database query if logger exists
+            c.mutex.RLock()
+            dbLogger, dbExists := c.dbLoggers[sessionID]
+            c.mutex.RUnlock()
+            
+            if dbExists {
+                dbLogger.LogData(buffer[:n], "CLIENT->AGENT", sessionID)
+            }
+            
+            dataMsg := common.NewMessage(common.MsgTypeData)
+            dataMsg.SessionID = sessionID
+            dataMsg.ClientID = c.id
+            dataMsg.Data = make([]byte, n)
+            copy(dataMsg.Data, buffer[:n])
+
+            if err := c.sendMessage(dataMsg); err != nil {
+                c.logger.Error("Failed to forward data to relay for session %s: %v", sessionID, err)
+                break
+            }
+            c.logger.Debug("Successfully forwarded %d bytes to relay", n)
+        }
+    }
+
+    // Connection closed, notify relay
+    c.logger.Info("Local connection closed for session %s, notifying relay", sessionID)
+    closeMsg := common.NewMessage(common.MsgTypeClose)
+    closeMsg.SessionID = sessionID
+    closeMsg.ClientID = c.id
+    c.sendMessage(closeMsg)
+}
+
+func (c *Client) closeSession(sessionID string) {
+    c.mutex.Lock()
+    defer c.mutex.Unlock()
+
+    if conn, exists := c.sessions[sessionID]; exists {
+        conn.Close()
+        delete(c.sessions, sessionID)
+        c.logger.Info("Session closed: %s", sessionID)
+    }
+    
+    // Clean up database logger
+    if dbLogger, exists := c.dbLoggers[sessionID]; exists {
+        _ = dbLogger // Use the variable to avoid unused warning
+        delete(c.dbLoggers, sessionID)
+        c.logger.Debug("Database logger cleaned up for session: %s", sessionID)
+    }
+}
+
+func (c *Client) sendMessage(msg *common.Message) error {
+    data, err := msg.ToJSON()
+    if err != nil {
+        return fmt.Errorf("failed to serialize message: %v", err)
+    }
+
+    return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func main() {
-	var (
-		relayURL     = flag.String("relay-url", "wss://localhost:8443/ws/client", "Relay server WebSocket URL")
-		insecure     = flag.Bool("insecure", false, "Skip TLS certificate verification")
-		localAddr    = flag.String("L", "", "Local address to bind (e.g., :2222)")
-		agentID      = flag.String("agent", "", "Target agent ID")
-		targetAddr   = flag.String("target", "", "Target address (e.g., 127.0.0.1:22)")
-		interactive  = flag.Bool("i", false, "Interactive mode")
-		
-		// New port configuration options
-		portRange    = flag.String("port-range", "", "Port range for auto allocation (e.g., 2222:2230)")
-		autoPort     = flag.Bool("auto-port", false, "Automatically allocate available port")
-		portMap      = flag.String("map", "", "Port mapping (e.g., 2222:22,3306:3306)")
-		multiTunnels = flag.String("tunnels", "", "JSON file with multiple tunnel configurations")
-		localHost    = flag.String("local-host", "127.0.0.1", "Local host to bind (default: 127.0.0.1)")
-		startPort    = flag.Int("start-port", 2222, "Starting port for auto allocation")
-	)
-	flag.Parse()
-
-	log := logger.New("CLIENT")
-	
-	if *insecure {
-		log.Warn("🔓 INSECURE mode enabled - TLS certificate verification disabled!")
-	}
-
-	client := &TunnelClient{
-		relayURL: *relayURL,
-		logger:   log,
-		insecure: *insecure,
-		tunnels:  make(map[string]*tunnel.ClientTunnel),
-	}
-
-	log.Info("🚀 Starting tunnel client")
-	log.Info("📋 Relay URL: %s", *relayURL)
-
-	// Connect to relay
-	if err := client.connect(); err != nil {
-		log.Error("❌ Failed to connect to relay: %v", err)
-		os.Exit(1)
-	}
-
-	// Get agent list
-	if err := client.getAgents(); err != nil {
-		log.Error("❌ Failed to get agents: %v", err)
-		os.Exit(1)
-	}
-
-	if *interactive {
-		// Interactive mode
-		client.interactiveMode()
-	} else if *multiTunnels != "" {
-		// Multiple tunnels from JSON file
-		if err := client.setupMultipleTunnels(*multiTunnels); err != nil {
-			log.Error("❌ Failed to setup multiple tunnels: %v", err)
-			os.Exit(1)
-		}
-	} else if *portMap != "" {
-		// Port mapping mode
-		if err := client.setupPortMapping(*portMap, *agentID); err != nil {
-			log.Error("❌ Failed to setup port mapping: %v", err)
-			os.Exit(1)
-		}
-	} else if *localAddr != "" && *agentID != "" && *targetAddr != "" {
-		// Direct tunnel mode with optional auto-port
-		localAddress := *localAddr
-		if *autoPort {
-			localAddress = client.findAvailablePort(*localHost, *startPort)
-		}
-		
-		if err := client.createTunnel(localAddress, *agentID, *targetAddr); err != nil {
-			log.Error("❌ Failed to create tunnel: %v", err)
-			os.Exit(1)
-		}
-	} else if *portRange != "" && *agentID != "" && *targetAddr != "" {
-		// Port range mode
-		if err := client.setupPortRange(*portRange, *agentID, *targetAddr); err != nil {
-			log.Error("❌ Failed to setup port range: %v", err)
-			os.Exit(1)
-		}
-	} else if *autoPort && *agentID != "" && *targetAddr != "" {
-		// Auto-port mode
-		localAddress := client.findAvailablePort(*localHost, *startPort)
-		if err := client.createTunnel(localAddress, *agentID, *targetAddr); err != nil {
-			log.Error("❌ Failed to create tunnel: %v", err)
-			os.Exit(1)
-		}
-	} else {
-		// Show enhanced usage
-		client.showUsage()
-		os.Exit(1)
-	}
-
-	log.Info("🛑 Shutting down client...")
-	client.disconnect()
-	log.Info("👋 Client stopped")
-}
-
-func (c *TunnelClient) connect() error {
-	c.logger.Info("🔗 Connecting to relay server...")
-
-	// Setup WebSocket dialer
-	dialer := websocket.DefaultDialer
-	if c.insecure {
-		dialer.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-		c.logger.Warn("⚠️ TLS certificate verification disabled")
-	}
-
-	// Connect to WebSocket
-	conn, _, err := dialer.Dial(c.relayURL, nil)
-	if err != nil {
-		return fmt.Errorf("WebSocket dial failed: %v", err)
-	}
-
-	c.logger.Info("✅ Connected to relay server")
-
-	// Create transport
-	transport, err := tunnel.NewTransport(conn, false, c.logger)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("failed to create transport: %v", err)
-	}
-
-	c.transport = transport
-
-	// Send client connect message
-	msg := tunnel.NewMessage(tunnel.MsgClientConnect)
-	if err := c.transport.SendMessage(msg); err != nil {
-		c.transport.Close()
-		return fmt.Errorf("failed to send connect message: %v", err)
-	}
-
-	c.logger.Info("✅ Client connected to relay")
-	return nil
-}
-
-func (c *TunnelClient) getAgents() error {
-	c.logger.Command("SEND", "GET_AGENTS", "")
-
-	// Receive agent list
-	msg, err := c.transport.ReceiveMessage()
-	if err != nil {
-		return fmt.Errorf("failed to receive agent list: %v", err)
-	}
-
-	c.logger.Command("RECV", msg.Type, "")
-
-	if msg.Type != tunnel.MsgAgentList {
-		return fmt.Errorf("unexpected response: %s", msg.Type)
-	}
-
-	// Parse agent list
-	if data, ok := msg.Data.([]interface{}); ok {
-		c.agents = make([]*tunnel.AgentInfo, 0, len(data))
-		for _, item := range data {
-			if agentData, ok := item.(map[string]interface{}); ok {
-				var agent tunnel.AgentInfo
-				tunnel.MapToStruct(agentData, &agent)
-				c.agents = append(c.agents, &agent)
-			}
-		}
-	}
-
-	c.logger.Info("📋 Found %d agents", len(c.agents))
-	for _, agent := range c.agents {
-		c.logger.Info("  - %s (%s) - %s", agent.Name, agent.ID, agent.Status)
-	}
-
-	return nil
-}
-
-func (c *TunnelClient) interactiveMode() {
-	fmt.Println("\n🚀 Tunnel Client Interactive Mode")
-	fmt.Println("Available commands:")
-	fmt.Println("  agents                           - List available agents")
-	fmt.Println("  tunnel <agent_id> <local> <target> - Create tunnel")
-	fmt.Println("  tunnels                          - List active tunnels")
-	fmt.Println("  close <tunnel_id>                - Close tunnel")
-	fmt.Println("  quit                             - Exit")
-	fmt.Println()
-
-	for {
-		fmt.Print("tunnel> ")
-		
-		var input string
-		fmt.Scanln(&input)
-		
-		parts := strings.Fields(input)
-		if len(parts) == 0 {
-			continue
-		}
-
-		cmd := parts[0]
-		c.logger.Command("USER", cmd, strings.Join(parts[1:], " "))
-
-		switch cmd {
-		case "agents":
-			c.showAgents()
-
-		case "tunnel":
-			if len(parts) != 4 {
-				fmt.Println("Usage: tunnel <agent_id> <local_addr> <target_addr>")
-				fmt.Println("Example: tunnel agent_123 :2222 127.0.0.1:22")
-				continue
-			}
-			agentID := parts[1]
-			localAddr := parts[2]
-			targetAddr := parts[3]
-			
-			if err := c.createTunnel(localAddr, agentID, targetAddr); err != nil {
-				fmt.Printf("❌ Failed to create tunnel: %v\n", err)
-			}
-
-		case "tunnels":
-			c.showTunnels()
-
-		case "close":
-			if len(parts) != 2 {
-				fmt.Println("Usage: close <tunnel_id>")
-				continue
-			}
-			tunnelID := parts[1]
-			c.closeTunnel(tunnelID)
-
-		case "quit", "exit":
-			return
-
-		default:
-			fmt.Printf("Unknown command: %s\n", cmd)
-		}
-	}
-}
-
-func (c *TunnelClient) showAgents() {
-	if len(c.agents) == 0 {
-		fmt.Println("No agents available")
-		return
-	}
-
-	fmt.Println("\n📋 Available Agents:")
-	fmt.Println("┌────────────────────┬────────────────────┬──────────┬────────────────────┐")
-	fmt.Println("│ Agent ID           │ Name               │ Status   │ Last Seen          │")
-	fmt.Println("├────────────────────┼────────────────────┼──────────┼────────────────────┤")
-	
-	for _, agent := range c.agents {
-		lastSeen := agent.LastSeen.Format("15:04:05")
-		fmt.Printf("│ %-18s │ %-18s │ %-8s │ %-18s │\n", 
-			agent.ID, agent.Name, agent.Status, lastSeen)
-	}
-	
-	fmt.Println("└────────────────────┴────────────────────┴──────────┴────────────────────┘")
-}
-
-func (c *TunnelClient) showTunnels() {
-	if len(c.tunnels) == 0 {
-		fmt.Println("No active tunnels")
-		return
-	}
-
-	fmt.Println("\n🚇 Active Tunnels:")
-	fmt.Println("┌────────────────────┬────────────────────┬────────────────────┬──────────┐")
-	fmt.Println("│ Tunnel ID          │ Local Address      │ Target Address     │ Status   │")
-	fmt.Println("├────────────────────┼────────────────────┼────────────────────┼──────────┤")
-	
-	for _, tunnel := range c.tunnels {
-		status := "Active"
-		if !tunnel.IsActive() {
-			status = "Closed"
-		}
-		fmt.Printf("│ %-18s │ %-18s │ %-18s │ %-8s │\n", 
-			tunnel.ID, tunnel.LocalAddr, tunnel.TargetAddr, status)
-	}
-	
-	fmt.Println("└────────────────────┴────────────────────┴────────────────────┴──────────┘")
-}
-
-func (c *TunnelClient) createTunnel(localAddr, agentID, targetAddr string) error {
-	// Parse target address
-	host, portStr, err := net.SplitHostPort(targetAddr)
-	if err != nil {
-		return fmt.Errorf("invalid target address: %v", err)
-	}
-	
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return fmt.Errorf("invalid port: %v", err)
-	}
-
-	// Generate tunnel ID
-	tunnelID := fmt.Sprintf("tunnel_%d", time.Now().UnixNano())
-
-	c.logger.Tunnel("CREATE", tunnelID, fmt.Sprintf("%s -> %s:%d via %s", localAddr, host, port, agentID))
-
-	// Create tunnel request
-	req := &tunnel.TunnelRequest{
-		TunnelID:   tunnelID,
-		AgentID:    agentID,
-		RemoteHost: host,
-		RemotePort: port,
-	}
-
-	// Send tunnel request
-	msg := tunnel.NewMessage(tunnel.MsgTunnelRequest).
-		SetTunnelID(tunnelID).
-		SetData(req)
-
-	if err := c.transport.SendMessage(msg); err != nil {
-		return fmt.Errorf("failed to send tunnel request: %v", err)
-	}
-
-	// Wait for response
-	response, err := c.transport.ReceiveMessage()
-	if err != nil {
-		return fmt.Errorf("failed to receive tunnel response: %v", err)
-	}
-
-	c.logger.Command("RECV", response.Type, response.TunnelID)
-
-	if response.Type == tunnel.MsgTunnelError {
-		return fmt.Errorf("tunnel error: %v", response.Error)
-	}
-
-	if response.Type != tunnel.MsgTunnelSuccess {
-		return fmt.Errorf("unexpected response: %s", response.Type)
-	}
-
-	// Create local listener
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %v", localAddr, err)
-	}
-
-	actualAddr := listener.Addr().String()
-	c.logger.Info("✅ Tunnel created: %s -> %s via %s", actualAddr, targetAddr, agentID)
-
-	// Create client tunnel
-	clientTunnel := tunnel.NewClientTunnel(tunnelID, actualAddr, targetAddr, listener, c.transport, c.logger)
-	c.tunnels[tunnelID] = clientTunnel
-
-	// Start tunnel
-	go clientTunnel.Start()
-
-	fmt.Printf("✅ Tunnel created: %s -> %s via %s\n", actualAddr, targetAddr, agentID)
-	return nil
-}
-
-func (c *TunnelClient) closeTunnel(tunnelID string) {
-	clientTunnel, exists := c.tunnels[tunnelID]
-	if !exists {
-		fmt.Printf("❌ Tunnel not found: %s\n", tunnelID)
-		return
-	}
-
-	c.logger.Tunnel("CLOSE", tunnelID, "user request")
-
-	// Send close message to relay
-	msg := tunnel.NewMessage(tunnel.MsgTunnelClose).SetTunnelID(tunnelID)
-	c.transport.SendMessage(msg)
-
-	// Close tunnel
-	clientTunnel.Close()
-	delete(c.tunnels, tunnelID)
-
-	fmt.Printf("✅ Tunnel closed: %s\n", tunnelID)
-}
-
-func (c *TunnelClient) disconnect() {
-	// Close all tunnels
-	for tunnelID, clientTunnel := range c.tunnels {
-		clientTunnel.Close()
-		delete(c.tunnels, tunnelID)
-	}
-
-	// Close transport
-	if c.transport != nil {
-		msg := tunnel.NewMessage(tunnel.MsgClientDisconnect)
-		c.transport.SendMessage(msg)
-		c.transport.Close()
-	}
-}
-
-// New enhanced port management functions
-
-func (c *TunnelClient) findAvailablePort(host string, startPort int) string {
-	for port := startPort; port < startPort+100; port++ {
-		addr := fmt.Sprintf("%s:%d", host, port)
-		if c.isPortAvailable(addr) {
-			c.logger.Info("🔍 Found available port: %s", addr)
-			return addr
-		}
-	}
-	// Fallback to :0 for OS allocation
-	c.logger.Warn("⚠️ No port found in range, using OS allocation")
-	return fmt.Sprintf("%s:0", host)
-}
-
-func (c *TunnelClient) isPortAvailable(addr string) bool {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return false
-	}
-	ln.Close()
-	return true
-}
-
-func (c *TunnelClient) setupPortMapping(portMap, agentID string) error {
-	if agentID == "" {
-		return fmt.Errorf("agent ID required for port mapping")
-	}
-
-	mappings := strings.Split(portMap, ",")
-	for _, mapping := range mappings {
-		parts := strings.Split(strings.TrimSpace(mapping), ":")
-		if len(parts) != 2 {
-			c.logger.Warn("⚠️ Invalid port mapping: %s (expected format: localport:remoteport)", mapping)
-			continue
-		}
-
-		localPort := strings.TrimSpace(parts[0])
-		remotePort := strings.TrimSpace(parts[1])
-		
-		localAddr := fmt.Sprintf(":%s", localPort)
-		targetAddr := fmt.Sprintf("127.0.0.1:%s", remotePort)
-
-		c.logger.Info("🔀 Setting up port mapping: %s -> %s", localAddr, targetAddr)
-		
-		if err := c.createTunnel(localAddr, agentID, targetAddr); err != nil {
-			c.logger.Error("❌ Failed to create tunnel for mapping %s: %v", mapping, err)
-			continue
-		}
-	}
-
-	// Wait for interrupt
-	c.waitForInterrupt()
-	return nil
-}
-
-func (c *TunnelClient) setupPortRange(portRange, agentID, targetAddr string) error {
-	parts := strings.Split(portRange, ":")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid port range format (expected start:end, got %s)", portRange)
-	}
-
-	startPort, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return fmt.Errorf("invalid start port: %v", err)
-	}
-
-	endPort, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return fmt.Errorf("invalid end port: %v", err)
-	}
-
-	if startPort >= endPort {
-		return fmt.Errorf("start port must be less than end port")
-	}
-
-	c.logger.Info("🔢 Setting up port range: %d-%d for target %s", startPort, endPort, targetAddr)
-
-	// Create tunnels for the port range
-	for port := startPort; port <= endPort; port++ {
-		localAddr := fmt.Sprintf(":%d", port)
-		
-		c.logger.Info("🚇 Creating tunnel: %s -> %s via %s", localAddr, targetAddr, agentID)
-		
-		if err := c.createTunnel(localAddr, agentID, targetAddr); err != nil {
-			c.logger.Error("❌ Failed to create tunnel for port %d: %v", port, err)
-			continue
-		}
-	}
-
-	// Wait for interrupt
-	c.waitForInterrupt()
-	return nil
-}
-
-type TunnelConfig struct {
-	Name       string `json:"name"`
-	LocalAddr  string `json:"local_addr"`
-	AgentID    string `json:"agent_id"`
-	TargetAddr string `json:"target_addr"`
-	AutoPort   bool   `json:"auto_port"`
-}
-
-type MultiTunnelConfig struct {
-	Tunnels []TunnelConfig `json:"tunnels"`
-}
-
-func (c *TunnelClient) setupMultipleTunnels(configFile string) error {
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("failed to read config file: %v", err)
-	}
-
-	var config MultiTunnelConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse config file: %v", err)
-	}
-
-	c.logger.Info("🔧 Setting up %d tunnels from config", len(config.Tunnels))
-
-	for _, tunnelConfig := range config.Tunnels {
-		localAddr := tunnelConfig.LocalAddr
-		if tunnelConfig.AutoPort {
-			host := "127.0.0.1"
-			if strings.Contains(localAddr, ":") {
-				parts := strings.Split(localAddr, ":")
-				if len(parts) > 0 && parts[0] != "" {
-					host = parts[0]
-				}
-			}
-			localAddr = c.findAvailablePort(host, 2222)
-		}
-
-		c.logger.Info("🚇 Creating tunnel '%s': %s -> %s via %s", 
-			tunnelConfig.Name, localAddr, tunnelConfig.TargetAddr, tunnelConfig.AgentID)
-
-		if err := c.createTunnel(localAddr, tunnelConfig.AgentID, tunnelConfig.TargetAddr); err != nil {
-			c.logger.Error("❌ Failed to create tunnel '%s': %v", tunnelConfig.Name, err)
-			continue
-		}
-	}
-
-	// Wait for interrupt
-	c.waitForInterrupt()
-	return nil
-}
-
-func (c *TunnelClient) waitForInterrupt() {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
-}
-
-func (c *TunnelClient) showUsage() {
-	fmt.Println("\n🚇 Tunnel Client - Enhanced Port Configuration")
-	fmt.Println("Usage modes:")
-	fmt.Println("")
-	fmt.Println("1️⃣  Interactive mode:")
-	fmt.Println("   tunnel-client -relay-url ws://server:8080/ws/client -i")
-	fmt.Println("")
-	fmt.Println("2️⃣  Direct tunnel:")
-	fmt.Println("   tunnel-client -L :2222 -agent agent_id -target 127.0.0.1:22")
-	fmt.Println("")
-	fmt.Println("3️⃣  Auto-port allocation:")
-	fmt.Println("   tunnel-client -auto-port -agent agent_id -target 127.0.0.1:22")
-	fmt.Println("   tunnel-client -auto-port -start-port 3000 -agent agent_id -target 127.0.0.1:22")
-	fmt.Println("")
-	fmt.Println("4️⃣  Port mapping (multiple ports):")
-	fmt.Println("   tunnel-client -map '2222:22,3306:3306,5432:5432' -agent agent_id")
-	fmt.Println("")
-	fmt.Println("5️⃣  Multiple tunnels from JSON config:")
-	fmt.Println("   tunnel-client -tunnels config.json")
-	fmt.Println("")
-	fmt.Println("Config file example (config.json):")
-	fmt.Println(`{
-  "tunnels": [
-    {
-      "name": "SSH",
-      "local_addr": ":2222",
-      "agent_id": "prod-server",
-      "target_addr": "127.0.0.1:22"
-    },
-    {
-      "name": "MySQL",
-      "local_addr": ":3306", 
-      "agent_id": "db-server",
-      "target_addr": "127.0.0.1:3306",
-      "auto_port": true
+    var (
+        clientID  string
+        relayURL  string
+        localAddr string
+        agentID   string
+        target    string
+        interactive bool
+    )
+
+    var rootCmd = &cobra.Command{
+        Use:   "tunnel-client",
+        Short: "SSH Tunnel Client",
+        Long:  "A client that creates local tunnels and forwards connections through a relay to remote agents",
+        Run: func(cmd *cobra.Command, args []string) {
+            if clientID == "" {
+                clientID = common.GenerateID()
+            }
+
+            client := NewClient(clientID, relayURL)
+            
+            // Setup signal handling for graceful shutdown
+            sigChan := make(chan os.Signal, 1)
+            signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+            
+            go func() {
+                <-sigChan
+                client.logger.Info("Received shutdown signal, stopping client...")
+                client.stop()
+                client.logger.Close()
+                os.Exit(0)
+            }()
+            
+            if err := client.start(); err != nil {
+                log.Fatalf("Failed to start client: %v", err)
+            }
+
+            if interactive {
+                fmt.Println("Interactive mode - Available commands:")
+                fmt.Println("  help    - Show this help")
+                fmt.Println("  tunnel  - Create a new tunnel")
+                fmt.Println("  list    - List active sessions")
+                fmt.Println("  quit    - Exit the client")
+                
+                // Simple interactive mode implementation
+                for {
+                    fmt.Print("> ")
+                    var command string
+                    fmt.Scanln(&command)
+                    
+                    switch command {
+                    case "help":
+                        fmt.Println("Available commands: help, tunnel, list, quit")
+                    case "tunnel":
+                        fmt.Print("Local address (e.g., :2222): ")
+                        fmt.Scanln(&localAddr)
+                        fmt.Print("Agent ID: ")
+                        fmt.Scanln(&agentID)
+                        fmt.Print("Target (e.g., localhost:22): ")
+                        fmt.Scanln(&target)
+                        
+                        go func() {
+                            if err := client.startLocalListener(localAddr, agentID, target); err != nil {
+                                fmt.Printf("Failed to start tunnel: %v\n", err)
+                            }
+                        }()
+                        fmt.Printf("Tunnel created: %s -> %s:%s\n", localAddr, agentID, target)
+                    case "list":
+                        client.mutex.RLock()
+                        fmt.Printf("Active sessions: %d\n", len(client.sessions))
+                        for sessionID := range client.sessions {
+                            fmt.Printf("  - %s\n", sessionID)
+                        }
+                        client.mutex.RUnlock()
+                    case "quit":
+                        client.stop()
+                        return
+                    default:
+                        fmt.Println("Unknown command. Type 'help' for available commands.")
+                    }
+                }
+            } else {
+                // Single tunnel mode
+                if localAddr == "" || agentID == "" || target == "" {
+                    log.Fatal("Local address (-L), agent ID (-agent), and target (-target) are required for single tunnel mode")
+                }
+                
+                if err := client.startLocalListener(localAddr, agentID, target); err != nil {
+                    log.Fatalf("Failed to start local listener: %v", err)
+                }
+            }
+        },
     }
-  ]
-}`)
-	fmt.Println("")
-	fmt.Println("Options:")
-	flag.PrintDefaults()
+
+    rootCmd.Flags().StringVarP(&clientID, "client-id", "c", "", "Client ID (auto-generated if not provided)")
+    rootCmd.Flags().StringVarP(&relayURL, "relay-url", "r", "ws://localhost:8080/ws/client", "Relay server WebSocket URL")
+    rootCmd.Flags().StringVarP(&localAddr, "local", "L", "", "Local address to listen on (e.g., :2222)")
+    rootCmd.Flags().StringVarP(&agentID, "agent", "a", "", "Target agent ID")
+    rootCmd.Flags().StringVarP(&target, "target", "t", "", "Target address (e.g., localhost:22)")
+    rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Run in interactive mode")
+
+    if err := rootCmd.Execute(); err != nil {
+        log.Fatal(err)
+    }
 }
