@@ -193,16 +193,34 @@ func (dql *DatabaseQueryLogger) analyzePostgreSQLPacket(data []byte, direction s
                 dql.logger.Info("[%s] PostgreSQL %s - Session: %s - SQL: %s", 
                     direction, queryType, sessionID, query)
             }
+            
+            // Call callback if set
+            if dql.callback != nil {
+                dql.callback(sessionID, queryType, tableName, query, "postgresql", direction)
+            }
         }
     case 'P': // Parse (prepared statement)
         if len(data) > 5 {
             payload := string(data[5:])
-            dql.logger.Info("[%s] PostgreSQL PARSE - Session: %s - Statement: %s", direction, sessionID, payload)
+            query := dql.cleanQuery(payload)
+            dql.logger.Info("[%s] PostgreSQL PARSE - Session: %s - Statement: %s", direction, sessionID, query)
+            
+            // Call callback if set
+            if dql.callback != nil {
+                _ = dql.detectSQLOperation(query) // We already detected the operation type above
+                tableName := dql.extractTableName(query)
+                dql.callback(sessionID, "PREPARE", tableName, query, "postgresql", direction)
+            }
         }
     case 'E': // Execute
         dql.logger.Info("[%s] PostgreSQL EXECUTE - Session: %s", direction, sessionID)
+        // EXECUTE operations are not logged to database to keep table clean
     case 'X': // Terminate
         dql.logger.Info("[%s] PostgreSQL TERMINATE - Session: %s", direction, sessionID)
+        // Call callback if set
+        if dql.callback != nil {
+            dql.callback(sessionID, "TERMINATE", "", "", "postgresql", direction)
+        }
     }
 }
 
