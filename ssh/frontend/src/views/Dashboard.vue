@@ -120,6 +120,11 @@
           <div v-if="activeTab === 'queries'">
             <QueriesTable :queries="tunnelLogs" @refresh="fetchTunnelLogs" />
           </div>
+
+          <!-- SSH Commands Tab -->
+          <div v-if="activeTab === 'ssh'">
+            <SSHLogsTable :sshLogs="sshLogs" @refresh="fetchSSHLogs" />
+          </div>
         </div>
       </div>
     </div>
@@ -132,6 +137,7 @@ import AgentsTable from '../components/AgentsTable.vue'
 import ClientsTable from '../components/ClientsTable.vue'
 import LogsTable from '../components/LogsTable.vue'
 import QueriesTable from '../components/QueriesTable.vue'
+import SSHLogsTable from '../components/SSHLogsTable.vue'
 
 export default {
   name: 'Dashboard',
@@ -139,7 +145,8 @@ export default {
     AgentsTable,
     ClientsTable,
     LogsTable,
-    QueriesTable
+    QueriesTable,
+    SSHLogsTable
   },
   data() {
     return {
@@ -149,11 +156,13 @@ export default {
       clients: [],
       logs: [],
       tunnelLogs: [],
+      sshLogs: [],
       tabs: [
         { id: 'agents', name: 'Agents' },
         { id: 'clients', name: 'Clients' },
         { id: 'logs', name: 'Connection Logs' },
-        { id: 'queries', name: 'Database Queries' }
+        { id: 'queries', name: 'Database Queries' },
+        { id: 'ssh', name: 'SSH Commands' }
       ]
     }
   },
@@ -177,7 +186,8 @@ export default {
         this.fetchAgents(),
         this.fetchClients(),
         this.fetchLogs(),
-        this.fetchTunnelLogs()
+        this.fetchTunnelLogs(),
+        this.fetchSSHLogs()
       ])
     },
     async fetchAgents() {
@@ -210,6 +220,14 @@ export default {
         this.tunnelLogs = response.data || []
       } catch (error) {
         console.error('Error fetching tunnel logs:', error)
+      }
+    },
+    async fetchSSHLogs() {
+      try {
+        const response = await this.apiCall('/api/ssh-logs')
+        this.sshLogs = response.data || []
+      } catch (error) {
+        console.error('Error fetching SSH logs:', error)
       }
     },
     async apiCall(url) {

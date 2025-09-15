@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS tunnel_logs (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- SSH tunnel logs table
+CREATE TABLE IF NOT EXISTS ssh_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    session_id VARCHAR(100),
+    agent_id VARCHAR(100),
+    client_id VARCHAR(100),
+    direction VARCHAR(20),
+    ssh_user VARCHAR(100),
+    ssh_host VARCHAR(100),
+    ssh_port VARCHAR(10),
+    command TEXT,
+    data_size INT DEFAULT 0,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Insert default users
 INSERT IGNORE INTO users (username, password, role) VALUES 
     ('admin', 'admin123', 'admin'),

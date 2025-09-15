@@ -63,7 +63,20 @@ type Session struct {
     AgentID  string
     ClientID string
     Target   string
+    Protocol string  // "mysql", "postgresql", "ssh", "tcp"
     Created  time.Time
+}
+
+type SSHTunnelLogRequest struct {
+    SessionID   string `json:"session_id"`
+    ClientID    string `json:"client_id"`
+    AgentID     string `json:"agent_id"`
+    Direction   string `json:"direction"`
+    Command     string `json:"command"`
+    User        string `json:"user"`
+    Host        string `json:"host"`
+    Port        string `json:"port"`
+    Data        string `json:"data"`
 }
 
 type QueryLogRequest struct {
@@ -415,7 +428,30 @@ func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, p
     if err != nil {
         rs.logger.Error("Failed to log tunnel query: %v", err)
     } else {
-        rs.logger.Debug("Logged operation '%s' to database", operation)
+        rs.logger.Debug("Database query logged successfully")
+    }
+}
+
+// logSSHCommand logs SSH commands and activities
+func (rs *RelayServer) logSSHCommand(sessionID, agentID, clientID, direction, sshUser, sshHost, sshPort, command string, dataSize int) {
+    // Clean all string parameters before processing
+    sessionID = rs.cleanString(sessionID)
+    agentID = rs.cleanString(agentID)
+    clientID = rs.cleanString(clientID)
+    direction = rs.cleanString(direction)
+    sshUser = rs.cleanString(sshUser)
+    sshHost = rs.cleanString(sshHost)
+    sshPort = rs.cleanString(sshPort)
+    command = rs.cleanString(command)
+    
+    _, err := rs.db.Exec(
+        "INSERT INTO ssh_logs (session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        sessionID, agentID, clientID, direction, sshUser, sshHost, sshPort, command, dataSize,
+    )
+    if err != nil {
+        rs.logger.Error("Failed to log SSH command: %v", err)
+    } else {
+        rs.logger.Debug("SSH command logged successfully: %s", command)
     }
 }
 
@@ -744,7 +780,9 @@ func (rs *RelayServer) setupRoutes() {
     http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
     http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
     http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
+    http.HandleFunc("/api/ssh-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHLogs)))
     http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
+    http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
     
     // Health endpoint
     http.HandleFunc("/health", rs.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -1128,6 +1166,83 @@ func (rs *RelayServer) handleAPILogQuery(w http.ResponseWriter, r *http.Request)
     response := map[string]interface{}{
         "status":  "success",
         "message": "Query logged successfully",
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(response)
+}
+
+// Handle API for SSH logs retrieval
+func (rs *RelayServer) handleAPISSHLogs(w http.ResponseWriter, r *http.Request) {
+    rows, err := rs.db.Query("SELECT session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data_size, timestamp FROM ssh_logs ORDER BY timestamp DESC LIMIT 100")
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer rows.Close()
+    
+    var logs []map[string]interface{}
+    for rows.Next() {
+        var sessionID, agentID, clientID, direction, sshUser, sshHost, sshPort, command sql.NullString
+        var dataSize sql.NullInt64
+        var timestamp time.Time
+        
+        err := rows.Scan(&sessionID, &agentID, &clientID, &direction, &sshUser, &sshHost, &sshPort, &command, &dataSize, &timestamp)
+        if err != nil {
+            continue
+        }
+        
+        // Clean and format SSH command
+        cleanedCommand := rs.cleanString(cleanHTMLEntities(command.String))
+        
+        log := map[string]interface{}{
+            "session_id": rs.cleanString(sessionID.String),
+            "agent_id":   rs.cleanString(agentID.String),
+            "client_id":  rs.cleanString(clientID.String),
+            "direction":  rs.cleanString(direction.String),
+            "ssh_user":   rs.cleanString(sshUser.String),
+            "ssh_host":   rs.cleanString(sshHost.String),
+            "ssh_port":   rs.cleanString(sshPort.String),
+            "command":    cleanedCommand,
+            "data_size":  dataSize.Int64,
+            "timestamp":  timestamp,
+        }
+        logs = append(logs, log)
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(logs)
+}
+
+// Handle API for logging SSH commands from clients
+func (rs *RelayServer) handleAPILogSSH(w http.ResponseWriter, r *http.Request) {
+    if r.Method != "POST" {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    
+    var req SSHTunnelLogRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+        return
+    }
+    
+    // Validate required fields
+    if req.SessionID == "" || req.ClientID == "" {
+        http.Error(w, "Missing required fields: session_id, client_id", http.StatusBadRequest)
+        return
+    }
+    
+    // Calculate data size
+    dataSize := len(req.Data)
+    
+    // Log the SSH command
+    rs.logSSHCommand(req.SessionID, req.AgentID, req.ClientID, req.Direction, req.User, req.Host, req.Port, req.Command, dataSize)
+    
+    // Return success response
+    response := map[string]interface{}{
+        "status":  "success",
+        "message": "SSH command logged successfully",
     }
     
     w.Header().Set("Content-Type", "application/json")

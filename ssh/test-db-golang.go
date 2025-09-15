@@ -16,7 +16,7 @@ func main() {
 
 	// Database connection parameters
 	// Using tunnel port 3307 instead of direct MySQL port 3306
-	dsn := "root:root@tcp(localhost:3307)/db?parseTime=true"
+	dsn := "root:rootpassword@tcp(localhost:3307)/db?parseTime=true"
 
 	fmt.Printf("Connecting to MySQL via tunnel: %s\n", dsn)
 
@@ -303,13 +303,13 @@ func testCleanupOperations(db *sql.DB) {
 	}
 
 	// DROP TABLE
-	fmt.Println("  🧹 Dropping table...")
-	_, err = db.Exec("DROP TABLE IF EXISTS test_users")
-	if err != nil {
-		log.Printf("⚠️  Error dropping table: %v", err)
-	} else {
-		fmt.Println("    ✅ Table dropped")
-	}
+	/* 	fmt.Println("  🧹 Dropping table...")
+	   	_, err = db.Exec("DROP TABLE IF EXISTS test_users")
+	   	if err != nil {
+	   		log.Printf("⚠️  Error dropping table: %v", err)
+	   	} else {
+	   		fmt.Println("    ✅ Table dropped")
+	   	} */
 
 	time.Sleep(1 * time.Second)
 }
