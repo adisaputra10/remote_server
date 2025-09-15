@@ -91,27 +91,33 @@ export default {
       this.error = ''
 
       try {
-        // Create basic auth header
-        const auth = btoa(`${this.credentials.username}:${this.credentials.password}`)
-        
-        // Test authentication by calling a protected endpoint
-        const response = await api.get('/api/agents', {
-          headers: {
-            'Authorization': `Basic ${auth}`
-          }
+        // Use the /login endpoint with JSON payload
+        const response = await api.post('/login', {
+          username: this.credentials.username,
+          password: this.credentials.password
         })
 
-        if (response.status === 200) {
-          // Store auth token
-          localStorage.setItem('auth_token', auth)
-          localStorage.setItem('username', this.credentials.username)
+        if (response.data.success) {
+          // Store auth token and user info
+          localStorage.setItem('auth_token', response.data.token)
+          localStorage.setItem('username', response.data.user.username)
+          localStorage.setItem('user_role', response.data.user.role)
+          localStorage.setItem('session_id', response.data.session_id)
           
           // Redirect to dashboard
           this.$router.push('/dashboard')
+        } else {
+          this.error = 'Login failed'
         }
       } catch (error) {
         this.error = 'Invalid username or password'
         console.error('Login error:', error)
+        
+        // Debug: log the actual error response
+        if (error.response) {
+          console.error('Error response:', error.response.data)
+          console.error('Error status:', error.response.status)
+        }
       } finally {
         this.loading = false
       }

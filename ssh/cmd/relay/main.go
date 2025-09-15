@@ -863,13 +863,40 @@ func (rs *RelayServer) requireAdmin(handler http.HandlerFunc) http.HandlerFunc {
 // Login Handler
 func (rs *RelayServer) handleLogin(w http.ResponseWriter, r *http.Request) {
     if r.Method == "POST" {
-        username := r.FormValue("username")
-        password := r.FormValue("password")
+        var username, password string
+        
+        // Check if request is JSON or form data
+        contentType := r.Header.Get("Content-Type")
+        if strings.Contains(contentType, "application/json") {
+            // Handle JSON request from Vue.js frontend
+            var loginReq struct {
+                Username string `json:"username"`
+                Password string `json:"password"`
+            }
+            
+            if err := json.NewDecoder(r.Body).Decode(&loginReq); err != nil {
+                http.Error(w, "Invalid JSON", http.StatusBadRequest)
+                return
+            }
+            
+            username = loginReq.Username
+            password = loginReq.Password
+        } else {
+            // Handle form data from HTML form
+            username = r.FormValue("username")
+            password = r.FormValue("password")
+        }
         
         var dbPassword, dbRole string
         err := rs.db.QueryRow("SELECT password, role FROM users WHERE username = ?", username).Scan(&dbPassword, &dbRole)
         if err != nil || dbPassword != password {
-            http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+            if strings.Contains(contentType, "application/json") {
+                w.Header().Set("Content-Type", "application/json")
+                w.WriteHeader(http.StatusUnauthorized)
+                json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
+            } else {
+                http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+            }
             return
         }
         
@@ -881,16 +908,31 @@ func (rs *RelayServer) handleLogin(w http.ResponseWriter, r *http.Request) {
             LoginTime: time.Now(),
         }
         
-        cookie := &http.Cookie{
-            Name:     "tunnel-session",
-            Value:    sessionID,
-            Path:     "/",
-            MaxAge:   86400, // 24 hours
-            HttpOnly: true,
+        if strings.Contains(contentType, "application/json") {
+            // Return JSON response for API
+            token := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(map[string]interface{}{
+                "success": true,
+                "token": token,
+                "user": map[string]string{
+                    "username": username,
+                    "role": dbRole,
+                },
+                "session_id": sessionID,
+            })
+        } else {
+            // Set cookie and redirect for HTML form
+            cookie := &http.Cookie{
+                Name:     "tunnel-session",
+                Value:    sessionID,
+                Path:     "/",
+                MaxAge:   86400, // 24 hours
+                HttpOnly: true,
+            }
+            http.SetCookie(w, cookie)
+            http.Redirect(w, r, "/", http.StatusSeeOther)
         }
-        http.SetCookie(w, cookie)
-        
-        http.Redirect(w, r, "/", http.StatusSeeOther)
         return
     }
     
@@ -1095,7 +1137,31 @@ func (rs *RelayServer) handleAPILogQuery(w http.ResponseWriter, r *http.Request)
 // CORS Middleware
 func (rs *RelayServer) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+        origin := r.Header.Get("Origin")
+        
+        // Allow multiple origins
+        allowedOrigins := []string{
+            "http://localhost:3000",
+            "http://localhost:8081",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8081",
+            "http://192.168.1.115:8081",
+            "http://192.168.1.115:3000",
+            "http://168.231.119.242:3000",
+        }
+        
+        for _, allowedOrigin := range allowedOrigins {
+            if origin == allowedOrigin {
+                w.Header().Set("Access-Control-Allow-Origin", origin)
+                break
+            }
+        }
+        
+        // If no specific origin matched, allow all for development
+        if w.Header().Get("Access-Control-Allow-Origin") == "" {
+            w.Header().Set("Access-Control-Allow-Origin", "*")
+        }
+        
         w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
         w.Header().Set("Access-Control-Allow-Credentials", "true")
