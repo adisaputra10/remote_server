@@ -42,12 +42,15 @@ A comprehensive SSH tunnel system inspired by Teleport, built with Go. This syst
 - **Real-time Monitoring** - Live status of agents, clients, and connections
 - **File Logging** - Comprehensive logging to files for debugging
 - **Environment Configuration** - Easy deployment with .env configuration
+- **SSH Interactive Shell** - Full remote terminal experience like PuTTY
+- **SSH Command Logging** - All SSH commands logged to database and dashboard
 
 ### Dashboard Features
 - **Agent Status** - View all connected agents and their status
 - **Client Status** - Monitor active client connections
 - **Connection Logs** - Real-time view of all tunnel activities
 - **Database Query Logs** - Monitor all database queries through tunnels
+- **SSH Logs** - Monitor all SSH commands and sessions in real-time
 - **Administrative Interface** - Secure login and management
 
 ## 📋 Prerequisites
@@ -127,41 +130,74 @@ ADMIN_PASSWORD=admin123
 .\bin\client.exe --server ws://relay-server:8080/ws --target localhost:22
 ```
 
+#### SSH Interactive Shell
+```powershell
+.\bin\interactive-shell.exe -relay ws://localhost:8080/ws -agent agent-01 -remote-user root -remote-host 192.168.1.100
+```
+
 ### Dashboard Access
 
 1. **Open Dashboard**: Navigate to `http://localhost:8080`
 2. **Login**: Use credentials from `.env` (default: admin/admin123)
-3. **Monitor**: View agents, clients, and logs in real-time
+3. **Monitor**: View agents, clients, SSH logs, and database logs in real-time
 
-### SSH Through Tunnel
+### SSH Access Methods
 
+#### Method 1: SSH Through Tunnel
 Once client is connected:
 ```bash
 ssh username@localhost -p 2222
 ```
+
+#### Method 2: Interactive Shell (Recommended)
+Direct interactive shell through relay:
+```powershell
+.\bin\interactive-shell.exe -relay ws://localhost:8080/ws -agent agent-01 -remote-user root -remote-host 192.168.1.100
+```
+
+**Features:**
+- Dynamic prompt with working directory
+- Real-time command execution
+- Command logging to dashboard
+- Full remote terminal experience
+- Automatic session management
 
 ## 📁 Project Structure
 
 ```
 ssh-tunnel-system/
 ├── cmd/
-│   ├── relay/          # Relay server implementation
-│   ├── agent/          # Agent implementation  
-│   └── client/         # Client implementation
+│   ├── relay/             # Relay server implementation
+│   ├── agent/             # Agent implementation  
+│   ├── client/            # Client implementation
+│   ├── ssh-client/        # SSH tunnel client
+│   └── interactive-shell/ # Interactive SSH shell
 ├── internal/
-│   └── common/         # Shared utilities
-│       ├── logger.go   # File logging
-│       ├── message.go  # WebSocket messages
-│       └── db_logger.go # Database logging
-├── logs/               # Log files (auto-created)
-├── bin/                # Compiled binaries (auto-created)
-├── .env                # Environment configuration
-├── setup-database.bat  # Database setup script
-├── start-system.bat    # System launcher
-├── start-relay.bat     # Relay-only launcher
-├── monitor.bat         # Monitoring and debug tool
-├── load-env.bat        # Environment loader
-└── README.md          # This file
+│   └── common/            # Shared utilities
+│       ├── logger.go      # File logging
+│       ├── message.go     # WebSocket messages
+│       └── db_logger.go   # Database logging
+├── frontend/              # Vue.js dashboard
+│   ├── src/
+│   │   ├── components/    # Vue components
+│   │   ├── views/         # Dashboard views
+│   │   └── router/        # Vue router
+│   ├── Dockerfile         # Frontend container
+│   └── nginx.conf         # Nginx configuration
+├── docs/                  # Documentation
+│   └── SSH_INTERACTIVE_SHELL.md # SSH shell guide
+├── logs/                  # Log files (auto-created)
+├── bin/                   # Compiled binaries (auto-created)
+├── docker-compose.yml     # Docker deployment
+├── Dockerfile             # Relay server container
+├── .env                   # Environment configuration
+├── init.sql               # Database schema
+├── setup-database.bat     # Database setup script
+├── start-system.bat       # System launcher
+├── start-relay.bat        # Relay-only launcher
+├── monitor.bat            # Monitoring and debug tool
+├── load-env.bat           # Environment loader
+└── README.md             # This file
 ```
 
 ## 🔧 Configuration
@@ -291,6 +327,11 @@ services:
    go build -ldflags="-s -w" -o bin/relay.exe ./cmd/relay
    go build -ldflags="-s -w" -o bin/agent.exe ./cmd/agent  
    go build -ldflags="-s -w" -o bin/client.exe ./cmd/client
+   go build -ldflags="-s -w" -o bin/ssh-client.exe ./cmd/ssh-client
+   go build -ldflags="-s -w" -o bin/interactive-shell.exe ./cmd/interactive-shell
+   
+   # Build frontend
+   cd frontend && npm run build && cd ..
    ```
 
 3. **Deploy Components**
@@ -317,6 +358,14 @@ go mod tidy
 go build -o bin/relay.exe ./cmd/relay
 go build -o bin/agent.exe ./cmd/agent
 go build -o bin/client.exe ./cmd/client
+go build -o bin/ssh-client.exe ./cmd/ssh-client
+go build -o bin/interactive-shell.exe ./cmd/interactive-shell
+
+# Build frontend
+cd frontend
+npm install
+npm run build
+cd ..
 
 # Run tests
 go test ./...
@@ -343,15 +392,23 @@ ws://relay-host:8080/ws
 - `client_register` - Client registration  
 - `tunnel_data` - Tunnel data transfer
 - `tunnel_close` - Close tunnel connection
+- `ssh_command` - SSH command execution
+- `ssh_response` - SSH command response
+- `shell_input` - Interactive shell input
+- `shell_output` - Interactive shell output
 
 ### REST API
 
 #### Dashboard Endpoints
 - `GET /` - Dashboard home page
 - `POST /login` - Admin authentication
-- `GET /agents` - List connected agents (JSON)
-- `GET /clients` - List connected clients (JSON)
-- `GET /logs` - Connection logs (JSON)
+- `GET /api/agents` - List connected agents (JSON)
+- `GET /api/clients` - List connected clients (JSON)
+- `GET /api/logs` - Connection logs (JSON)
+- `GET /api/tunnel-logs` - Database query logs (JSON)
+- `GET /api/ssh-logs` - SSH command logs (JSON)
+- `POST /api/log-query` - Log database query
+- `POST /api/log-ssh` - Log SSH command
 
 ## ❓ Troubleshooting
 

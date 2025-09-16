@@ -1,10 +1,13 @@
 package main
 
 import (
+    "bytes"
+    "encoding/json"
     "fmt"
     "io"
     "log"
     "net"
+    "net/http"
     "net/url"
     "os"
     "os/exec"
@@ -19,6 +22,19 @@ import (
     "github.com/gorilla/websocket"
     "github.com/spf13/cobra"
 )
+
+// SSHLogRequest represents a request to log SSH command
+type SSHLogRequest struct {
+    SessionID string `json:"session_id"`
+    ClientID  string `json:"client_id"`
+    AgentID   string `json:"agent_id"`
+    Direction string `json:"direction"`
+    User      string `json:"user"`
+    Host      string `json:"host"`
+    Port      string `json:"port"`
+    Command   string `json:"command"`
+    Data      string `json:"data"`
+}
 
 type Agent struct {
     id         string
@@ -422,8 +438,16 @@ func (a *Agent) handleShellCommand(msg *common.Message) {
         return
     }
     
+    // Log SSH command to database
+    a.logSSHCommand(msg.SessionID, msg.ClientID, command, "input")
+    
     // Execute command using the system shell
     output, err := a.executeSystemCommand(command)
+    
+    // Log command output
+    if err == nil {
+        a.logSSHCommand(msg.SessionID, msg.ClientID, output, "output")
+    }
     
     // Send response back
     responseMsg := common.NewMessage("shell_response")
@@ -468,6 +492,53 @@ func (a *Agent) sendShellError(sessionID, clientID, errorMsg string) {
     if err := a.sendMessage(errMsg); err != nil {
         a.logger.Error("Failed to send shell error: %v", err)
     }
+}
+
+func (a *Agent) logSSHCommand(sessionID, clientID, command, direction string) {
+    // Extract host from relay URL for logging
+    relayHost := "localhost:8080" // Default
+    if u, err := url.Parse(a.relayURL); err == nil {
+        relayHost = u.Host
+    }
+    
+    logReq := SSHLogRequest{
+        SessionID: sessionID,
+        ClientID:  clientID,
+        AgentID:   a.id,
+        Direction: direction,
+        User:      "remote", // Could be enhanced to get actual user
+        Host:      relayHost,
+        Port:      "22",
+        Command:   command,
+        Data:      command,
+    }
+
+    // Send to relay API
+    go func() {
+        jsonData, err := json.Marshal(logReq)
+        if err != nil {
+            a.logger.Error("Failed to marshal SSH log: %v", err)
+            return
+        }
+
+        // Extract relay server HTTP URL from WebSocket URL
+        relayHTTP := strings.Replace(a.relayURL, "ws://", "http://", 1)
+        relayHTTP = strings.Replace(relayHTTP, "/ws", "", 1)
+        apiURL := relayHTTP + "/api/log-ssh"
+
+        resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+        if err != nil {
+            a.logger.Error("Failed to send SSH command log: %v", err)
+            return
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode == 200 {
+            a.logger.Debug("SSH command logged: %s -> %s", direction, command)
+        } else {
+            a.logger.Error("Failed to log SSH command, status: %d", resp.StatusCode)
+        }
+    }()
 }
 
 func main() {

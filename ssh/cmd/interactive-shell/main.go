@@ -3,6 +3,7 @@ package main
 import (
     "bufio"
     "bytes"
+    "encoding/base64"
     "encoding/json"
     "fmt"
     "log"
@@ -18,17 +19,21 @@ import (
 )
 
 type InteractiveShell struct {
-    clientID    string
-    clientName  string
-    relayURL    string
-    apiURL      string
-    conn        *websocket.Conn
-    sessionID   string
-    agentID     string
-    remoteHost  string
-    remoteUser  string
-    logger      *common.Logger
-    connected   bool
+    clientID      string
+    clientName    string
+    relayURL      string
+    apiURL        string
+    conn          *websocket.Conn
+    sessionID     string
+    agentID       string
+    remoteHost    string
+    remoteUser    string
+    logger        *common.Logger
+    connected     bool
+    currentPrompt string
+    currentDir    string
+    waitingForResponse bool
+    responseChan  chan string
 }
 
 type ShellMessage struct {
@@ -90,15 +95,18 @@ func runInteractiveShell(cmd *cobra.Command, args []string) {
     apiURL = strings.Replace(apiURL, "/ws/client", "", 1)
 
     shell := &InteractiveShell{
-        clientID:   clientID,
-        clientName: clientName,
-        relayURL:   relayURL,
-        apiURL:     apiURL,
-        agentID:    agentID,
-        remoteHost: remoteHost,
-        remoteUser: remoteUser,
-        logger:     common.NewLogger("SHELL"),
-        connected:  false,
+        clientID:      clientID,
+        clientName:    clientName,
+        relayURL:      relayURL,
+        apiURL:        apiURL,
+        agentID:       agentID,
+        remoteHost:    remoteHost,
+        remoteUser:    remoteUser,
+        logger:        common.NewLogger("SHELL"),
+        connected:     false,
+        currentPrompt: fmt.Sprintf("%s@%s:~$ ", remoteUser, remoteHost),
+        currentDir:    "~",
+        responseChan:  make(chan string, 1),
     }
 
     if err := shell.connect(); err != nil {
@@ -134,20 +142,24 @@ func (s *InteractiveShell) connect() error {
 func (s *InteractiveShell) startInteractiveSession() {
     s.sessionID = fmt.Sprintf("shell_%d", time.Now().UnixNano())
     
-    fmt.Printf("\n🔗 Interactive Shell Connected\n")
+    fmt.Printf("\n🔗 Remote Shell Connected\n")
     fmt.Printf("📡 Agent: %s\n", s.agentID)
-    fmt.Printf("🖥️  Host: %s@%s\n", s.remoteUser, s.remoteHost)
+    fmt.Printf("🖥️  Remote: %s@%s\n", s.remoteUser, s.remoteHost)
     fmt.Printf("🆔 Session: %s\n", s.sessionID[:8])
-    fmt.Printf("💡 Type 'exit' to quit, 'help' for commands\n\n")
+    fmt.Printf("💡 Full remote terminal emulation - Type 'exit' to quit\n\n")
 
     // Start message handler
     go s.handleMessages()
 
-    // Interactive command loop
+    // Initialize remote shell by getting current working directory and prompt
+    s.initializeRemoteShell()
+
+    // Interactive command loop with dynamic prompt
     scanner := bufio.NewScanner(os.Stdin)
     
     for {
-        fmt.Printf("%s@%s:~$ ", s.remoteUser, s.remoteHost)
+        // Display current prompt (updated by remote server)
+        fmt.Print(s.currentPrompt)
         
         if !scanner.Scan() {
             break
@@ -160,23 +172,97 @@ func (s *InteractiveShell) startInteractiveSession() {
         }
         
         if command == "exit" || command == "quit" {
-            fmt.Println("👋 Goodbye!")
+            fmt.Println("👋 Connection closed")
             break
         }
         
-        if command == "help" {
-            s.showHelp()
-            continue
-        }
-        
-        if command == "status" {
-            s.showStatus()
-            continue
-        }
-        
-        // Execute command on remote agent
-        s.executeCommand(command)
+        // Execute command on remote server and wait for response
+        s.executeCommandAndWait(command)
     }
+}
+
+func (s *InteractiveShell) initializeRemoteShell() {
+    // Get current working directory
+    s.executeCommandAndWait("pwd")
+    
+    // Get hostname for better prompt
+    s.executeCommandAndWait("hostname")
+    
+    // Setup shell environment
+    s.executeCommandAndWait("export PS1='\\u@\\h:\\w\\$ '")
+}
+
+func (s *InteractiveShell) executeCommandAndWait(command string) {
+    s.waitingForResponse = true
+    s.executeCommand(command)
+    
+    // Wait for response with timeout
+    select {
+    case response := <-s.responseChan:
+        s.displayResponse(response, command)
+    case <-time.After(10 * time.Second):
+        fmt.Println("⚠️  Command timeout")
+        s.waitingForResponse = false
+    }
+}
+
+func (s *InteractiveShell) displayResponse(response, command string) {
+    s.waitingForResponse = false
+    
+    if response != "" {
+        // Clean and display response
+        cleanResponse := strings.TrimSpace(response)
+        if cleanResponse != "" {
+            fmt.Print(cleanResponse)
+            if !strings.HasSuffix(cleanResponse, "\n") {
+                fmt.Println()
+            }
+        }
+    }
+    
+    // Update prompt based on command
+    s.updatePromptFromCommand(command, response)
+}
+
+func (s *InteractiveShell) updatePromptFromCommand(command, response string) {
+    if strings.HasPrefix(command, "cd ") {
+        // Update current directory after cd command
+        s.executeCommand("pwd")
+        // pwd response will update the prompt
+    } else if command == "pwd" {
+        // Update current directory from pwd response
+        if response != "" {
+            s.currentDir = strings.TrimSpace(response)
+            s.updatePrompt()
+        }
+    } else if command == "hostname" {
+        // Update hostname from response
+        if response != "" {
+            hostname := strings.TrimSpace(response)
+            if hostname != "" {
+                s.remoteHost = hostname
+                s.updatePrompt()
+            }
+        }
+    }
+}
+
+func (s *InteractiveShell) updatePrompt() {
+    // Create dynamic prompt based on current state
+    dir := s.currentDir
+    if dir == "" {
+        dir = "~"
+    }
+    
+    // Shorten long paths
+    if len(dir) > 30 {
+        parts := strings.Split(dir, "/")
+        if len(parts) > 2 {
+            dir = fmt.Sprintf(".../%s", parts[len(parts)-1])
+        }
+    }
+    
+    s.currentPrompt = fmt.Sprintf("%s@%s:%s$ ", s.remoteUser, s.remoteHost, dir)
 }
 
 func (s *InteractiveShell) executeCommand(command string) {
@@ -214,19 +300,60 @@ func (s *InteractiveShell) handleMessages() {
         switch msg.Type {
         case "shell_response":
             if msg.SessionID == s.sessionID {
-                // Display command output
+                // Decode response
+                var response string
                 if msg.Data != "" {
-                    fmt.Print(msg.Data)
+                    // Try to decode base64 output
+                    decodedOutput, err := base64.StdEncoding.DecodeString(msg.Data)
+                    if err != nil {
+                        // If decode fails, use raw data
+                        response = msg.Data
+                    } else {
+                        response = string(decodedOutput)
+                    }
                 }
                 
                 // Log inbound response
                 s.logCommand(msg.DBQuery, "inbound")
                 s.connected = true
+                
+                // Send response to waiting command if any
+                if s.waitingForResponse {
+                    select {
+                    case s.responseChan <- response:
+                    default:
+                        // Channel full, display directly
+                        if response != "" {
+                            fmt.Print(response)
+                            if !strings.HasSuffix(response, "\n") {
+                                fmt.Println()
+                            }
+                        }
+                    }
+                } else {
+                    // Not waiting, display directly (for async commands)
+                    if response != "" {
+                        fmt.Print(response)
+                        if !strings.HasSuffix(response, "\n") {
+                            fmt.Println()
+                        }
+                    }
+                }
             }
             
         case "shell_error":
             if msg.SessionID == s.sessionID {
-                fmt.Printf("❌ Error: %s\n", msg.Data)
+                errorMsg := fmt.Sprintf("❌ Error: %s", msg.Data)
+                
+                if s.waitingForResponse {
+                    select {
+                    case s.responseChan <- errorMsg:
+                    default:
+                        fmt.Println(errorMsg)
+                    }
+                } else {
+                    fmt.Println(errorMsg)
+                }
                 s.connected = false
             }
             
@@ -285,47 +412,4 @@ func (s *InteractiveShell) logCommand(command, direction string) {
             s.logger.Debug("Command logged: %s -> %s", direction, command)
         }
     }()
-}
-
-func (s *InteractiveShell) showHelp() {
-    fmt.Printf(`
-📚 Interactive Shell Help:
-
-🔧 Built-in Commands:
-  help     - Show this help message
-  status   - Show connection status
-  exit     - Exit the shell
-  quit     - Exit the shell
-
-🐧 Linux Commands (examples):
-  ls       - List files
-  pwd      - Show current directory
-  cd <dir> - Change directory
-  cat <file> - Show file content
-  ps aux   - List processes
-  top      - System monitor
-  df -h    - Disk usage
-  free -m  - Memory usage
-  uname -a - System information
-
-💡 Tips:
-  - All commands are executed on the remote agent
-  - Command history is logged to the dashboard
-  - Use Ctrl+C to interrupt long-running commands
-
-`)
-}
-
-func (s *InteractiveShell) showStatus() {
-    fmt.Printf(`
-📊 Connection Status:
-
-🆔 Client ID: %s
-📡 Agent ID: %s
-🖥️  Remote: %s@%s
-🔗 Session: %s
-📡 Relay: %s
-✅ Status: Connected
-
-`, s.clientID, s.agentID, s.remoteUser, s.remoteHost, s.sessionID[:8], s.relayURL)
 }
