@@ -142,7 +142,7 @@ func (a *Agent) messageLoop() {
     defer a.stop()
 
     for a.running {
-        _, messageData, err := a.conn.ReadMessage()
+        messageType, messageData, err := a.conn.ReadMessage()
         if err != nil {
             if a.running {
                 a.logger.Error("Failed to read message: %v", err)
@@ -150,14 +150,79 @@ func (a *Agent) messageLoop() {
             break
         }
 
-        message, err := common.FromJSON(messageData)
-        if err != nil {
-            a.logger.Error("Failed to parse message: %v", err)
-            continue
-        }
+        if messageType == websocket.BinaryMessage {
+            // Handle binary SSH data
+            a.handleBinarySSHData(messageData)
+        } else if messageType == websocket.TextMessage {
+            // Handle JSON messages
+            message, err := common.FromJSON(messageData)
+            if err != nil {
+                a.logger.Error("Failed to parse JSON message: %v", err)
+                continue
+            }
 
-        a.handleMessage(message)
+            a.handleMessage(message)
+        }
     }
+}
+
+func (a *Agent) handleBinarySSHData(messageData []byte) {
+    // Parse binary SSH data frame
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    
+    if len(messageData) < 6 {
+        a.logger.Error("Binary message too short: %d bytes", len(messageData))
+        return
+    }
+    
+    offset := 0
+    
+    // Check type (4 bytes)
+    if string(messageData[0:4]) != "DATA" {
+        a.logger.Error("Invalid binary message type: %s", string(messageData[0:4]))
+        return
+    }
+    offset += 4
+    
+    // Read client ID
+    clientIDLen := int(messageData[offset])
+    offset++
+    if offset+clientIDLen > len(messageData) {
+        a.logger.Error("Invalid client ID length")
+        return
+    }
+    clientID := string(messageData[offset:offset+clientIDLen])
+    offset += clientIDLen
+    
+    // Read session ID
+    if offset >= len(messageData) {
+        a.logger.Error("Missing session ID")
+        return
+    }
+    sessionIDLen := int(messageData[offset])
+    offset++
+    if offset+sessionIDLen > len(messageData) {
+        a.logger.Error("Invalid session ID length")
+        return
+    }
+    sessionID := string(messageData[offset:offset+sessionIDLen])
+    offset += sessionIDLen
+    
+    // Extract SSH data
+    sshData := messageData[offset:]
+    
+    a.logger.Debug("Binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", clientID, sessionID, len(sshData))
+    
+    // Create message structure for handling
+    msg := &common.Message{
+        Type:      common.MsgTypeData,
+        ClientID:  clientID,
+        SessionID: sessionID,
+        Data:      sshData,
+    }
+    
+    // Handle as regular data message
+    a.handleData(msg)
 }
 
 func (a *Agent) handleMessage(msg *common.Message) {
@@ -357,12 +422,67 @@ func (a *Agent) sendMessage(msg *common.Message) error {
         a.logger.Error("❌ CRITICAL: Attempting to send message with empty AgentID!")
     }
     
+    // Check if this is SSH data that should be sent as binary
+    if msg.Type == common.MsgTypeData && len(msg.Data) > 0 && a.isSSHSession(msg.SessionID) {
+        return a.sendBinarySSHData(msg)
+    }
+    
+    // Send as JSON for control messages
     data, err := msg.ToJSON()
     if err != nil {
         return fmt.Errorf("failed to serialize message: %v", err)
     }
 
     return a.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func (a *Agent) isSSHSession(sessionID string) bool {
+    a.mutex.RLock()
+    target, exists := a.targets[sessionID]
+    a.mutex.RUnlock()
+    
+    if !exists {
+        return false
+    }
+    
+    // Check if target is SSH port
+    return strings.Contains(target, ":22") || strings.Contains(target, ":2222")
+}
+
+func (a *Agent) sendBinarySSHData(msg *common.Message) error {
+    // Create binary frame for SSH data
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    
+    clientID := msg.ClientID
+    if clientID == "" {
+        clientID = ""
+    }
+    sessionID := msg.SessionID
+    if sessionID == "" {
+        sessionID = ""
+    }
+    
+    // Build binary frame
+    frame := make([]byte, 0, 4+1+len(clientID)+1+len(sessionID)+len(msg.Data))
+    
+    // Type (4 bytes)
+    frame = append(frame, []byte("DATA")...)
+    
+    // ClientID length and data
+    frame = append(frame, byte(len(clientID)))
+    frame = append(frame, []byte(clientID)...)
+    
+    // SessionID length and data
+    frame = append(frame, byte(len(sessionID)))
+    frame = append(frame, []byte(sessionID)...)
+    
+    // SSH data
+    frame = append(frame, msg.Data...)
+    
+    a.logger.Debug("Sending binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", 
+        clientID, sessionID, len(msg.Data))
+    
+    return a.conn.WriteMessage(websocket.BinaryMessage, frame)
 }
 
 func (a *Agent) sendDatabaseQuery(sessionID, query, operation, tableName, protocol string) {

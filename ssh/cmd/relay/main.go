@@ -467,26 +467,91 @@ func (rs *RelayServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
     rs.logger.Debug("Connection headers: %+v", r.Header)
 
     for {
-        _, messageData, err := conn.ReadMessage()
+        messageType, messageData, err := conn.ReadMessage()
         if err != nil {
             rs.logger.Error("Failed to read message from %s: %v", r.RemoteAddr, err)
             break
         }
 
-        rs.logger.Debug("Received raw message: %s", string(messageData))
+        if messageType == websocket.BinaryMessage {
+            // Handle binary SSH data
+            rs.handleBinarySSHData(conn, messageData)
+        } else if messageType == websocket.TextMessage {
+            // Handle JSON messages
+            rs.logger.Debug("Received raw JSON message: %s", string(messageData))
 
-        message, err := common.FromJSON(messageData)
-        if err != nil {
-            rs.logger.Error("Failed to parse message from %s: %v", r.RemoteAddr, err)
-            continue
+            message, err := common.FromJSON(messageData)
+            if err != nil {
+                rs.logger.Error("Failed to parse JSON message from %s: %v", r.RemoteAddr, err)
+                continue
+            }
+
+            rs.handleMessage(conn, message)
         }
-
-        rs.handleMessage(conn, message)
     }
 
     // Clean up connection
     rs.logger.Info("Cleaning up connection from %s", r.RemoteAddr)
     rs.cleanupConnection(conn)
+}
+
+func (rs *RelayServer) handleBinarySSHData(conn *websocket.Conn, messageData []byte) {
+    // Parse binary SSH data frame
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    
+    if len(messageData) < 6 {
+        rs.logger.Error("Binary message too short: %d bytes", len(messageData))
+        return
+    }
+    
+    offset := 0
+    
+    // Check type (4 bytes)
+    if string(messageData[0:4]) != "DATA" {
+        rs.logger.Error("Invalid binary message type: %s", string(messageData[0:4]))
+        return
+    }
+    offset += 4
+    
+    // Read client ID
+    clientIDLen := int(messageData[offset])
+    offset++
+    if offset+clientIDLen > len(messageData) {
+        rs.logger.Error("Invalid client ID length")
+        return
+    }
+    clientID := string(messageData[offset:offset+clientIDLen])
+    offset += clientIDLen
+    
+    // Read session ID
+    if offset >= len(messageData) {
+        rs.logger.Error("Missing session ID")
+        return
+    }
+    sessionIDLen := int(messageData[offset])
+    offset++
+    if offset+sessionIDLen > len(messageData) {
+        rs.logger.Error("Invalid session ID length")
+        return
+    }
+    sessionID := string(messageData[offset:offset+sessionIDLen])
+    offset += sessionIDLen
+    
+    // Extract SSH data
+    sshData := messageData[offset:]
+    
+    rs.logger.Debug("Binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", clientID, sessionID, len(sshData))
+    
+    // Create message structure for forwarding
+    msg := &common.Message{
+        Type:      common.MsgTypeData,
+        ClientID:  clientID,
+        SessionID: sessionID,
+        Data:      sshData,
+    }
+    
+    // Forward to appropriate agent
+    rs.handleData(conn, msg)
 }
 
 func (rs *RelayServer) handleMessage(conn *websocket.Conn, msg *common.Message) {
@@ -844,6 +909,13 @@ func (rs *RelayServer) handleShellError(conn *websocket.Conn, msg *common.Messag
 }
 
 func (rs *RelayServer) sendMessage(conn *websocket.Conn, msg *common.Message) {
+    // Check if this is SSH data that should be sent as binary
+    if msg.Type == common.MsgTypeData && len(msg.Data) > 0 && rs.isSSHData(msg) {
+        rs.sendBinarySSHData(conn, msg)
+        return
+    }
+    
+    // Send as JSON for control messages
     data, err := msg.ToJSON()
     if err != nil {
         rs.logger.Error("Failed to serialize message: %v", err)
@@ -852,6 +924,58 @@ func (rs *RelayServer) sendMessage(conn *websocket.Conn, msg *common.Message) {
 
     if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
         rs.logger.Error("Failed to send message: %v", err)
+    }
+}
+
+func (rs *RelayServer) isSSHData(msg *common.Message) bool {
+    // Check if this message is part of an SSH session
+    rs.mutex.RLock()
+    session, exists := rs.sessions[msg.SessionID]
+    rs.mutex.RUnlock()
+    
+    if !exists {
+        return false
+    }
+    
+    // If target contains port 22 or session was created with SSH protocol, treat as SSH
+    return strings.Contains(session.Target, ":22") || 
+           strings.Contains(session.Target, ":2222")
+}
+
+func (rs *RelayServer) sendBinarySSHData(conn *websocket.Conn, msg *common.Message) {
+    // Create binary frame for SSH data
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    
+    var clientID, sessionID string
+    if msg.ClientID != "" {
+        clientID = msg.ClientID
+    }
+    if msg.SessionID != "" {
+        sessionID = msg.SessionID
+    }
+    
+    // Build binary frame
+    frame := make([]byte, 0, 4+1+len(clientID)+1+len(sessionID)+len(msg.Data))
+    
+    // Type (4 bytes)
+    frame = append(frame, []byte("DATA")...)
+    
+    // ClientID length and data
+    frame = append(frame, byte(len(clientID)))
+    frame = append(frame, []byte(clientID)...)
+    
+    // SessionID length and data
+    frame = append(frame, byte(len(sessionID)))
+    frame = append(frame, []byte(sessionID)...)
+    
+    // SSH data
+    frame = append(frame, msg.Data...)
+    
+    rs.logger.Debug("Sending binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", 
+        clientID, sessionID, len(msg.Data))
+    
+    if err := conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+        rs.logger.Error("Failed to send binary SSH data: %v", err)
     }
 }
 
