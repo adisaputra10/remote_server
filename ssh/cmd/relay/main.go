@@ -583,16 +583,27 @@ func (rs *RelayServer) handleConnect(conn *websocket.Conn, msg *common.Message) 
     rs.logger.Info("New session created: %s (Agent: %s, Client: %s, Target: %s)",
         session.ID, session.AgentID, session.ClientID, session.Target)
 
+    // Debug: List all available agents
+    rs.logger.Info("=== AVAILABLE AGENTS ===")
+    if len(rs.agents) == 0 {
+        rs.logger.Info("❌ No agents registered!")
+    } else {
+        for agentID, agent := range rs.agents {
+            rs.logger.Info("✅ Agent: %s (Status: %s)", agentID, agent.Status)
+        }
+    }
+    rs.logger.Info("Looking for agent: %s", msg.AgentID)
+
     // Forward connect message to agent
     if agentConn, exists := rs.agents[msg.AgentID]; exists {
         connectMsg := common.NewMessage(common.MsgTypeConnect)
         connectMsg.SessionID = session.ID
         connectMsg.ClientID = msg.ClientID
         connectMsg.Target = msg.Target
-        rs.logger.Debug("Forwarding connect message to agent %s", msg.AgentID)
+        rs.logger.Info("✅ Forwarding connect message to agent %s", msg.AgentID)
         rs.sendMessage(agentConn.Connection, connectMsg)
     } else {
-        rs.logger.Error("Agent not found: %s", msg.AgentID)
+        rs.logger.Error("❌ Agent not found: %s", msg.AgentID)
         errorMsg := common.NewMessage(common.MsgTypeError)
         errorMsg.SessionID = session.ID
         errorMsg.Error = "Agent not available"

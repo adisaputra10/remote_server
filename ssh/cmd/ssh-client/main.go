@@ -28,6 +28,7 @@ type SSHClient struct {
     sshHost     string
     sshPort     string
     sshUser     string
+    sshPassword string
     localPort   string
     logger      *common.Logger
     dbLogger    *common.DatabaseQueryLogger
@@ -65,11 +66,12 @@ func main() {
 
     rootCmd.Flags().StringP("client-id", "c", "ssh-client-1", "Client ID")
     rootCmd.Flags().StringP("client-name", "n", "SSH Client", "Client name")
-    rootCmd.Flags().StringP("relay", "r", "ws://localhost:8080/ws/client", "Relay server WebSocket URL")
-    rootCmd.Flags().StringP("agent", "a", "ssh-agent", "Target agent ID")
+    rootCmd.Flags().StringP("relay", "r", "ws://168.231.119.242:8080/ws/client", "Relay server WebSocket URL")
+    rootCmd.Flags().StringP("agent", "a", "agent-linux", "Target agent ID")
     rootCmd.Flags().StringP("ssh-host", "H", "127.0.0.1", "SSH target host")
     rootCmd.Flags().StringP("ssh-port", "P", "22", "SSH target port")
     rootCmd.Flags().StringP("ssh-user", "u", "root", "SSH username")
+    rootCmd.Flags().StringP("ssh-password", "w", "1qazxsw2", "SSH password")
     rootCmd.Flags().StringP("local-port", "p", "2222", "Local port to listen")
 
     if err := rootCmd.Execute(); err != nil {
@@ -86,17 +88,19 @@ func runSSHClient(cmd *cobra.Command, args []string) {
     sshHost, _ := cmd.Flags().GetString("ssh-host")
     sshPort, _ := cmd.Flags().GetString("ssh-port")
     sshUser, _ := cmd.Flags().GetString("ssh-user")
+    sshPassword, _ := cmd.Flags().GetString("ssh-password")
     localPort, _ := cmd.Flags().GetString("local-port")
 
     client := &SSHClient{
-        clientID:   clientID,
-        clientName: clientName,
-        relayURL:   relayURL,
-        agentID:    agentID,
-        sshHost:    sshHost,
-        sshPort:    sshPort,
-        sshUser:    sshUser,
-        localPort:  localPort,
+        clientID:    clientID,
+        clientName:  clientName,
+        relayURL:    relayURL,
+        agentID:     agentID,
+        sshHost:     sshHost,
+        sshPort:     sshPort,
+        sshUser:     sshUser,
+        sshPassword: sshPassword,
+        localPort:   localPort,
         logger:     common.NewLogger(fmt.Sprintf("SSH-CLIENT-%s", clientID)),
     }
 

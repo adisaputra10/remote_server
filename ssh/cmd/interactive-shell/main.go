@@ -195,17 +195,27 @@ func (s *InteractiveShell) initializeRemoteShell() {
 }
 
 func (s *InteractiveShell) executeCommandAndWait(command string) {
+    s.logger.Info("=== EXECUTE AND WAIT START ===")
+    s.logger.Info("Command: %s", command)
+    s.logger.Info("waitingForResponse: %t", s.waitingForResponse)
+    
     s.waitingForResponse = true
     s.executeCommand(command)
+    
+    s.logger.Info("Waiting for response...")
     
     // Wait for response with timeout
     select {
     case response := <-s.responseChan:
+        s.logger.Info("✅ Response received from channel: %s", response)
         s.displayResponse(response, command)
     case <-time.After(10 * time.Second):
+        s.logger.Error("❌ Command timeout after 10 seconds")
         fmt.Println("⚠️  Command timeout")
         s.waitingForResponse = false
     }
+    
+    s.logger.Info("=== EXECUTE AND WAIT END ===")
 }
 
 func (s *InteractiveShell) displayResponse(response, command string) {
@@ -309,8 +319,20 @@ func (s *InteractiveShell) handleMessages() {
                 s.logger.Info("Data length: %d", len(msg.Data))
                 s.logger.Info("Raw Data: %s", string(msg.Data))
                 
-                // Get response from Data field ([]byte)
-                response := string(msg.Data)
+                // Get response from Data field ([]byte) and decode Base64
+                rawResponse := string(msg.Data)
+                var response string
+                
+                // Try to decode as Base64
+                if decodedBytes, err := base64.StdEncoding.DecodeString(rawResponse); err == nil {
+                    response = string(decodedBytes)
+                    s.logger.Info("✅ Base64 decoded successfully")
+                    s.logger.Info("Decoded response: %s", response)
+                } else {
+                    // If Base64 decode fails, use raw data
+                    response = rawResponse
+                    s.logger.Info("⚠️ Base64 decode failed, using raw data")
+                }
                 
                 // Log inbound response
                 s.logCommand(msg.DBQuery, "inbound")
@@ -327,9 +349,6 @@ func (s *InteractiveShell) handleMessages() {
                         if response != "" {
                             fmt.Print(response)
                             if !strings.HasSuffix(response, "\n") {
-                                fmt.Println()
-                            }
-                        }
                                 fmt.Println()
                             }
                         }
