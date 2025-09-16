@@ -621,7 +621,13 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
         return
     }
 
-    rs.logger.Debug("Forwarding data for session %s: %d bytes", msg.SessionID, len(msg.Data))
+    rs.logger.Info("=== DATA FORWARDING DEBUG ===")
+    rs.logger.Info("Session ID: %s", msg.SessionID)
+    rs.logger.Info("Message ClientID: '%s'", msg.ClientID)
+    rs.logger.Info("Message AgentID: '%s'", msg.AgentID)
+    rs.logger.Info("Session ClientID: '%s'", session.ClientID)
+    rs.logger.Info("Session AgentID: '%s'", session.AgentID)
+    rs.logger.Info("Data length: %d bytes", len(msg.Data))
 
     var targetConn *websocket.Conn
     rs.mutex.RLock()
@@ -629,21 +635,28 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
         // Data from client to agent
         if agent, exists := rs.agents[session.AgentID]; exists {
             targetConn = agent.Connection
+            rs.logger.Info("✅ Forwarding client data to agent %s", session.AgentID)
+        } else {
+            rs.logger.Error("❌ Agent %s not found for client data", session.AgentID)
         }
-        rs.logger.Debug("Forwarding client data to agent %s", session.AgentID)
     } else if msg.AgentID != "" {
         // Data from agent to client
         if client, exists := rs.clients[session.ClientID]; exists {
             targetConn = client.Connection
+            rs.logger.Info("✅ Forwarding agent data to client %s", session.ClientID)
+        } else {
+            rs.logger.Error("❌ Client %s not found for agent data", session.ClientID)
         }
-        rs.logger.Debug("Forwarding agent data to client %s", session.ClientID)
+    } else {
+        rs.logger.Error("❌ Both ClientID and AgentID are empty!")
     }
     rs.mutex.RUnlock()
 
     if targetConn != nil {
         rs.sendMessage(targetConn, msg)
+        rs.logger.Info("✅ Data forwarded successfully")
     } else {
-        rs.logger.Error("Target connection not found for session: %s", msg.SessionID)
+        rs.logger.Error("❌ Target connection not found for session: %s", msg.SessionID)
     }
 }
 
