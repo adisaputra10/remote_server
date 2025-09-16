@@ -150,10 +150,7 @@ func (a *Agent) messageLoop() {
             break
         }
 
-        if messageType == websocket.BinaryMessage {
-            // Handle binary SSH data
-            a.handleBinarySSHData(messageData)
-        } else if messageType == websocket.TextMessage {
+        if messageType == websocket.TextMessage {
             // Handle JSON messages
             message, err := common.FromJSON(messageData)
             if err != nil {
@@ -162,6 +159,9 @@ func (a *Agent) messageLoop() {
             }
 
             a.handleMessage(message)
+        } else if messageType == websocket.BinaryMessage {
+            // For now, ignore binary messages to avoid corruption
+            a.logger.Debug("Ignoring binary message (%d bytes) - using JSON only mode", len(messageData))
         }
     }
 }
@@ -438,12 +438,7 @@ func (a *Agent) sendMessage(msg *common.Message) error {
         a.logger.Error("❌ CRITICAL: Attempting to send message with empty AgentID!")
     }
     
-    // Check if this is SSH data that should be sent as binary
-    if msg.Type == common.MsgTypeData && len(msg.Data) > 0 && a.isSSHSession(msg.SessionID) {
-        return a.sendBinarySSHData(msg)
-    }
-    
-    // Send as JSON for control messages
+    // Always use JSON for now to avoid binary corruption
     data, err := msg.ToJSON()
     if err != nil {
         return fmt.Errorf("failed to serialize message: %v", err)

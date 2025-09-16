@@ -473,10 +473,7 @@ func (rs *RelayServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
             break
         }
 
-        if messageType == websocket.BinaryMessage {
-            // Handle binary SSH data
-            rs.handleBinarySSHData(conn, messageData)
-        } else if messageType == websocket.TextMessage {
+        if messageType == websocket.TextMessage {
             // Handle JSON messages
             rs.logger.Debug("Received raw JSON message: %s", string(messageData))
 
@@ -487,6 +484,9 @@ func (rs *RelayServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
             }
 
             rs.handleMessage(conn, message)
+        } else if messageType == websocket.BinaryMessage {
+            // For now, ignore binary messages to avoid corruption
+            rs.logger.Debug("Ignoring binary message (%d bytes) - using JSON only mode", len(messageData))
         }
     }
 
@@ -925,13 +925,9 @@ func (rs *RelayServer) handleShellError(conn *websocket.Conn, msg *common.Messag
 }
 
 func (rs *RelayServer) sendMessage(conn *websocket.Conn, msg *common.Message) {
-    // Check if this is SSH data that should be sent as binary
-    if msg.Type == common.MsgTypeData && len(msg.Data) > 0 && rs.isSSHData(msg) {
-        rs.sendBinarySSHData(conn, msg)
-        return
-    }
+    // For now, always use JSON to avoid binary frame corruption issues
+    // TODO: Re-enable binary optimization after debugging
     
-    // Send as JSON for control messages
     data, err := msg.ToJSON()
     if err != nil {
         rs.logger.Error("Failed to serialize message: %v", err)
