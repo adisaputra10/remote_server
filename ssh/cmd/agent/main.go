@@ -431,7 +431,11 @@ func (a *Agent) detectProtocol(target string) string {
 // handleShellCommand executes shell commands on the agent machine
 func (a *Agent) handleShellCommand(msg *common.Message) {
     command := msg.DBQuery // Use DBQuery field for command
-    a.logger.Info("Executing shell command: %s", command)
+    a.logger.Info("=== EXECUTING SHELL COMMAND ===")
+    a.logger.Info("Command: %s", command)
+    a.logger.Info("Agent ID: %s", a.id)
+    a.logger.Info("Session ID: %s", msg.SessionID)
+    a.logger.Info("Client ID: %s", msg.ClientID)
     
     if command == "" {
         a.sendShellError(msg.SessionID, msg.ClientID, "Empty command")
@@ -443,6 +447,10 @@ func (a *Agent) handleShellCommand(msg *common.Message) {
     
     // Execute command using the system shell
     output, err := a.executeSystemCommand(command)
+    a.logger.Info("Command output: %s", output)
+    if err != nil {
+        a.logger.Error("Command error: %v", err)
+    }
     
     // Log command output
     if err == nil {

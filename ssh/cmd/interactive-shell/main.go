@@ -118,6 +118,8 @@ func runInteractiveShell(cmd *cobra.Command, args []string) {
 }
 
 func (s *InteractiveShell) connect() error {
+    s.logger.Info("Attempting to connect to relay: %s", s.relayURL)
+    
     var err error
     s.conn, _, err = websocket.DefaultDialer.Dial(s.relayURL, nil)
     if err != nil {
