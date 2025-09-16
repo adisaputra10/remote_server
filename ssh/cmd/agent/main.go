@@ -290,6 +290,19 @@ func (a *Agent) forwardFromTarget(sessionID string, conn net.Conn) {
             dataMsg.Data = make([]byte, n)
             copy(dataMsg.Data, buffer[:n])
 
+            // Validation before sending
+            if dataMsg.AgentID == "" {
+                a.logger.Error("❌ CRITICAL: AgentID is empty before sending!")
+                dataMsg.AgentID = a.id
+            }
+            if dataMsg.SessionID == "" {
+                a.logger.Error("❌ CRITICAL: SessionID is empty before sending!")
+                continue
+            }
+            
+            a.logger.Debug("Sending data message - AgentID: '%s', SessionID: '%s', DataLen: %d", 
+                dataMsg.AgentID, dataMsg.SessionID, len(dataMsg.Data))
+
             if err := a.sendMessage(dataMsg); err != nil {
                 a.logger.Error("Failed to forward data to relay for session %s: %v", sessionID, err)
                 break
@@ -333,6 +346,17 @@ func (a *Agent) closeSession(sessionID string) {
 }
 
 func (a *Agent) sendMessage(msg *common.Message) error {
+    // Debug validation
+    a.logger.Debug("=== SEND MESSAGE DEBUG ===")
+    a.logger.Debug("Type: %s", msg.Type)
+    a.logger.Debug("AgentID: '%s'", msg.AgentID)
+    a.logger.Debug("SessionID: '%s'", msg.SessionID)
+    a.logger.Debug("ClientID: '%s'", msg.ClientID)
+    
+    if msg.AgentID == "" {
+        a.logger.Error("❌ CRITICAL: Attempting to send message with empty AgentID!")
+    }
+    
     data, err := msg.ToJSON()
     if err != nil {
         return fmt.Errorf("failed to serialize message: %v", err)
