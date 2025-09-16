@@ -302,18 +302,15 @@ func (s *InteractiveShell) handleMessages() {
         switch msg.Type {
         case "shell_response":
             if msg.SessionID == s.sessionID {
-                // Decode response
-                var response string
-                if msg.Data != "" {
-                    // Try to decode base64 output
-                    decodedOutput, err := base64.StdEncoding.DecodeString(msg.Data)
-                    if err != nil {
-                        // If decode fails, use raw data
-                        response = msg.Data
-                    } else {
-                        response = string(decodedOutput)
-                    }
-                }
+                s.logger.Info("=== RECEIVED SHELL RESPONSE ===")
+                s.logger.Info("Session ID: %s", msg.SessionID)
+                s.logger.Info("Agent ID: %s", msg.AgentID)
+                s.logger.Info("Command: %s", msg.DBQuery)
+                s.logger.Info("Data length: %d", len(msg.Data))
+                s.logger.Info("Raw Data: %s", string(msg.Data))
+                
+                // Get response from Data field ([]byte)
+                response := string(msg.Data)
                 
                 // Log inbound response
                 s.logCommand(msg.DBQuery, "inbound")
@@ -323,11 +320,16 @@ func (s *InteractiveShell) handleMessages() {
                 if s.waitingForResponse {
                     select {
                     case s.responseChan <- response:
+                        s.logger.Info("✅ Response sent to responseChan")
                     default:
                         // Channel full, display directly
+                        s.logger.Info("⚠️ Response channel full, displaying directly")
                         if response != "" {
                             fmt.Print(response)
                             if !strings.HasSuffix(response, "\n") {
+                                fmt.Println()
+                            }
+                        }
                                 fmt.Println()
                             }
                         }

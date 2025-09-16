@@ -694,15 +694,23 @@ func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) 
 
 // handleShellCommand forwards shell commands from client to agent
 func (rs *RelayServer) handleShellCommand(conn *websocket.Conn, msg *common.Message) {
-    rs.logger.Info("Forwarding shell command from client %s to agent %s", msg.ClientID, msg.AgentID)
+    rs.logger.Info("=== SHELL COMMAND ROUTING ===")
+    rs.logger.Info("From Client: %s", msg.ClientID)
+    rs.logger.Info("To Agent: %s", msg.AgentID)
+    rs.logger.Info("Command: %s", msg.DBQuery)
+    rs.logger.Info("Session: %s", msg.SessionID)
     
-    // Find the target agent
+    // List all available agents
     rs.mutex.RLock()
+    rs.logger.Info("Available agents:")
+    for agentID, agent := range rs.agents {
+        rs.logger.Info("  - Agent ID: %s, Status: %s", agentID, agent.Status)
+    }
     agent, exists := rs.agents[msg.AgentID]
     rs.mutex.RUnlock()
     
     if !exists {
-        rs.logger.Error("Agent %s not found for shell command", msg.AgentID)
+        rs.logger.Error("❌ Agent %s not found for shell command", msg.AgentID)
         // Send error back to client
         errorMsg := common.NewMessage("shell_error")
         errorMsg.SessionID = msg.SessionID
@@ -713,8 +721,12 @@ func (rs *RelayServer) handleShellCommand(conn *websocket.Conn, msg *common.Mess
         return
     }
     
+    rs.logger.Info("✅ Found agent %s, forwarding command...", msg.AgentID)
+    
     // Forward the command to agent
     rs.sendMessage(agent.Connection, msg)
+    
+    rs.logger.Info("✅ Command forwarded successfully to agent %s", msg.AgentID)
     
     // Log the shell command
     rs.logSSHCommand(msg.SessionID, msg.AgentID, msg.ClientID, "outbound", "root", "remote", "22", msg.DBQuery, len(msg.DBQuery))
@@ -722,7 +734,11 @@ func (rs *RelayServer) handleShellCommand(conn *websocket.Conn, msg *common.Mess
 
 // handleShellResponse forwards shell command responses from agent to client
 func (rs *RelayServer) handleShellResponse(conn *websocket.Conn, msg *common.Message) {
-    rs.logger.Debug("Forwarding shell response from agent %s to client %s", msg.AgentID, msg.ClientID)
+    rs.logger.Info("=== SHELL RESPONSE ROUTING ===")
+    rs.logger.Info("From Agent: %s", msg.AgentID)
+    rs.logger.Info("To Client: %s", msg.ClientID)
+    rs.logger.Info("Response Data: %s", string(msg.Data))
+    rs.logger.Info("Session: %s", msg.SessionID)
     
     // Find the target client
     rs.mutex.RLock()
@@ -730,12 +746,16 @@ func (rs *RelayServer) handleShellResponse(conn *websocket.Conn, msg *common.Mes
     rs.mutex.RUnlock()
     
     if !exists {
-        rs.logger.Error("Client %s not found for shell response", msg.ClientID)
+        rs.logger.Error("❌ Client %s not found for shell response", msg.ClientID)
         return
     }
     
+    rs.logger.Info("✅ Found client %s, forwarding response...", msg.ClientID)
+    
     // Forward the response to client
     rs.sendMessage(client.Connection, msg)
+    
+    rs.logger.Info("✅ Response forwarded successfully to client %s", msg.ClientID)
     
     // Log the shell response
     rs.logSSHCommand(msg.SessionID, msg.AgentID, msg.ClientID, "inbound", "root", "remote", "22", msg.DBQuery, len(msg.Data))
