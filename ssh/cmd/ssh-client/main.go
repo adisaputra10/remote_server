@@ -6,13 +6,13 @@ import (
     "encoding/json"
     "fmt"
     "io"
-    "log"
     "net"
     "net/http"
     "os"
-    "os/exec"
     "strings"
     "time"
+
+    "ssh-tunnel/internal/common"
 
     "github.com/gorilla/websocket"
     "github.com/spf13/cobra"
@@ -29,6 +29,8 @@ type SSHClient struct {
     sshPort     string
     sshUser     string
     localPort   string
+    logger      *common.Logger
+    dbLogger    *common.DatabaseQueryLogger
 }
 
 type SSHLogRequest struct {
@@ -95,14 +97,23 @@ func runSSHClient(cmd *cobra.Command, args []string) {
         sshPort:    sshPort,
         sshUser:    sshUser,
         localPort:  localPort,
+        logger:     common.NewLogger(fmt.Sprintf("SSH-CLIENT-%s", clientID)),
     }
 
+    // Initialize database logger for SSH commands (simplified)
+    client.dbLogger = common.NewDatabaseQueryLogger(client.logger, "ssh")
+
     if err := client.connect(); err != nil {
-        log.Fatalf("Failed to connect: %v", err)
+        client.logger.Error("Failed to connect: %v", err)
+        os.Exit(1)
     }
 
     // Start local SSH server
     client.startLocalSSHServer()
+}
+
+func (c *SSHClient) logSSHActivity(operation, query string) {
+    c.logger.Info("SSH Activity logged: %s - %s", operation, query)
 }
 
 func (c *SSHClient) connect() error {
@@ -123,24 +134,25 @@ func (c *SSHClient) connect() error {
         return fmt.Errorf("failed to register: %v", err)
     }
 
-    log.Printf("Connected to relay server as %s (%s)", c.clientID, c.clientName)
+    c.logger.Info("Connected to relay server as %s (%s)", c.clientID, c.clientName)
     return nil
 }
 
 func (c *SSHClient) startLocalSSHServer() {
     listener, err := net.Listen("tcp", ":"+c.localPort)
     if err != nil {
-        log.Fatalf("Failed to listen on port %s: %v", c.localPort, err)
+        c.logger.Error("Failed to listen on port %s: %v", c.localPort, err)
+        os.Exit(1)
     }
     defer listener.Close()
 
-    log.Printf("SSH tunnel listening on port %s", c.localPort)
-    log.Printf("Connect using: ssh %s@localhost -p %s", c.sshUser, c.localPort)
+    c.logger.Info("SSH tunnel listening on port %s", c.localPort)
+    c.logger.Info("Connect using: ssh %s@localhost -p %s", c.sshUser, c.localPort)
 
     for {
         conn, err := listener.Accept()
         if err != nil {
-            log.Printf("Failed to accept connection: %v", err)
+            c.logger.Error("Failed to accept connection: %v", err)
             continue
         }
 
@@ -151,7 +163,7 @@ func (c *SSHClient) startLocalSSHServer() {
 func (c *SSHClient) handleSSHConnection(conn net.Conn) {
     defer conn.Close()
 
-    log.Printf("New SSH connection from %s", conn.RemoteAddr())
+    c.logger.Info("New SSH connection from %s", conn.RemoteAddr())
 
     // Create tunnel session
     c.sessionID = fmt.Sprintf("ssh_%d", time.Now().UnixNano())
@@ -168,7 +180,7 @@ func (c *SSHClient) handleSSHConnection(conn net.Conn) {
     }
 
     if err := c.conn.WriteJSON(connectMsg); err != nil {
-        log.Printf("Failed to request tunnel: %v", err)
+        c.logger.Error("Failed to request tunnel: %v", err)
         return
     }
 
@@ -188,7 +200,7 @@ func (c *SSHClient) handleSSHLogging(conn net.Conn) {
         n, err := reader.Read(data)
         if err != nil {
             if err != io.EOF {
-                log.Printf("Error reading SSH data: %v", err)
+                c.logger.Error("Error reading SSH data: %v", err)
             }
             break
         }
@@ -252,6 +264,9 @@ func extractSSHCommand(data string) string {
 }
 
 func (c *SSHClient) logSSHCommand(command, direction, data string) {
+    // Log to local logger first
+    c.logger.Info("SSH Command: %s [%s] -> %s", direction, command, c.sshHost)
+    
     logReq := SSHLogRequest{
         SessionID: c.sessionID,
         ClientID:  c.clientID,
@@ -267,7 +282,7 @@ func (c *SSHClient) logSSHCommand(command, direction, data string) {
     // Send to relay server
     jsonData, err := json.Marshal(logReq)
     if err != nil {
-        log.Printf("Failed to marshal SSH log: %v", err)
+        c.logger.Error("Failed to marshal SSH log: %v", err)
         return
     }
 
@@ -277,15 +292,15 @@ func (c *SSHClient) logSSHCommand(command, direction, data string) {
 
     resp, err := http.Post(relayAPIURL, "application/json", bytes.NewBuffer(jsonData))
     if err != nil {
-        log.Printf("Failed to send SSH log to relay: %v", err)
+        c.logger.Error("Failed to send SSH log to relay: %v", err)
         return
     }
     defer resp.Body.Close()
 
     if resp.StatusCode == 200 {
-        log.Printf("SSH command logged: %s -> %s", direction, command)
+        c.logger.Debug("SSH command logged: %s -> %s", direction, command)
     } else {
-        log.Printf("Failed to log SSH command: HTTP %d", resp.StatusCode)
+        c.logger.Error("Failed to log SSH command: HTTP %d", resp.StatusCode)
     }
 }
 
@@ -302,7 +317,7 @@ func (c *SSHClient) forwardData(conn net.Conn) {
             n, err := conn.Read(buffer)
             if err != nil {
                 if err != io.EOF {
-                    log.Printf("Error reading from local connection: %v", err)
+                    c.logger.Error("Error reading from local connection: %v", err)
                 }
                 return
             }
@@ -315,7 +330,7 @@ func (c *SSHClient) forwardData(conn net.Conn) {
             }
 
             if err := c.conn.WriteJSON(dataMsg); err != nil {
-                log.Printf("Error sending data to relay: %v", err)
+                c.logger.Error("Error sending data to relay: %v", err)
                 return
             }
         }
@@ -328,13 +343,13 @@ func (c *SSHClient) forwardData(conn net.Conn) {
         for {
             var msg Message
             if err := c.conn.ReadJSON(&msg); err != nil {
-                log.Printf("Error reading from relay: %v", err)
+                c.logger.Error("Error reading from relay: %v", err)
                 return
             }
 
             if msg.Type == "data" && msg.SessionID == c.sessionID {
                 if _, err := conn.Write(msg.Data); err != nil {
-                    log.Printf("Error writing to local connection: %v", err)
+                    c.logger.Error("Error writing to local connection: %v", err)
                     return
                 }
                 
@@ -348,5 +363,5 @@ func (c *SSHClient) forwardData(conn net.Conn) {
 
     // Wait for either direction to complete
     <-done
-    log.Printf("SSH session %s ended", c.sessionID)
+    c.logger.Info("SSH session %s ended", c.sessionID)
 }

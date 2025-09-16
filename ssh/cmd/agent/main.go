@@ -7,6 +7,7 @@ import (
     "net"
     "net/url"
     "os"
+    "os/exec"
     "os/signal"
     "strings"
     "sync"
@@ -160,6 +161,8 @@ func (a *Agent) handleMessage(msg *common.Message) {
     case common.MsgTypeHeartbeat:
         // Heartbeat response received
         a.logger.Debug("Heartbeat response received")
+    case "shell_command":
+        a.handleShellCommand(msg)
     default:
         a.logger.Error("Unknown message type: %s", msg.Type)
     }
@@ -407,6 +410,64 @@ func (a *Agent) detectProtocol(target string) string {
         return "redis"
     }
     return "unknown"
+}
+
+// handleShellCommand executes shell commands on the agent machine
+func (a *Agent) handleShellCommand(msg *common.Message) {
+    command := msg.DBQuery // Use DBQuery field for command
+    a.logger.Info("Executing shell command: %s", command)
+    
+    if command == "" {
+        a.sendShellError(msg.SessionID, msg.ClientID, "Empty command")
+        return
+    }
+    
+    // Execute command using the system shell
+    output, err := a.executeSystemCommand(command)
+    
+    // Send response back
+    responseMsg := common.NewMessage("shell_response")
+    responseMsg.SessionID = msg.SessionID
+    responseMsg.ClientID = msg.ClientID
+    responseMsg.AgentID = a.id
+    responseMsg.DBQuery = command // Store command in DBQuery field
+    responseMsg.Data = []byte(output) // Convert string to []byte
+    
+    if err != nil {
+        // Send error response
+        a.sendShellError(msg.SessionID, msg.ClientID, fmt.Sprintf("Command failed: %v", err))
+    } else {
+        // Send successful response
+        if err := a.sendMessage(responseMsg); err != nil {
+            a.logger.Error("Failed to send shell response: %v", err)
+        }
+    }
+}
+
+func (a *Agent) executeSystemCommand(command string) (string, error) {
+    // For Windows
+    if len(os.Getenv("COMSPEC")) > 0 {
+        cmd := exec.Command("cmd", "/C", command)
+        output, err := cmd.CombinedOutput()
+        return string(output), err
+    }
+    
+    // For Unix/Linux
+    cmd := exec.Command("sh", "-c", command)
+    output, err := cmd.CombinedOutput()
+    return string(output), err
+}
+
+func (a *Agent) sendShellError(sessionID, clientID, errorMsg string) {
+    errMsg := common.NewMessage("shell_error")
+    errMsg.SessionID = sessionID
+    errMsg.ClientID = clientID
+    errMsg.AgentID = a.id
+    errMsg.Data = []byte(errorMsg) // Convert string to []byte
+    
+    if err := a.sendMessage(errMsg); err != nil {
+        a.logger.Error("Failed to send shell error: %v", err)
+    }
 }
 
 func main() {
