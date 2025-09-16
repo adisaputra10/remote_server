@@ -168,9 +168,9 @@ func (a *Agent) messageLoop() {
 
 func (a *Agent) handleBinarySSHData(messageData []byte) {
     // Parse binary SSH data frame
-    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][AGENT_ID_LEN:1][AGENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
     
-    if len(messageData) < 6 {
+    if len(messageData) < 7 {
         a.logger.Error("Binary message too short: %d bytes", len(messageData))
         return
     }
@@ -194,6 +194,20 @@ func (a *Agent) handleBinarySSHData(messageData []byte) {
     clientID := string(messageData[offset:offset+clientIDLen])
     offset += clientIDLen
     
+    // Read agent ID
+    if offset >= len(messageData) {
+        a.logger.Error("Missing agent ID")
+        return
+    }
+    agentIDLen := int(messageData[offset])
+    offset++
+    if offset+agentIDLen > len(messageData) {
+        a.logger.Error("Invalid agent ID length")
+        return
+    }
+    agentID := string(messageData[offset:offset+agentIDLen])
+    offset += agentIDLen
+    
     // Read session ID
     if offset >= len(messageData) {
         a.logger.Error("Missing session ID")
@@ -211,12 +225,14 @@ func (a *Agent) handleBinarySSHData(messageData []byte) {
     // Extract SSH data
     sshData := messageData[offset:]
     
-    a.logger.Debug("Binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", clientID, sessionID, len(sshData))
+    a.logger.Debug("Binary SSH data: ClientID=%s, AgentID=%s, SessionID=%s, DataLen=%d", 
+        clientID, agentID, sessionID, len(sshData))
     
     // Create message structure for handling
     msg := &common.Message{
         Type:      common.MsgTypeData,
         ClientID:  clientID,
+        AgentID:   agentID,
         SessionID: sessionID,
         Data:      sshData,
     }
@@ -451,11 +467,15 @@ func (a *Agent) isSSHSession(sessionID string) bool {
 
 func (a *Agent) sendBinarySSHData(msg *common.Message) error {
     // Create binary frame for SSH data
-    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
+    // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][AGENT_ID_LEN:1][AGENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
     
     clientID := msg.ClientID
     if clientID == "" {
         clientID = ""
+    }
+    agentID := msg.AgentID
+    if agentID == "" {
+        agentID = a.id // Ensure AgentID is always set
     }
     sessionID := msg.SessionID
     if sessionID == "" {
@@ -463,7 +483,7 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
     }
     
     // Build binary frame
-    frame := make([]byte, 0, 4+1+len(clientID)+1+len(sessionID)+len(msg.Data))
+    frame := make([]byte, 0, 4+1+len(clientID)+1+len(agentID)+1+len(sessionID)+len(msg.Data))
     
     // Type (4 bytes)
     frame = append(frame, []byte("DATA")...)
@@ -472,6 +492,10 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
     frame = append(frame, byte(len(clientID)))
     frame = append(frame, []byte(clientID)...)
     
+    // AgentID length and data
+    frame = append(frame, byte(len(agentID)))
+    frame = append(frame, []byte(agentID)...)
+    
     // SessionID length and data
     frame = append(frame, byte(len(sessionID)))
     frame = append(frame, []byte(sessionID)...)
@@ -479,8 +503,8 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
     // SSH data
     frame = append(frame, msg.Data...)
     
-    a.logger.Debug("Sending binary SSH data: ClientID=%s, SessionID=%s, DataLen=%d", 
-        clientID, sessionID, len(msg.Data))
+    a.logger.Debug("Sending binary SSH data: ClientID=%s, AgentID=%s, SessionID=%s, DataLen=%d", 
+        clientID, agentID, sessionID, len(msg.Data))
     
     return a.conn.WriteMessage(websocket.BinaryMessage, frame)
 }

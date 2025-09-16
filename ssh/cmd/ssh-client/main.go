@@ -332,7 +332,7 @@ func (c *SSHClient) forwardData(conn net.Conn) {
             c.logger.Debug("ClientID: %s", c.clientID)
 
             // Create a protocol frame for binary data
-            // Format: [TYPE:4][CLIENT_ID_LEN:4][CLIENT_ID][SESSION_ID_LEN:4][SESSION_ID][DATA]
+            // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][AGENT_ID_LEN:1][AGENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
             frame := &bytes.Buffer{}
             
             // Type (4 bytes)
@@ -342,6 +342,9 @@ func (c *SSHClient) forwardData(conn net.Conn) {
             clientIDBytes := []byte(c.clientID)
             frame.Write([]byte{byte(len(clientIDBytes))})
             frame.Write(clientIDBytes)
+            
+            // AgentID length and data (empty for client)
+            frame.Write([]byte{0})
             
             // SessionID length and data  
             sessionIDBytes := []byte(c.sessionID)
@@ -378,7 +381,7 @@ func (c *SSHClient) forwardData(conn net.Conn) {
 
             if messageType == websocket.BinaryMessage {
                 // Parse binary frame for our session
-                if len(messageData) < 5 {
+                if len(messageData) < 7 {
                     continue
                 }
                 
@@ -396,6 +399,12 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 reader.Read(clientIDLen)
                 clientIDBytes := make([]byte, clientIDLen[0])
                 reader.Read(clientIDBytes)
+                
+                // Read agent ID
+                agentIDLen := make([]byte, 1)
+                reader.Read(agentIDLen)
+                agentIDBytes := make([]byte, agentIDLen[0])
+                reader.Read(agentIDBytes)
                 
                 // Read session ID
                 sessionIDLen := make([]byte, 1)
