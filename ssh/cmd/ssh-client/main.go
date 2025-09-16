@@ -326,9 +326,15 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 return
             }
 
+            c.logger.Debug("=== SENDING TO RELAY ===")
+            c.logger.Debug("Read %d bytes from local connection", n)
+            c.logger.Debug("SessionID: %s", c.sessionID)
+            c.logger.Debug("ClientID: %s", c.clientID)
+
             // Send data through WebSocket
             dataMsg := Message{
                 Type:      "data",
+                ClientID:  c.clientID,  // ✅ ADD: ClientID
                 SessionID: c.sessionID,
                 Data:      buffer[:n],
             }
@@ -337,6 +343,8 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 c.logger.Error("Error sending data to relay: %v", err)
                 return
             }
+            
+            c.logger.Debug("✅ Sent %d bytes to relay", n)
         }
     }()
 
@@ -351,7 +359,14 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 return
             }
 
+            c.logger.Debug("=== RECEIVED FROM RELAY ===")
+            c.logger.Debug("Type: %s", msg.Type)
+            c.logger.Debug("SessionID: %s", msg.SessionID)
+            c.logger.Debug("Expected SessionID: %s", c.sessionID)
+            c.logger.Debug("Data length: %d", len(msg.Data))
+
             if msg.Type == "data" && msg.SessionID == c.sessionID {
+                c.logger.Debug("✅ Writing %d bytes to local connection", len(msg.Data))
                 if _, err := conn.Write(msg.Data); err != nil {
                     c.logger.Error("Error writing to local connection: %v", err)
                     return
@@ -361,6 +376,8 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 if len(msg.Data) > 0 {
                     c.analyzeAndLogSSHData(string(msg.Data), "inbound")
                 }
+            } else {
+                c.logger.Debug("⚠️ Ignoring message - Type: %s, SessionID match: %t", msg.Type, msg.SessionID == c.sessionID)
             }
         }
     }()

@@ -621,7 +621,31 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
         return
     }
 
+    // Identify sender
+    var senderType string
+    var senderID string
+    rs.mutex.RLock()
+    for clientID, client := range rs.clients {
+        if client.Connection == conn {
+            senderType = "CLIENT"
+            senderID = clientID
+            break
+        }
+    }
+    if senderType == "" {
+        for agentID, agent := range rs.agents {
+            if agent.Connection == conn {
+                senderType = "AGENT"
+                senderID = agentID
+                break
+            }
+        }
+    }
+    rs.mutex.RUnlock()
+
     rs.logger.Info("=== DATA FORWARDING DEBUG ===")
+    rs.logger.Info("Sender Type: %s", senderType)
+    rs.logger.Info("Sender ID: %s", senderID)
     rs.logger.Info("Session ID: %s", msg.SessionID)
     rs.logger.Info("Message ClientID: '%s'", msg.ClientID)
     rs.logger.Info("Message AgentID: '%s'", msg.AgentID)
@@ -649,6 +673,22 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
         }
     } else {
         rs.logger.Error("❌ Both ClientID and AgentID are empty!")
+        // Emergency fix: if sender is known, set appropriate ID
+        if senderType == "AGENT" {
+            msg.AgentID = senderID
+            rs.logger.Info("🔧 Emergency fix: Set AgentID to %s", senderID)
+            if client, exists := rs.clients[session.ClientID]; exists {
+                targetConn = client.Connection
+                rs.logger.Info("✅ Forwarding agent data to client %s (after fix)", session.ClientID)
+            }
+        } else if senderType == "CLIENT" {
+            msg.ClientID = senderID
+            rs.logger.Info("🔧 Emergency fix: Set ClientID to %s", senderID)
+            if agent, exists := rs.agents[session.AgentID]; exists {
+                targetConn = agent.Connection
+                rs.logger.Info("✅ Forwarding client data to agent %s (after fix)", session.AgentID)
+            }
+        }
     }
     rs.mutex.RUnlock()
 
