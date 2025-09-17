@@ -45,14 +45,14 @@ type OutputCapture struct {
 func (oc *OutputCapture) Write(p []byte) (n int, err error) {
 	// Write to original stdout
 	n, err = oc.writer.Write(p)
-	
+
 	// Log server response if it contains meaningful output
 	output := string(p)
 	if len(strings.TrimSpace(output)) > 0 && !strings.Contains(output, "\x1b[") {
 		// Skip escape sequences and empty lines
 		go oc.client.sendSSHLogToRelay(strings.TrimSpace(output), "response")
 	}
-	
+
 	return n, err
 }
 
@@ -80,9 +80,9 @@ type CombinedSSHClient struct {
 	retryDelay    time.Duration
 	isConnected   bool
 	mutex         sync.RWMutex
-	
+
 	// Logging fields
-	httpClient    *http.Client
+	httpClient *http.Client
 }
 
 func main() {
@@ -121,14 +121,14 @@ func main() {
 // promptPassword prompts user for password securely
 func promptPassword(username, host string) string {
 	fmt.Printf("🔐 Enter password for %s@%s: ", username, host)
-	
+
 	// Get password without echoing
 	password, err := terminal.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		fmt.Printf("\nError reading password: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Println() // New line after password input
 	return string(password)
 }
@@ -446,7 +446,7 @@ func (c *CombinedSSHClient) logCommandToFile(command string) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logEntry := fmt.Sprintf("[%s] [Client:%s] [Agent:%s] - %s\n", timestamp, c.clientID, c.agentID, command)
 	file.WriteString(logEntry)
-	
+
 	// Also send to relay server database
 	go c.sendSSHLogToRelay(command, "command")
 }
