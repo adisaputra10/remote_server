@@ -27,9 +27,6 @@ type RemoteSSHClient struct {
 	retryDelay     time.Duration
 	connectionPool map[string]*ssh.Client
 	poolMutex      sync.RWMutex
-	
-	// Added for agent logging
-	agentID        string
 }
 
 func main() {
@@ -46,9 +43,6 @@ func main() {
 	rootCmd.Flags().StringP("ssh-key", "k", "", "SSH private key file path (optional)")
 	rootCmd.Flags().IntP("retry-attempts", "r", 3, "Number of retry attempts")
 	rootCmd.Flags().IntP("retry-delay", "d", 2, "Delay between retries (seconds)")
-	
-	// Added agent parameter for logging
-	rootCmd.Flags().StringP("agent", "a", "", "Target agent ID (will be logged to commands.log)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -64,7 +58,6 @@ func runRemoteSSHClient(cmd *cobra.Command, args []string) {
 	sshKey, _ := cmd.Flags().GetString("ssh-key")
 	retryAttempts, _ := cmd.Flags().GetInt("retry-attempts")
 	retryDelay, _ := cmd.Flags().GetInt("retry-delay")
-	agentID, _ := cmd.Flags().GetString("agent")
 
 	client := &RemoteSSHClient{
 		sshHost:        sshHost,
@@ -75,7 +68,6 @@ func runRemoteSSHClient(cmd *cobra.Command, args []string) {
 		retryAttempts:  retryAttempts,
 		retryDelay:     time.Duration(retryDelay) * time.Second,
 		connectionPool: make(map[string]*ssh.Client),
-		agentID:        agentID,
 	}
 
 	// Print connection info
@@ -84,16 +76,12 @@ func runRemoteSSHClient(cmd *cobra.Command, args []string) {
 	fmt.Println("║           With Retry Logic & Key Authentication                   ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════════════╝")
 	fmt.Printf("\n📡 Target Server: %s@%s:%s\n", sshUser, sshHost, sshPort)
-	if agentID != "" {
-		fmt.Printf("🏷️  Agent ID: %s\n", agentID)
-	}
 	fmt.Printf("🔐 Authentication: Password")
 	if sshKey != "" {
 		fmt.Printf(" + SSH Key (%s)", sshKey)
 	}
 	fmt.Printf("\n🔄 Retry Settings: %d attempts, %v delay\n", retryAttempts, client.retryDelay)
 	fmt.Printf("📊 Session ID: %s\n", client.sessionID)
-	fmt.Printf("📝 Commands logged to: logs/commands.log\n")
 	fmt.Println("═══════════════════════════════════════════════════════════════════════")
 
 	if err := client.connectWithRetryAndFallback(sshKey); err != nil {
@@ -371,13 +359,9 @@ func (c *RemoteSSHClient) logCommandToFile(command string) {
 	}
 	defer file.Close()
 
-	// Write command with timestamp and agent ID (simplified format)
+	// Write command with timestamp
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	agentInfo := ""
-	if c.agentID != "" {
-		agentInfo = fmt.Sprintf(" [Agent:%s]", c.agentID)
-	}
-	logEntry := fmt.Sprintf("[%s]%s - %s\n", timestamp, agentInfo, command)
+	logEntry := fmt.Sprintf("[%s] %s\n", timestamp, command)
 	file.WriteString(logEntry)
 }
 
