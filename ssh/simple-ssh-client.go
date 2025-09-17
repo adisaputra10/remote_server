@@ -299,21 +299,21 @@ func (c *SSHClient) isTerminalCommand(data []byte) bool {
 	// Detect common terminal commands in SSH session
 	dataStr := strings.ToLower(string(data))
 	commands := []string{
-		"ls", "cd", "pwd", "cat", "grep", "ps", "top", "vim", "nano", "tail", "head", 
-		"mkdir", "rm", "cp", "mv", "chmod", "chown", "sudo", "su", "exit", "logout", 
-		"whoami", "id", "uname", "df", "du", "free", "history", "systemctl", "service", 
-		"apt", "yum", "wget", "curl", "ping", "netstat", "ss", "iptables", "find", 
-		"which", "whereis", "locate", "man", "info", "help", "clear", "reset", "date", 
-		"uptime", "w", "who", "last", "lastlog", "hostname", "passwd", "mount", "umount", 
-		"fdisk", "lsblk", "lscpu", "lsmem", "lsof", "kill", "killall", "jobs", "nohup", 
+		"ls", "cd", "pwd", "cat", "grep", "ps", "top", "vim", "nano", "tail", "head",
+		"mkdir", "rm", "cp", "mv", "chmod", "chown", "sudo", "su", "exit", "logout",
+		"whoami", "id", "uname", "df", "du", "free", "history", "systemctl", "service",
+		"apt", "yum", "wget", "curl", "ping", "netstat", "ss", "iptables", "find",
+		"which", "whereis", "locate", "man", "info", "help", "clear", "reset", "date",
+		"uptime", "w", "who", "last", "lastlog", "hostname", "passwd", "mount", "umount",
+		"fdisk", "lsblk", "lscpu", "lsmem", "lsof", "kill", "killall", "jobs", "nohup",
 		"screen", "tmux", "tar", "gzip", "unzip", "zip", "rsync", "scp", "sftp", "ssh",
 		"mysql", "psql", "sqlite3", "redis-cli", "mongo", "docker", "kubectl", "git",
 		"make", "gcc", "python", "python3", "node", "npm", "yarn", "php", "ruby", "go",
 	}
-	
+
 	// Clean data first
 	cleaned := c.cleanTerminalData(dataStr)
-	
+
 	for _, cmd := range commands {
 		if strings.HasPrefix(cleaned, cmd+" ") || cleaned == cmd || strings.HasPrefix(cleaned, cmd+"\n") || strings.HasPrefix(cleaned, cmd+"\r") {
 			return true
@@ -325,20 +325,20 @@ func (c *SSHClient) isTerminalCommand(data []byte) bool {
 func (c *SSHClient) isInteractiveCommand(data string) bool {
 	// Detect interactive shell patterns
 	patterns := []string{
-		"$ ",       // Shell prompt
-		"# ",       // Root prompt
-		"> ",       // Continuation prompt
-		"? ",       // Help prompt
-		"[y/n]",    // Yes/no prompt
-		"[Y/n]",    // Yes/no prompt
-		"(yes/no)", // SSH host verification
+		"$ ",        // Shell prompt
+		"# ",        // Root prompt
+		"> ",        // Continuation prompt
+		"? ",        // Help prompt
+		"[y/n]",     // Yes/no prompt
+		"[Y/n]",     // Yes/no prompt
+		"(yes/no)",  // SSH host verification
 		"password:", // Password prompt
 		"Password:", // Password prompt
-		"Enter",    // Enter prompt
-		"Press",    // Press key prompt
-		"Continue", // Continue prompt
+		"Enter",     // Enter prompt
+		"Press",     // Press key prompt
+		"Continue",  // Continue prompt
 	}
-	
+
 	lowerData := strings.ToLower(data)
 	for _, pattern := range patterns {
 		if strings.Contains(lowerData, strings.ToLower(pattern)) {
@@ -392,7 +392,7 @@ func (c *SSHClient) cleanTerminalData(data string) string {
 	// Remove ANSI escape sequences and control characters
 	var result strings.Builder
 	inEscape := false
-	
+
 	for _, r := range data {
 		if r == 27 { // ESC character (start of ANSI sequence)
 			inEscape = true
@@ -410,7 +410,7 @@ func (c *SSHClient) cleanTerminalData(data string) string {
 			result.WriteRune(' ')
 		}
 	}
-	
+
 	return strings.TrimSpace(result.String())
 }
 
@@ -419,7 +419,7 @@ func (c *SSHClient) isPrintableCommand(data string) bool {
 	if len(data) == 0 {
 		return false
 	}
-	
+
 	// Skip if too many non-printable characters
 	printableCount := 0
 	for _, r := range data {
@@ -427,7 +427,7 @@ func (c *SSHClient) isPrintableCommand(data string) bool {
 			printableCount++
 		}
 	}
-	
+
 	return float64(printableCount)/float64(len(data)) > 0.7 // At least 70% printable
 }
 
@@ -436,21 +436,21 @@ func (c *SSHClient) isPrintableResponse(data string) bool {
 	if len(data) == 0 {
 		return false
 	}
-	
+
 	// Common server response patterns
 	responsePatterns := []string{
 		"total ", "drwx", "-rw-", "permission denied", "command not found",
 		"directory", "file", "error", "warning", "success", "completed",
 		"root@", "user@", "login", "logout", "welcome", "bye", "exit",
 	}
-	
+
 	lowerData := strings.ToLower(data)
 	for _, pattern := range responsePatterns {
 		if strings.Contains(lowerData, pattern) {
 			return true
 		}
 	}
-	
+
 	// Check if mostly printable
 	printableCount := 0
 	for _, r := range data {
@@ -458,7 +458,7 @@ func (c *SSHClient) isPrintableResponse(data string) bool {
 			printableCount++
 		}
 	}
-	
+
 	return float64(printableCount)/float64(len(data)) > 0.5 // At least 50% printable
 }
 
