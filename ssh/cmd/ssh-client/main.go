@@ -68,10 +68,6 @@ func main() {
     rootCmd.Flags().StringP("client-name", "n", "SSH Client", "Client name")
     rootCmd.Flags().StringP("relay", "r", "ws://168.231.119.242:8080/ws/client", "Relay server WebSocket URL")
     rootCmd.Flags().StringP("agent", "a", "agent-linux", "Target agent ID")
-    rootCmd.Flags().StringP("ssh-host", "H", "127.0.0.1", "SSH target host")
-    rootCmd.Flags().StringP("ssh-port", "P", "22", "SSH target port")
-    rootCmd.Flags().StringP("ssh-user", "u", "root", "SSH username")
-    rootCmd.Flags().StringP("ssh-password", "w", "1qazxsw2", "SSH password")
     rootCmd.Flags().StringP("local-port", "p", "2222", "Local port to listen")
 
     if err := rootCmd.Execute(); err != nil {
@@ -85,11 +81,13 @@ func runSSHClient(cmd *cobra.Command, args []string) {
     clientName, _ := cmd.Flags().GetString("client-name")
     relayURL, _ := cmd.Flags().GetString("relay")
     agentID, _ := cmd.Flags().GetString("agent")
-    sshHost, _ := cmd.Flags().GetString("ssh-host")
-    sshPort, _ := cmd.Flags().GetString("ssh-port")
-    sshUser, _ := cmd.Flags().GetString("ssh-user")
-    sshPassword, _ := cmd.Flags().GetString("ssh-password")
     localPort, _ := cmd.Flags().GetString("local-port")
+
+    // Use default SSH settings
+    sshHost := "168.231.119.242"
+    sshPort := "22"
+    sshUser := "root"
+    sshPassword := "1qazxsw2"
 
     client := &SSHClient{
         clientID:    clientID,
@@ -173,14 +171,13 @@ func (c *SSHClient) handleSSHConnection(conn net.Conn) {
     c.sessionID = fmt.Sprintf("ssh_%d", time.Now().UnixNano())
     target := fmt.Sprintf("%s:%s", c.sshHost, c.sshPort)
 
-    // Request tunnel through relay
+    // Request tunnel through relay using JSON
     connectMsg := Message{
         Type:      "connect",
         ClientID:  c.clientID,
         AgentID:   c.agentID,
         Target:    target,
         SessionID: c.sessionID,
-        Protocol:  "ssh",
     }
 
     if err := c.conn.WriteJSON(connectMsg); err != nil {
@@ -188,10 +185,9 @@ func (c *SSHClient) handleSSHConnection(conn net.Conn) {
         return
     }
 
-    // Handle SSH protocol detection and logging
-    go c.handleSSHLogging(conn)
+    c.logger.Info("✅ Requested tunnel for session %s to target %s", c.sessionID, target)
 
-    // Handle data forwarding
+    // Handle data forwarding (simplified like debug client)
     c.forwardData(conn)
 }
 
@@ -309,14 +305,13 @@ func (c *SSHClient) logSSHCommand(command, direction, data string) {
 }
 
 func (c *SSHClient) forwardData(conn net.Conn) {
-    // Handle bidirectional data forwarding through WebSocket using binary messages
     done := make(chan bool, 2)
 
     // Forward from local connection to relay
     go func() {
         defer func() { done <- true }()
         
-        buffer := make([]byte, 4096)
+        buffer := make([]byte, 1024) // Smaller buffer like debug client
         for {
             n, err := conn.Read(buffer)
             if err != nil {
@@ -326,41 +321,23 @@ func (c *SSHClient) forwardData(conn net.Conn) {
                 return
             }
 
-            c.logger.Debug("=== SENDING TO RELAY ===")
-            c.logger.Debug("Read %d bytes from local connection", n)
-            c.logger.Debug("SessionID: %s", c.sessionID)
-            c.logger.Debug("ClientID: %s", c.clientID)
+            c.logger.Debug("📤 READ %d bytes from local SSH client", n)
 
-            // Create a protocol frame for binary data
-            // Format: [TYPE:4][CLIENT_ID_LEN:1][CLIENT_ID][AGENT_ID_LEN:1][AGENT_ID][SESSION_ID_LEN:1][SESSION_ID][DATA]
-            frame := &bytes.Buffer{}
-            
-            // Type (4 bytes)
-            frame.WriteString("DATA")
-            
-            // ClientID length and data
-            clientIDBytes := []byte(c.clientID)
-            frame.Write([]byte{byte(len(clientIDBytes))})
-            frame.Write(clientIDBytes)
-            
-            // AgentID length and data (empty for client)
-            frame.Write([]byte{0})
-            
-            // SessionID length and data  
-            sessionIDBytes := []byte(c.sessionID)
-            frame.Write([]byte{byte(len(sessionIDBytes))})
-            frame.Write(sessionIDBytes)
-            
-            // Actual SSH data
-            frame.Write(buffer[:n])
+            // Send using JSON format (same as debug client)
+            dataMsg := Message{
+                Type:      "data",
+                ClientID:  c.clientID,
+                SessionID: c.sessionID,
+                Data:      make([]byte, n),
+            }
+            copy(dataMsg.Data, buffer[:n])
 
-            // Send as binary WebSocket message
-            if err := c.conn.WriteMessage(websocket.BinaryMessage, frame.Bytes()); err != nil {
-                c.logger.Error("Error sending binary data to relay: %v", err)
+            if err := c.conn.WriteJSON(dataMsg); err != nil {
+                c.logger.Error("Error sending data to relay: %v", err)
                 return
             }
             
-            c.logger.Debug("✅ Sent %d bytes to relay (binary)", n)
+            c.logger.Debug("✅ Sent %d bytes to relay via JSON", n)
         }
     }()
 
@@ -369,74 +346,23 @@ func (c *SSHClient) forwardData(conn net.Conn) {
         defer func() { done <- true }()
         
         for {
-            messageType, messageData, err := c.conn.ReadMessage()
-            if err != nil {
+            var msg Message
+            if err := c.conn.ReadJSON(&msg); err != nil {
                 c.logger.Error("Error reading from relay: %v", err)
                 return
             }
 
-            c.logger.Debug("=== RECEIVED FROM RELAY ===")
-            c.logger.Debug("Message type: %d", messageType)
-            c.logger.Debug("Message length: %d", len(messageData))
+            if msg.Type == "data" && msg.SessionID == c.sessionID {
+                c.logger.Debug("📥 RECEIVED %d bytes from relay", len(msg.Data))
 
-            if messageType == websocket.BinaryMessage {
-                // Parse binary frame for our session
-                if len(messageData) < 7 {
-                    continue
+                if _, err := conn.Write(msg.Data); err != nil {
+                    c.logger.Error("Error writing to local connection: %v", err)
+                    return
                 }
                 
-                reader := bytes.NewReader(messageData)
-                
-                // Read type (4 bytes)
-                typeBytes := make([]byte, 4)
-                reader.Read(typeBytes)
-                if string(typeBytes) != "DATA" {
-                    continue
-                }
-                
-                // Read client ID
-                clientIDLen := make([]byte, 1)
-                reader.Read(clientIDLen)
-                clientIDBytes := make([]byte, clientIDLen[0])
-                reader.Read(clientIDBytes)
-                
-                // Read agent ID
-                agentIDLen := make([]byte, 1)
-                reader.Read(agentIDLen)
-                agentIDBytes := make([]byte, agentIDLen[0])
-                reader.Read(agentIDBytes)
-                
-                // Read session ID
-                sessionIDLen := make([]byte, 1)
-                reader.Read(sessionIDLen)
-                sessionIDBytes := make([]byte, sessionIDLen[0])
-                reader.Read(sessionIDBytes)
-                
-                // Check if this is for our session
-                if string(sessionIDBytes) == c.sessionID {
-                    // Read remaining data
-                    sshData := make([]byte, reader.Len())
-                    reader.Read(sshData)
-                    
-                    c.logger.Debug("✅ Writing %d bytes to local connection", len(sshData))
-                    if _, err := conn.Write(sshData); err != nil {
-                        c.logger.Error("Error writing to local connection: %v", err)
-                        return
-                    }
-                    
-                    // Log received data
-                    if len(sshData) > 0 {
-                        c.analyzeAndLogSSHData(string(sshData), "inbound")
-                    }
-                } else {
-                    c.logger.Debug("⚠️ Ignoring binary message for session %s (expected %s)", string(sessionIDBytes), c.sessionID)
-                }
-            } else if messageType == websocket.TextMessage {
-                // Handle JSON messages for control commands
-                var msg Message
-                if err := json.Unmarshal(messageData, &msg); err == nil {
-                    c.logger.Debug("Received JSON message: Type=%s, SessionID=%s", msg.Type, msg.SessionID)
-                }
+                c.logger.Debug("✅ Wrote %d bytes to local SSH client", len(msg.Data))
+            } else {
+                c.logger.Debug("Ignoring message - Type: %s, SessionID match: %t", msg.Type, msg.SessionID == c.sessionID)
             }
         }
     }()
