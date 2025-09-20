@@ -23,29 +23,29 @@ import (
 )
 
 type RelayServer struct {
-	agents       map[string]*Agent
-	clients      map[string]*Client
-	sessions     map[string]*Session
-	mutex        sync.RWMutex
-	logger       *common.Logger
-	db           *sql.DB
-	webSessions  map[string]*WebSession // Enhanced session storage with user info
-	
+	agents      map[string]*Agent
+	clients     map[string]*Client
+	sessions    map[string]*Session
+	mutex       sync.RWMutex
+	logger      *common.Logger
+	db          *sql.DB
+	webSessions map[string]*WebSession // Enhanced session storage with user info
+
 	// Performance optimization: fast connection lookup
 	connToAgent  map[*websocket.Conn]string
 	connToClient map[*websocket.Conn]string
 	connMutex    sync.RWMutex
-	
+
 	// Batch logging for performance
-	logBuffer    *LogBuffer
+	logBuffer *LogBuffer
 }
 
 // LogBuffer for batch logging to improve performance
 type LogBuffer struct {
-	sshLogs    []SSHLogEntry
-	queryLogs  []QueryLogEntry
-	mutex      sync.Mutex
-	lastFlush  time.Time
+	sshLogs   []SSHLogEntry
+	queryLogs []QueryLogEntry
+	mutex     sync.Mutex
+	lastFlush time.Time
 }
 
 type SSHLogEntry struct {
@@ -144,7 +144,7 @@ func NewRelayServer() *RelayServer {
 	if logLevel == "" {
 		logLevel = "INFO" // Default to INFO instead of DEBUG
 	}
-	
+
 	rs := &RelayServer{
 		agents:       make(map[string]*Agent),
 		clients:      make(map[string]*Client),
@@ -205,10 +205,10 @@ func NewRelayServer() *RelayServer {
 
 	rs.logger.Info("Connected to MySQL database '%s'", dbName)
 	rs.initDatabase()
-	
+
 	// Start periodic log flusher for performance
 	go rs.periodicFlush()
-	
+
 	return rs
 }
 
@@ -704,10 +704,10 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 			Status:      "connected",
 		}
 		rs.agents[msg.AgentID] = agent
-		
+
 		// Add to fast lookup map
 		rs.connToAgent[conn] = msg.AgentID
-		
+
 		rs.logger.Info("Agent registered: %s", msg.AgentID)
 
 		// Log to database asynchronously
@@ -723,10 +723,10 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 			Status:      "connected",
 		}
 		rs.clients[msg.ClientID] = client
-		
+
 		// Add to fast lookup map
 		rs.connToClient[conn] = msg.ClientID
-		
+
 		rs.logger.Info("Client registered: %s (name: %s)", msg.ClientID, msg.ClientName)
 
 		// Save client to database (permanent storage)
@@ -820,14 +820,14 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
 		senderType = "AGENT"
 		senderID = agentID
 	} else if clientID, isClient := rs.connToClient[conn]; isClient {
-		senderType = "CLIENT" 
+		senderType = "CLIENT"
 		senderID = clientID
 	}
 	rs.connMutex.RUnlock()
 
 	// Minimal logging - only for debug mode or errors
 	if os.Getenv("LOG_LEVEL") == "DEBUG" {
-		rs.logger.Debug("Data forwarding: Session=%s, Sender=%s(%s), Size=%d", 
+		rs.logger.Debug("Data forwarding: Session=%s, Sender=%s(%s), Size=%d",
 			msg.SessionID, senderType, senderID, len(msg.Data))
 	}
 
@@ -839,7 +839,7 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
 			targetConn = agent.Connection
 		}
 	} else if senderType == "AGENT" {
-		// Data from agent to client  
+		// Data from agent to client
 		if client, exists := rs.clients[session.ClientID]; exists {
 			targetConn = client.Connection
 		}
@@ -865,7 +865,7 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
 				if senderType == "AGENT" {
 					direction = "agent_to_client"
 				}
-				
+
 				rs.batchLogSSH(SSHLogEntry{
 					SessionID: msg.SessionID,
 					AgentID:   session.AgentID,
@@ -887,17 +887,17 @@ func (rs *RelayServer) handleTunnelListeningLog(conn *websocket.Conn, msg *commo
 	logData := string(msg.Data)
 	if strings.HasPrefix(logData, "tunnel_listening:") {
 		tunnelInfo := strings.TrimPrefix(logData, "tunnel_listening:")
-		
+
 		// Get client ID from connection
 		rs.connMutex.RLock()
 		_, isClient := rs.connToClient[conn]
 		rs.connMutex.RUnlock()
-		
+
 		if isClient && msg.ClientID != "" {
 			// Log tunnel listening event to database
 			details := fmt.Sprintf("tunnel_listening: %s", tunnelInfo)
 			go rs.logConnection("client", msg.AgentID, msg.ClientID, "tunnel_listening", details)
-			
+
 			rs.logger.Info("Client %s tunnel listening: %s", msg.ClientID, tunnelInfo)
 		}
 	}
@@ -1734,7 +1734,7 @@ func (rs *RelayServer) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (rs *RelayServer) periodicFlush() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		rs.flushSSHLogs()
 		rs.flushQueryLogs()
@@ -1744,10 +1744,10 @@ func (rs *RelayServer) periodicFlush() {
 func (rs *RelayServer) batchLogSSH(entry SSHLogEntry) {
 	rs.logBuffer.mutex.Lock()
 	rs.logBuffer.sshLogs = append(rs.logBuffer.sshLogs, entry)
-	
+
 	// Flush every 100 entries or 5 seconds
-	if len(rs.logBuffer.sshLogs) >= 100 || 
-	   time.Since(rs.logBuffer.lastFlush) > 5*time.Second {
+	if len(rs.logBuffer.sshLogs) >= 100 ||
+		time.Since(rs.logBuffer.lastFlush) > 5*time.Second {
 		go rs.flushSSHLogs()
 	}
 	rs.logBuffer.mutex.Unlock()
@@ -1756,10 +1756,10 @@ func (rs *RelayServer) batchLogSSH(entry SSHLogEntry) {
 func (rs *RelayServer) batchLogQuery(entry QueryLogEntry) {
 	rs.logBuffer.mutex.Lock()
 	rs.logBuffer.queryLogs = append(rs.logBuffer.queryLogs, entry)
-	
+
 	// Flush every 100 entries or 5 seconds
-	if len(rs.logBuffer.queryLogs) >= 100 || 
-	   time.Since(rs.logBuffer.lastFlush) > 5*time.Second {
+	if len(rs.logBuffer.queryLogs) >= 100 ||
+		time.Since(rs.logBuffer.lastFlush) > 5*time.Second {
 		go rs.flushQueryLogs()
 	}
 	rs.logBuffer.mutex.Unlock()
@@ -1771,7 +1771,7 @@ func (rs *RelayServer) flushSSHLogs() {
 		rs.logBuffer.mutex.Unlock()
 		return
 	}
-	
+
 	logs := make([]SSHLogEntry, len(rs.logBuffer.sshLogs))
 	copy(logs, rs.logBuffer.sshLogs)
 	rs.logBuffer.sshLogs = rs.logBuffer.sshLogs[:0] // Clear slice but keep capacity
@@ -1794,9 +1794,9 @@ func (rs *RelayServer) flushSSHLogs() {
 		}
 
 		for _, log := range logs {
-			_, err := stmt.Exec(log.SessionID, log.AgentID, log.ClientID, 
-							 log.Direction, log.User, log.Host, log.Port, 
-							 log.Command, log.DataSize, log.Timestamp)
+			_, err := stmt.Exec(log.SessionID, log.AgentID, log.ClientID,
+				log.Direction, log.User, log.Host, log.Port,
+				log.Command, log.DataSize, log.Timestamp)
 			if err != nil {
 				rs.logger.Error("Failed to insert SSH log: %v", err)
 			}
@@ -1815,7 +1815,7 @@ func (rs *RelayServer) flushQueryLogs() {
 		rs.logBuffer.mutex.Unlock()
 		return
 	}
-	
+
 	logs := make([]QueryLogEntry, len(rs.logBuffer.queryLogs))
 	copy(logs, rs.logBuffer.queryLogs)
 	rs.logBuffer.queryLogs = rs.logBuffer.queryLogs[:0] // Clear slice but keep capacity
@@ -1838,9 +1838,9 @@ func (rs *RelayServer) flushQueryLogs() {
 		}
 
 		for _, log := range logs {
-			_, err := stmt.Exec(log.SessionID, log.AgentID, log.ClientID, 
-							 log.Direction, log.Protocol, log.Operation, 
-							 log.TableName, log.QueryText, log.Timestamp)
+			_, err := stmt.Exec(log.SessionID, log.AgentID, log.ClientID,
+				log.Direction, log.Protocol, log.Operation,
+				log.TableName, log.QueryText, log.Timestamp)
 			if err != nil {
 				rs.logger.Error("Failed to insert query log: %v", err)
 			}
@@ -1859,7 +1859,7 @@ func (rs *RelayServer) isSSHCommand(data []byte) bool {
 	if len(data) < 3 || len(data) > 1024 {
 		return false
 	}
-	
+
 	// Simple heuristic: contains printable command characters
 	printable := 0
 	for _, b := range data {
@@ -1867,7 +1867,7 @@ func (rs *RelayServer) isSSHCommand(data []byte) bool {
 			printable++
 		}
 	}
-	
+
 	return printable > len(data)/2
 }
 

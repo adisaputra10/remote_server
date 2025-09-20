@@ -327,6 +327,9 @@ func (a *Agent) handleData(msg *common.Message) {
 			a.sendDatabaseQuery(msg.SessionID, clientID, fmt.Sprintf("USE %s", databaseName), "CONNECT", "", databaseName, protocol)
 		}
 
+		// Always try to log data as potential SQL command, even if it's binary
+		a.logPotentialDatabaseCommand(msg.SessionID, msg.Data, "CLIENT->TARGET")
+
 		// Also extract and send query to relay if it looks like SQL
 		queryText := string(msg.Data)
 		if operation, tableName, databaseName := a.extractSQLInfo(queryText); operation != "" {
@@ -378,6 +381,8 @@ func (a *Agent) forwardFromTarget(sessionID string, conn net.Conn) {
 
 			if dbExists {
 				dbLogger.LogData(buffer[:n], "TARGET->CLIENT", sessionID)
+				// Also log potential database responses
+				a.logPotentialDatabaseCommand(sessionID, buffer[:n], "TARGET->CLIENT")
 			}
 
 			dataMsg := common.NewMessage(common.MsgTypeData)
@@ -685,6 +690,69 @@ func (a *Agent) detectProtocol(target string) string {
 		return "redis"
 	}
 	return "unknown"
+}
+
+func (a *Agent) logPotentialDatabaseCommand(sessionID string, data []byte, direction string) {
+	// Try to extract meaningful information from any database protocol data
+	a.mutex.RLock()
+	target := a.targets[sessionID]
+	clientID := a.clients[sessionID]
+	a.mutex.RUnlock()
+
+	if target == "" || clientID == "" {
+		return
+	}
+
+	protocol := a.detectProtocol(target)
+	
+	// Convert data to string and check if it contains readable SQL
+	dataStr := string(data)
+	
+	// Check for common SQL keywords even in binary data
+	sqlKeywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "SHOW", "DESCRIBE", "EXPLAIN", "USE"}
+	
+	hasSQL := false
+	for _, keyword := range sqlKeywords {
+		if strings.Contains(strings.ToUpper(dataStr), keyword) {
+			hasSQL = true
+			break
+		}
+	}
+	
+	// Log if it contains SQL keywords or if it's a significant data packet
+	if hasSQL || len(data) > 20 {
+		// Try to extract SQL info
+		if operation, tableName, databaseName := a.extractSQLInfo(dataStr); operation != "" {
+			a.sendDatabaseQuery(sessionID, clientID, dataStr, operation, tableName, databaseName, protocol)
+		} else if hasSQL {
+			// Even if we can't parse it completely, log it as unknown operation
+			queryText := a.cleanDataForLogging(data)
+			if queryText != "" {
+				a.sendDatabaseQuery(sessionID, clientID, queryText, "UNKNOWN", "", "", protocol)
+			}
+		}
+	}
+}
+
+func (a *Agent) cleanDataForLogging(data []byte) string {
+	// Convert binary data to readable string, removing non-printable characters
+	result := ""
+	for _, b := range data {
+		if b >= 32 && b <= 126 { // Printable ASCII characters
+			result += string(b)
+		} else if b == 10 || b == 13 { // Line breaks
+			result += " "
+		}
+	}
+	
+	// Clean up multiple spaces and trim
+	result = strings.TrimSpace(result)
+	words := strings.Fields(result)
+	if len(words) > 20 {
+		words = words[:20] // Limit to first 20 words
+	}
+	
+	return strings.Join(words, " ")
 }
 
 // handleShellCommand executes shell commands on the agent machine
