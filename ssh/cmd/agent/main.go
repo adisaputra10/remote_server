@@ -540,6 +540,15 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
 }
 
 func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableName, databaseName, protocol string) {
+	a.logger.Info("=== SENDING DATABASE QUERY TO RELAY ===")
+	a.logger.Info("SessionID: %s", sessionID)
+	a.logger.Info("ClientID: %s", clientID)
+	a.logger.Info("Operation: %s", operation)
+	a.logger.Info("Table: %s", tableName)
+	a.logger.Info("Database: %s", databaseName)
+	a.logger.Info("Protocol: %s", protocol)
+	a.logger.Info("Query: %s", query)
+	
 	msg := common.NewMessage(common.MsgTypeDBQuery)
 	msg.AgentID = a.id
 	msg.ClientID = clientID
@@ -553,7 +562,7 @@ func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableNa
 	if err := a.sendMessage(msg); err != nil {
 		a.logger.Error("Failed to send database query log: %v", err)
 	} else {
-		a.logger.Debug("Sent database query log: %s %s %s", operation, tableName, protocol)
+		a.logger.Info("Successfully sent database query to relay: %s %s.%s", operation, databaseName, tableName)
 	}
 }
 
@@ -611,13 +620,46 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, database
 				databaseName, tableName = extractDBFromTable(strings.Trim(words[1], ",();"))
 			}
 		}
-	case "CREATE", "DROP", "ALTER":
-		// Find table name after TABLE keyword
+	case "TRUNCATE":
+		// TRUNCATE TABLE table_name
 		for i, word := range words {
 			if word == "TABLE" && i+1 < len(words) {
 				databaseName, tableName = extractDBFromTable(strings.Trim(words[i+1], ",();"))
 				break
 			}
+		}
+	case "DROP":
+		// DROP TABLE/DATABASE/INDEX etc
+		if len(words) > 2 && words[1] == "TABLE" {
+			databaseName, tableName = extractDBFromTable(strings.Trim(words[2], ",();"))
+		} else if len(words) > 2 && words[1] == "DATABASE" {
+			databaseName = strings.Trim(words[2], ",();`")
+		}
+	case "CREATE":
+		// CREATE TABLE/DATABASE etc
+		if len(words) > 2 && words[1] == "TABLE" {
+			databaseName, tableName = extractDBFromTable(strings.Trim(words[2], ",();"))
+		} else if len(words) > 2 && words[1] == "DATABASE" {
+			databaseName = strings.Trim(words[2], ",();`")
+		}
+	case "ALTER":
+		// ALTER TABLE table_name
+		if len(words) > 2 && words[1] == "TABLE" {
+			databaseName, tableName = extractDBFromTable(strings.Trim(words[2], ",();"))
+		}
+	case "SHOW":
+		// SHOW TABLES, SHOW DATABASES etc
+		if len(words) > 1 && words[1] == "TABLES" {
+			operation = "SHOW_TABLES"
+		} else if len(words) > 1 && words[1] == "DATABASES" {
+			operation = "SHOW_DATABASES"
+		}
+	case "USE":
+		// USE database_name
+		if len(words) > 1 {
+			databaseName = strings.Trim(words[1], ",();`")
+		}
+	}
 		}
 	case "USE":
 		// USE database_name
