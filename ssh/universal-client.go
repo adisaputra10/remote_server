@@ -175,7 +175,7 @@ func main() {
 				sshHost:     sshHost,
 				sshUser:     sshUser,
 				sshPassword: sshPassword,
-				httpClient:  &http.Client{Timeout: 10 * time.Second},
+				httpClient:  &http.Client{Timeout: 5 * time.Second},
 			}
 
 			// Setup signal handling
@@ -201,7 +201,7 @@ func main() {
 			} else {
 				// INTEGRATED SSH MODE
 				fmt.Println("╔════════════════════════════════════════════════════════════════════╗")
-				fmt.Println("║              🚀 Integrated SSH Client Mode                       ║")
+				fmt.Println("║              🚀 SSH Client Mode                       ║")
 				fmt.Println("╚════════════════════════════════════════════════════════════════════╝")
 
 				// If username is empty, prompt for it
@@ -470,37 +470,23 @@ func (c *UniversalClient) sendMessage(msg *common.Message) error {
 // ================ INTEGRATED SSH MODE IMPLEMENTATION ================
 
 func (c *UniversalClient) runIntegratedMode(tunnelOnly bool) error {
-	fmt.Printf("🔗 Step 1: Creating SSH tunnel...\n")
-	fmt.Printf("   📡 Relay: %s\n", getRelayDisplayName(c.relayURL))
-	fmt.Printf("   🏷️  Agent: %s\n", c.agentID)
-	fmt.Printf("   🔌 Local Port: %s\n", c.localPort)
-
 	// Create tunnel
 	if err := c.createSSHTunnel(); err != nil {
 		return fmt.Errorf("failed to create tunnel: %v", err)
 	}
 
-	fmt.Printf("✅ SSH tunnel established on port %s\n", c.localPort)
-
 	if tunnelOnly {
-		fmt.Printf("🔧 Tunnel-only mode active\n")
-		fmt.Printf("💡 Connect manually: ssh %s@%s -p %s\n", c.sshUser, c.sshHost, c.localPort)
+		fmt.Printf("🔧 Tunnel-only mode: ssh %s@%s -p %s\n", c.sshUser, c.sshHost, c.localPort)
 		select {} // Keep alive
 	}
 
-	// Auto-connect SSH
-	fmt.Printf("🔗 Step 2: Auto-connecting to SSH...\n")
-	time.Sleep(2 * time.Second) // Wait for tunnel
+	// Auto-connect SSH with retry
+	time.Sleep(500 * time.Millisecond) // Brief wait for tunnel
 
-	if err := c.connectSSH(); err != nil {
-		fmt.Printf("❌ SSH connection failed: %v\n", err)
-		fmt.Printf("💡 Manual connection: ssh %s@%s -p %s\n", c.sshUser, c.sshHost, c.localPort)
+	if err := c.connectSSHWithRetry(); err != nil {
+		//fmt.Printf("💡 Manual: ssh %s@%s -p %s\n", c.sshUser, c.sshHost, c.localPort)
 		select {} // Keep tunnel alive
 	}
-
-	fmt.Printf("✅ SSH connection established\n")
-	fmt.Printf("📝 Commands logged to: logs/commands.log\n")
-	fmt.Println("───────────────────────────────────────────")
 
 	return c.startSSHSession()
 }
@@ -598,6 +584,37 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 	<-done
 }
 
+func (c *UniversalClient) connectSSHWithRetry() error {
+	maxAttempts := 3
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := c.connectSSH()
+		if err == nil {
+			return nil // Success
+		}
+
+		// Check if it's an authentication error
+		if strings.Contains(err.Error(), "unable to authenticate") ||
+			strings.Contains(err.Error(), "handshake failed") ||
+			strings.Contains(err.Error(), "authentication failed") {
+
+			if attempt < maxAttempts {
+				fmt.Printf("🔐 Authentication failed. Try again Enter Password (%d/%d): ", attempt+1, maxAttempts)
+				// Prompt for password again
+				c.sshPassword = promptPasswordRetry(c.sshUser, c.sshHost)
+			} else {
+				fmt.Printf("❌ Authentication failed after %d attempts\n", maxAttempts)
+				return err
+			}
+		} else {
+			// Non-authentication error, don't retry
+			return err
+		}
+	}
+
+	return fmt.Errorf("authentication failed after %d attempts", maxAttempts)
+}
+
 func (c *UniversalClient) connectSSH() error {
 	config := &ssh.ClientConfig{
 		User: c.sshUser,
@@ -605,7 +622,7 @@ func (c *UniversalClient) connectSSH() error {
 			ssh.Password(c.sshPassword),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         10 * time.Second,
+		Timeout:         5 * time.Second,
 	}
 
 	addr := fmt.Sprintf("%s:%s", c.sshHost, c.localPort)
@@ -717,7 +734,17 @@ func promptUsername() string {
 }
 
 func promptPassword(username, host string) string {
-	fmt.Printf("🔐 Enter password for %s@%s: ", username, host)
+	fmt.Print("🔐 Enter password: ")
+	password, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Printf("\nError reading password: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println()
+	return string(password)
+}
+
+func promptPasswordRetry(username, host string) string {
 	password, err := terminal.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		fmt.Printf("\nError reading password: %v\n", err)

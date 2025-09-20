@@ -221,6 +221,16 @@ func (rs *RelayServer) initDatabase() {
             role VARCHAR(20) DEFAULT 'user',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS clients (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            client_id VARCHAR(100) UNIQUE NOT NULL,
+            client_name VARCHAR(255),
+            agent_id VARCHAR(100),
+            status VARCHAR(20) DEFAULT 'connected',
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`,
 		`CREATE TABLE IF NOT EXISTS connection_logs (
             id INT AUTO_INCREMENT PRIMARY KEY,
             type VARCHAR(20) NOT NULL,
@@ -306,6 +316,31 @@ func (rs *RelayServer) initDatabase() {
 		} else {
 			rs.logger.Info("Created default regular user (%s/***)", userUsername)
 		}
+	}
+}
+
+// saveClientToDatabase saves or updates client information in the database
+func (rs *RelayServer) saveClientToDatabase(clientID, clientName, agentID, status string) {
+	if rs.db == nil {
+		return
+	}
+
+	// Clean all parameters
+	clientID = rs.cleanString(clientID)
+	clientName = rs.cleanString(clientName)
+	agentID = rs.cleanString(agentID)
+	status = rs.cleanString(status)
+
+	// Use REPLACE INTO to insert or update client data
+	_, err := rs.db.Exec(`
+		REPLACE INTO clients (client_id, client_name, agent_id, status, connected_at, last_ping) 
+		VALUES (?, ?, ?, ?, NOW(), NOW())`,
+		clientID, clientName, agentID, status,
+	)
+	if err != nil {
+		rs.logger.Error("Failed to save client to database: %v", err)
+	} else {
+		rs.logger.Debug("Client saved to database: %s (name: %s)", clientID, clientName)
 	}
 }
 
@@ -690,6 +725,9 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 		rs.connToClient[conn] = msg.ClientID
 		
 		rs.logger.Info("Client registered: %s (name: %s)", msg.ClientID, msg.ClientName)
+
+		// Save client to database (permanent storage)
+		go rs.saveClientToDatabase(msg.ClientID, msg.ClientName, msg.AgentID, "connected")
 
 		// Log to database asynchronously
 		go rs.logConnection("client", "", msg.ClientID, "connected", fmt.Sprintf("target_agent: %s", msg.AgentID))
@@ -1408,12 +1446,40 @@ func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs *RelayServer) handleAPIClients(w http.ResponseWriter, r *http.Request) {
-	rs.mutex.RLock()
-	clients := make([]*Client, 0, len(rs.clients))
-	for _, client := range rs.clients {
+	// Get clients from database instead of memory
+	rows, err := rs.db.Query(`
+		SELECT client_id, client_name, agent_id, status, connected_at, last_ping 
+		FROM clients 
+		ORDER BY connected_at DESC
+	`)
+	if err != nil {
+		rs.logger.Error("Failed to query clients: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var clients []map[string]interface{}
+	for rows.Next() {
+		var clientID, clientName, agentID, status sql.NullString
+		var connectedAt, lastPing sql.NullTime
+
+		err := rows.Scan(&clientID, &clientName, &agentID, &status, &connectedAt, &lastPing)
+		if err != nil {
+			rs.logger.Error("Failed to scan client row: %v", err)
+			continue
+		}
+
+		client := map[string]interface{}{
+			"id":           clientID.String,
+			"name":         clientName.String,
+			"agent_id":     agentID.String,
+			"status":       status.String,
+			"connected_at": connectedAt.Time,
+			"last_ping":    lastPing.Time,
+		}
 		clients = append(clients, client)
 	}
-	rs.mutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
