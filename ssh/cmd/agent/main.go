@@ -43,6 +43,7 @@ type Agent struct {
 	sessions  map[string]net.Conn
 	dbLoggers map[string]*common.DatabaseQueryLogger
 	targets   map[string]string // sessionID -> target
+	clients   map[string]string // sessionID -> clientID
 	mutex     sync.RWMutex
 	logger    *common.Logger
 	running   bool
@@ -56,6 +57,7 @@ func NewAgent(id, relayURL string) *Agent {
 		sessions:  make(map[string]net.Conn),
 		dbLoggers: make(map[string]*common.DatabaseQueryLogger),
 		targets:   make(map[string]string),
+		clients:   make(map[string]string),
 		logger:    common.NewLogger(fmt.Sprintf("AGENT-%s", id)),
 	}
 }
@@ -288,6 +290,8 @@ func (a *Agent) handleConnect(msg *common.Message) {
 	a.dbLoggers[msg.SessionID] = common.NewDatabaseQueryLogger(a.logger, msg.Target)
 	// Store target for this session
 	a.targets[msg.SessionID] = msg.Target
+	// Store client ID for this session
+	a.clients[msg.SessionID] = msg.ClientID
 	a.mutex.Unlock()
 
 	a.logger.Info("Successfully connected to target %s for session %s", msg.Target, msg.SessionID)
@@ -318,9 +322,10 @@ func (a *Agent) handleData(msg *common.Message) {
 		if operation, tableName := a.extractSQLInfo(queryText); operation != "" {
 			a.mutex.RLock()
 			target := a.targets[msg.SessionID]
+			clientID := a.clients[msg.SessionID]
 			a.mutex.RUnlock()
 			protocol := a.detectProtocol(target)
-			a.sendDatabaseQuery(msg.SessionID, queryText, operation, tableName, protocol)
+			a.sendDatabaseQuery(msg.SessionID, clientID, queryText, operation, tableName, protocol)
 		}
 	}
 
@@ -424,6 +429,12 @@ func (a *Agent) closeSession(sessionID string) {
 		delete(a.targets, sessionID)
 		a.logger.Debug("Target mapping cleaned up for session: %s", sessionID)
 	}
+
+	// Clean up client mapping
+	if _, exists := a.clients[sessionID]; exists {
+		delete(a.clients, sessionID)
+		a.logger.Debug("Client mapping cleaned up for session: %s", sessionID)
+	}
 }
 
 func (a *Agent) sendMessage(msg *common.Message) error {
@@ -504,9 +515,10 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
 	return a.conn.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-func (a *Agent) sendDatabaseQuery(sessionID, query, operation, tableName, protocol string) {
+func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableName, protocol string) {
 	msg := common.NewMessage(common.MsgTypeDBQuery)
 	msg.AgentID = a.id
+	msg.ClientID = clientID
 	msg.SessionID = sessionID
 	msg.DBQuery = query
 	msg.DBOperation = operation

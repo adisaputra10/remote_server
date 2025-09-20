@@ -795,6 +795,12 @@ func (rs *RelayServer) handleConnect(conn *websocket.Conn, msg *common.Message) 
 }
 
 func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
+	// Check for special tunnel listening log message
+	if len(msg.Data) > 0 && strings.HasPrefix(string(msg.Data), "tunnel_listening:") {
+		rs.handleTunnelListeningLog(conn, msg)
+		return
+	}
+
 	rs.mutex.RLock()
 	session, exists := rs.sessions[msg.SessionID]
 	rs.mutex.RUnlock()
@@ -870,6 +876,27 @@ func (rs *RelayServer) handleData(conn *websocket.Conn, msg *common.Message) {
 		}
 	} else {
 		rs.logger.Error("Target connection not found for session: %s", msg.SessionID)
+	}
+}
+
+func (rs *RelayServer) handleTunnelListeningLog(conn *websocket.Conn, msg *common.Message) {
+	// Extract tunnel listening information
+	logData := string(msg.Data)
+	if strings.HasPrefix(logData, "tunnel_listening:") {
+		tunnelInfo := strings.TrimPrefix(logData, "tunnel_listening:")
+		
+		// Get client ID from connection
+		rs.connMutex.RLock()
+		_, isClient := rs.connToClient[conn]
+		rs.connMutex.RUnlock()
+		
+		if isClient && msg.ClientID != "" {
+			// Log tunnel listening event to database
+			details := fmt.Sprintf("tunnel_listening: %s", tunnelInfo)
+			go rs.logConnection("client", msg.AgentID, msg.ClientID, "tunnel_listening", details)
+			
+			rs.logger.Info("Client %s tunnel listening: %s", msg.ClientID, tunnelInfo)
+		}
 	}
 }
 

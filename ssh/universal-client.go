@@ -349,6 +349,9 @@ func (c *UniversalClient) startTunnelListener(localAddr, target string) error {
 	c.logger.Info("Tunnel listening on %s -> %s -> %s", localAddr, c.agentID, target)
 	fmt.Printf("✅ Tunnel established: %s -> %s -> %s\n", localAddr, c.agentID, target)
 
+	// Send tunnel listening notification to relay server for logging
+	go c.sendTunnelListeningLog(localAddr, target)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -383,6 +386,19 @@ func (c *UniversalClient) handleTunnelConnection(conn net.Conn, target string) {
 
 	// Forward data
 	go c.forwardTunnelData(sessionID, conn)
+}
+
+func (c *UniversalClient) sendTunnelListeningLog(localAddr, target string) {
+	// Send log message to relay server for connection logging
+	logMsg := common.NewMessage(common.MsgTypeData)
+	logMsg.ClientID = c.id
+	logMsg.AgentID = c.agentID
+	logMsg.Target = target
+	logMsg.Data = []byte(fmt.Sprintf("tunnel_listening:%s->%s->%s", localAddr, c.agentID, target))
+	
+	if err := c.sendMessage(logMsg); err != nil {
+		c.logger.Error("Failed to send tunnel listening log: %v", err)
+	}
 }
 
 func (c *UniversalClient) forwardTunnelData(sessionID string, conn net.Conn) {
