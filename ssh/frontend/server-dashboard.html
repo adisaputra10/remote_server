@@ -1,0 +1,2163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ServerHub Pro - Management Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --primary-color: #667eea;
+            --primary-dark: #5a67d8;
+            --secondary-color: #4a5568;
+            --success-color: #48bb78;
+            --warning-color: #ed8936;
+            --danger-color: #f56565;
+            --purple-color: #9f7aea;
+            --info-color: #4299e1;
+            --background-color: #f7fafc;
+            --surface-color: #ffffff;
+            --surface-alt: #edf2f7;
+            --text-primary: #2d3748;
+            --text-secondary: #718096;
+            --text-light: #a0aec0;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            --shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
+        }
+
+        [data-theme="dark"] {
+            --background-color: #1a202c;
+            --surface-color: #2d3748;
+            --surface-alt: #4a5568;
+            --text-primary: #f7fafc;
+            --text-secondary: #e2e8f0;
+            --text-light: #a0aec0;
+            --border-color: #4a5568;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+            transition: all 0.3s ease;
+            overflow-x: hidden;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--surface-alt);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--text-light);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+
+        /* Login Page Styles */
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-gradient);
+            position: relative;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        .login-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320"><path fill="%23ffffff" fill-opacity="0.1" d="M0,96L48,112C96,128,192,160,288,160C384,160,480,128,576,122.7C672,117,768,139,864,133.3C960,128,1056,96,1152,90.7C1248,85,1344,107,1392,117.3L1440,128L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path></svg>');
+            background-size: cover;
+            opacity: 0.3;
+        }
+
+        .login-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 48px;
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-xl);
+            width: 100%;
+            max-width: 440px;
+            animation: fadeInUp 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            z-index: 10;
+        }
+
+        [data-theme="dark"] .login-card {
+            background: rgba(45, 55, 72, 0.95);
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .logo-icon {
+            width: 64px;
+            height: 64px;
+            background: var(--primary-gradient);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 28px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .logo h1 {
+            font-size: 32px;
+            font-weight: 800;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 4px;
+            letter-spacing: -0.5px;
+        }
+
+        .logo p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 14px;
+            letter-spacing: 0.025em;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-light);
+            font-size: 16px;
+            z-index: 2;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 16px 16px 16px 48px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            font-size: 16px;
+            font-weight: 500;
+            background-color: var(--surface-color);
+            color: var(--text-primary);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .form-checkbox {
+            display: flex;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .form-checkbox input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            accent-color: var(--primary-color);
+            cursor: pointer;
+        }
+
+        .form-checkbox label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 16px 24px;
+            border: none;
+            border-radius: var(--radius-lg);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-align: center;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .btn:hover::before {
+            left: 100%;
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .forgot-password {
+            text-align: center;
+            margin-top: 24px;
+        }
+
+        .forgot-password a {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .forgot-password a:hover {
+            color: var(--primary-dark);
+            text-decoration: underline;
+        }
+
+        .error-message {
+            background: linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%);
+            color: #c53030;
+            padding: 16px 20px;
+            border-radius: var(--radius-lg);
+            margin-bottom: 24px;
+            font-size: 14px;
+            font-weight: 500;
+            display: none;
+            align-items: center;
+            gap: 12px;
+            animation: shake 0.5s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+            20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
+
+        [data-theme="dark"] .error-message {
+            background: linear-gradient(135deg, #742a2a 0%, #9b2c2c 100%);
+            color: #fc8181;
+        }
+
+        /* Dashboard Styles */
+        .dashboard {
+            display: none;
+            min-height: 100vh;
+            background-color: var(--background-color);
+        }
+
+        .dashboard-header {
+            background: var(--surface-color);
+            border-bottom: 1px solid var(--border-color);
+            padding: 20px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: var(--shadow-sm);
+            backdrop-filter: blur(10px);
+        }
+
+        .dashboard-title-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .dashboard-title {
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .theme-toggle {
+            background: var(--surface-alt);
+            border: 2px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 10px 16px;
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+        }
+
+        .theme-toggle:hover {
+            background: var(--background-color);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .user-menu {
+            position: relative;
+        }
+
+        .user-button {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--surface-alt);
+            border: 2px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .user-button:hover {
+            background: var(--background-color);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--primary-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 14px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            min-width: 220px;
+            display: none;
+            z-index: 1000;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .dropdown-menu.show {
+            display: block;
+            animation: dropdownSlide 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes dropdownSlide {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .dropdown-item:hover {
+            background: var(--surface-alt);
+            color: var(--primary-color);
+        }
+
+        .dropdown-item i {
+            width: 20px;
+            text-align: center;
+        }
+
+        .dashboard-content {
+            display: flex;
+            min-height: calc(100vh - 89px);
+        }
+
+        .sidebar {
+            width: 280px;
+            background: var(--surface-color);
+            border-right: 1px solid var(--border-color);
+            padding: 32px 0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .sidebar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 1px;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent, var(--border-color), transparent);
+        }
+
+        .sidebar-menu {
+            list-style: none;
+        }
+
+        .sidebar-item {
+            margin-bottom: 4px;
+        }
+
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px 32px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .sidebar-link::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--primary-gradient);
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar-link:hover,
+        .sidebar-link.active {
+            background: linear-gradient(90deg, var(--surface-alt) 0%, transparent 100%);
+            color: var(--primary-color);
+        }
+
+        .sidebar-link.active::before {
+            transform: translateX(0);
+        }
+
+        .sidebar-link i {
+            width: 24px;
+            text-align: center;
+            font-size: 18px;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 32px;
+            overflow-y: auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: var(--surface-color);
+            padding: 32px;
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .stat-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow-xl);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .stat-title {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: var(--radius-xl);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            box-shadow: var(--shadow-md);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-icon::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 100%);
+        }
+
+        .stat-icon.blue {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+        }
+
+        .stat-icon.green {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+
+        .stat-icon.purple {
+            background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%);
+        }
+
+        .stat-value {
+            font-size: 42px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+
+        .stat-change {
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-change.positive {
+            color: var(--success-color);
+        }
+
+        .stat-change.negative {
+            color: var(--danger-color);
+        }
+
+        .tab-navigation {
+            background: var(--surface-color);
+            border-radius: var(--radius-xl);
+            padding: 8px;
+            margin-bottom: 32px;
+            box-shadow: var(--shadow-md);
+        }
+
+        .tab-list {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            padding: 16px 24px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: var(--radius-lg);
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tab-button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--primary-gradient);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .tab-button:hover {
+            background: var(--surface-alt);
+            color: var(--text-primary);
+        }
+
+        .tab-button.active {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .search-container {
+            margin-bottom: 24px;
+        }
+
+        .search-wrapper {
+            position: relative;
+            max-width: 500px;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-light);
+            font-size: 18px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 16px 20px 16px 56px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius-xl);
+            background: var(--surface-color);
+            color: var(--text-primary);
+            font-size: 15px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+        }
+
+        .table-container {
+            background: var(--surface-color);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-md);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .table-container:hover {
+            box-shadow: var(--shadow-lg);
+        }
+
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 24px 32px;
+            border-bottom: 1px solid var(--border-color);
+            background: linear-gradient(90deg, var(--surface-color) 0%, var(--surface-alt) 100%);
+        }
+
+        .table-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .table-title i {
+            color: var(--primary-color);
+        }
+
+        .refresh-btn {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .refresh-btn:active {
+            transform: translateY(0);
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 20px 32px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table th {
+            background: var(--surface-alt);
+            font-weight: 700;
+            color: var(--text-primary);
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .data-table tr:hover {
+            background: var(--surface-alt);
+        }
+
+        .data-table tr:hover td {
+            color: var(--text-primary);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+
+        .status-badge.connected {
+            background: linear-gradient(135deg, #c6f6d5 0%, #9ae6b4 100%);
+            color: #22543d;
+        }
+
+        .status-badge.disconnected {
+            background: linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%);
+            color: #742a2a;
+        }
+
+        [data-theme="dark"] .status-badge.connected {
+            background: linear-gradient(135deg, #276749 0%, #2f855a 100%);
+            color: #c6f6d5;
+        }
+
+        [data-theme="dark"] .status-badge.disconnected {
+            background: linear-gradient(135deg, #742a2a 0%, #9b2c2c 100%);
+            color: #fed7d7;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 currentColor;
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(255, 255, 255, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+            }
+        }
+
+        .footer {
+            background: var(--surface-color);
+            border-top: 1px solid var(--border-color);
+            padding: 24px 32px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 32px;
+            right: 32px;
+            z-index: 1000;
+        }
+
+        .toast {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-xl);
+            padding: 20px 24px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow-xl);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            min-width: 320px;
+            animation: slideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .toast::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+        }
+
+        .toast.success::before {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+
+        .toast.error::before {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+        }
+
+        .toast.info::before {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%) translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0) translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .toast-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .toast.success .toast-icon {
+            background: linear-gradient(135deg, #c6f6d5 0%, #9ae6b4 100%);
+            color: #22543d;
+        }
+
+        .toast.error .toast-icon {
+            background: linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%);
+            color: #742a2a;
+        }
+
+        .toast.info .toast-icon {
+            background: linear-gradient(135deg, #bee3f8 0%, #90cdf4 100%);
+            color: #2a4365;
+        }
+
+        .toast-content {
+            flex: 1;
+        }
+
+        .toast-title {
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .toast-message {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        /* Mobile Responsive */
+        .mobile-menu-toggle {
+            display: none;
+            background: var(--surface-alt);
+            border: 2px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 12px;
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 18px;
+        }
+
+        .mobile-menu-toggle:hover {
+            background: var(--background-color);
+            transform: translateY(-1px);
+        }
+
+        @media (max-width: 1024px) {
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 16px;
+            }
+            
+            .main-content {
+                padding: 24px;
+            }
+            
+            .sidebar {
+                width: 260px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .mobile-menu-toggle {
+                display: block;
+            }
+
+            .sidebar {
+                position: fixed;
+                left: -280px;
+                top: 89px;
+                height: calc(100vh - 89px);
+                z-index: 200;
+                width: 280px;
+                box-shadow: var(--shadow-xl);
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .tab-list {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .table-header {
+                flex-direction: column;
+                gap: 16px;
+                align-items: flex-start;
+            }
+
+            .data-table {
+                font-size: 14px;
+            }
+
+            .data-table th,
+            .data-table td {
+                padding: 16px 20px;
+            }
+            
+            .dashboard-header {
+                padding: 16px 20px;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+            
+            .toast-container {
+                top: 20px;
+                right: 20px;
+                left: 20px;
+            }
+            
+            .toast {
+                min-width: auto;
+            }
+        }
+
+        /* Loading State */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state i {
+            font-size: 80px;
+            margin-bottom: 24px;
+            opacity: 0.3;
+        }
+
+        .empty-state h3 {
+            font-size: 24px;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .empty-state p {
+            font-size: 16px;
+            max-width: 400px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.6s ease forwards;
+        }
+
+        .slide-up {
+            animation: slideUp 0.8s ease forwards;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Glass morphism effect */
+        .glass {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        [data-theme="dark"] .glass {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Page -->
+    <div id="loginPage" class="login-container">
+        <div class="login-card">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fas fa-server"></i>
+                </div>
+                <h1>ServerHub Pro</h1>
+                <p>Professional Management Dashboard</p>
+            </div>
+            
+            <div id="errorMessage" class="error-message">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>Invalid username or password. Please try again.</span>
+            </div>
+            
+            <form id="loginForm">
+                <div class="form-group">
+                    <label class="form-label" for="username">Username or Email</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-user input-icon"></i>
+                        <input type="text" id="username" class="form-input" placeholder="Enter your username" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label" for="password">Password</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-lock input-icon"></i>
+                        <input type="password" id="password" class="form-input" placeholder="Enter your password" required>
+                    </div>
+                </div>
+                
+                <div class="form-checkbox">
+                    <input type="checkbox" id="remember">
+                    <label for="remember">Remember me for 30 days</label>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-sign-in-alt"></i>
+                    Sign In
+                </button>
+            </form>
+            
+            <div class="forgot-password">
+                <a href="#" onclick="showToast('Password reset functionality would be implemented here', 'info')">Forgot your password?</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard" class="dashboard">
+        <!-- Header -->
+        <header class="dashboard-header">
+            <div class="dashboard-title-wrapper">
+                <button class="mobile-menu-toggle" onclick="toggleSidebar()">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h1 class="dashboard-title">Welcome back, Admin</h1>
+            </div>
+            
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                    <span>Theme</span>
+                </button>
+                
+                <div class="user-menu">
+                    <button class="user-button" onclick="toggleUserMenu()">
+                        <div class="user-avatar">A</div>
+                        <span>Admin User</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div id="userDropdown" class="dropdown-menu">
+                        <a href="#" class="dropdown-item" onclick="showToast('Profile page would open here', 'info')">
+                            <i class="fas fa-user-circle"></i>
+                            <span>My Profile</span>
+                        </a>
+                        <a href="#" class="dropdown-item" onclick="showToast('Settings page would open here', 'info')">
+                            <i class="fas fa-cog"></i>
+                            <span>Settings</span>
+                        </a>
+                        <a href="#" class="dropdown-item" onclick="showToast('Help documentation would open here', 'info')">
+                            <i class="fas fa-question-circle"></i>
+                            <span>Help & Support</span>
+                        </a>
+                        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 8px 0;">
+                        <a href="#" class="dropdown-item" onclick="logout()">
+                            <i class="fas fa-sign-out-alt"></i>
+                            <span>Logout</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="dashboard-content">
+            <!-- Sidebar -->
+            <nav id="sidebar" class="sidebar">
+                <ul class="sidebar-menu">
+                    <li class="sidebar-item">
+                        <a href="#" class="sidebar-link active" onclick="switchTab('agents', this)">
+                            <i class="fas fa-server"></i>
+                            <span>Agents</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-item">
+                        <a href="#" class="sidebar-link" onclick="switchTab('clients', this)">
+                            <i class="fas fa-users"></i>
+                            <span>Clients</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-item">
+                        <a href="#" class="sidebar-link" onclick="switchTab('logs', this)">
+                            <i class="fas fa-list-alt"></i>
+                            <span>Connection Logs</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-item">
+                        <a href="#" class="sidebar-link" onclick="switchTab('database', this)">
+                            <i class="fas fa-database"></i>
+                            <span>Database Queries</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-item">
+                        <a href="#" class="sidebar-link" onclick="switchTab('ssh', this)">
+                            <i class="fas fa-terminal"></i>
+                            <span>SSH Commands</span>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+
+            <!-- Main Content Area -->
+            <main class="main-content">
+                <!-- Statistics Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">Connected Agents</span>
+                            <div class="stat-icon blue">
+                                <i class="fas fa-server"></i>
+                            </div>
+                        </div>
+                        <div class="stat-value" id="connectedAgents">24</div>
+                        <div class="stat-change positive">
+                            <i class="fas fa-arrow-up"></i>
+                            <span>12% from last hour</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">Active Clients</span>
+                            <div class="stat-icon green">
+                                <i class="fas fa-users"></i>
+                            </div>
+                        </div>
+                        <div class="stat-value" id="activeClients">156</div>
+                        <div class="stat-change positive">
+                            <i class="fas fa-arrow-up"></i>
+                            <span>8% from last hour</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-title">Total Logs</span>
+                            <div class="stat-icon purple">
+                                <i class="fas fa-list-alt"></i>
+                            </div>
+                        </div>
+                        <div class="stat-value" id="totalLogs">1,234</div>
+                        <div class="stat-change negative">
+                            <i class="fas fa-arrow-down"></i>
+                            <span>3% from last hour</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Navigation -->
+                <div class="tab-navigation">
+                    <div class="tab-list">
+                        <button class="tab-button active" onclick="switchTab('agents', this)">
+                            <i class="fas fa-server"></i> Agents
+                        </button>
+                        <button class="tab-button" onclick="switchTab('clients', this)">
+                            <i class="fas fa-users"></i> Clients
+                        </button>
+                        <button class="tab-button" onclick="switchTab('logs', this)">
+                            <i class="fas fa-list-alt"></i> Connection Logs
+                        </button>
+                        <button class="tab-button" onclick="switchTab('database', this)">
+                            <i class="fas fa-database"></i> Database Queries
+                        </button>
+                        <button class="tab-button" onclick="switchTab('ssh', this)">
+                            <i class="fas fa-terminal"></i> SSH Commands
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab Contents -->
+                <!-- Agents Tab -->
+                <div id="agents" class="tab-content active">
+                    <div class="search-container">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" placeholder="Search agents by ID, status, or connection time..." onkeyup="filterTable('agentsTable', this.value)">
+                        </div>
+                    </div>
+                    
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 class="table-title">
+                                <i class="fas fa-server"></i>
+                                Connected Agents
+                            </h3>
+                            <button class="refresh-btn" onclick="refreshData('agents')">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh Data
+                            </button>
+                        </div>
+                        
+                        <table class="data-table" id="agentsTable">
+                            <thead>
+                                <tr>
+                                    <th>Agent ID</th>
+                                    <th>Status</th>
+                                    <th>Connection Time</th>
+                                    <th>Last Ping</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>AGENT-001</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Connected</span></td>
+                                    <td>2024-01-15 10:30:45</td>
+                                    <td><em>2 minutes ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>AGENT-002</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Connected</span></td>
+                                    <td>2024-01-15 09:15:22</td>
+                                    <td><em>1 minute ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>AGENT-003</strong></td>
+                                    <td><span class="status-badge disconnected"><span class="status-dot"></span>Disconnected</span></td>
+                                    <td>2024-01-15 08:45:10</td>
+                                    <td><em>15 minutes ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>AGENT-004</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Connected</span></td>
+                                    <td>2024-01-15 11:20:33</td>
+                                    <td><em>30 seconds ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>AGENT-005</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Connected</span></td>
+                                    <td>2024-01-15 10:45:12</td>
+                                    <td><em>5 minutes ago</em></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Clients Tab -->
+                <div id="clients" class="tab-content">
+                    <div class="search-container">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" placeholder="Search clients by ID, status, or activity..." onkeyup="filterTable('clientsTable', this.value)">
+                        </div>
+                    </div>
+                    
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 class="table-title">
+                                <i class="fas fa-users"></i>
+                                Active Clients
+                            </h3>
+                            <button class="refresh-btn" onclick="refreshData('clients')">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh Data
+                            </button>
+                        </div>
+                        
+                        <table class="data-table" id="clientsTable">
+                            <thead>
+                                <tr>
+                                    <th>Client ID</th>
+                                    <th>Status</th>
+                                    <th>Connection Time</th>
+                                    <th>Last Activity</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>CLIENT-001</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Active</span></td>
+                                    <td>2024-01-15 10:30:45</td>
+                                    <td><em>Just now</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CLIENT-002</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Active</span></td>
+                                    <td>2024-01-15 09:15:22</td>
+                                    <td><em>5 minutes ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CLIENT-003</strong></td>
+                                    <td><span class="status-badge disconnected"><span class="status-dot"></span>Inactive</span></td>
+                                    <td>2024-01-15 08:45:10</td>
+                                    <td><em>1 hour ago</em></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CLIENT-004</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Active</span></td>
+                                    <td>2024-01-15 11:00:00</td>
+                                    <td><em>2 minutes ago</em></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Connection Logs Tab -->
+                <div id="logs" class="tab-content">
+                    <div class="search-container">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" placeholder="Search logs by ID, agent, or action..." onkeyup="filterTable('logsTable', this.value)">
+                        </div>
+                    </div>
+                    
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 class="table-title">
+                                <i class="fas fa-list-alt"></i>
+                                Connection Logs
+                            </h3>
+                            <button class="refresh-btn" onclick="refreshData('logs')">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh Data
+                            </button>
+                        </div>
+                        
+                        <table class="data-table" id="logsTable">
+                            <thead>
+                                <tr>
+                                    <th>Log ID</th>
+                                    <th>Agent/Client</th>
+                                    <th>Action</th>
+                                    <th>Timestamp</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>LOG-001</strong></td>
+                                    <td>AGENT-001</td>
+                                    <td>Connection Established</td>
+                                    <td>2024-01-15 10:30:45</td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>LOG-002</strong></td>
+                                    <td>CLIENT-001</td>
+                                    <td>Authentication</td>
+                                    <td>2024-01-15 10:25:12</td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>LOG-003</strong></td>
+                                    <td>AGENT-003</td>
+                                    <td>Connection Lost</td>
+                                    <td>2024-01-15 09:45:10</td>
+                                    <td><span class="status-badge disconnected"><span class="status-dot"></span>Failed</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>LOG-004</strong></td>
+                                    <td>CLIENT-002</td>
+                                    <td>Session Started</td>
+                                    <td>2024-01-15 09:30:00</td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Database Queries Tab -->
+                <div id="database" class="tab-content">
+                    <div class="search-container">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" placeholder="Search queries by ID, type, or table..." onkeyup="filterTable('databaseTable', this.value)">
+                        </div>
+                    </div>
+                    
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 class="table-title">
+                                <i class="fas fa-database"></i>
+                                Database Queries
+                            </h3>
+                            <button class="refresh-btn" onclick="refreshData('database')">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh Data
+                            </button>
+                        </div>
+                        
+                        <table class="data-table" id="databaseTable">
+                            <thead>
+                                <tr>
+                                    <th>Query ID</th>
+                                    <th>Query Type</th>
+                                    <th>Table</th>
+                                    <th>Execution Time</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>QUERY-001</strong></td>
+                                    <td>SELECT</td>
+                                    <td>users</td>
+                                    <td><strong>45ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>QUERY-002</strong></td>
+                                    <td>INSERT</td>
+                                    <td>sessions</td>
+                                    <td><strong>120ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>QUERY-003</strong></td>
+                                    <td>UPDATE</td>
+                                    <td>agents</td>
+                                    <td><strong>85ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>QUERY-004</strong></td>
+                                    <td>DELETE</td>
+                                    <td>logs</td>
+                                    <td><strong>200ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- SSH Commands Tab -->
+                <div id="ssh" class="tab-content">
+                    <div class="search-container">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" placeholder="Search commands by ID, target, or status..." onkeyup="filterTable('sshTable', this.value)">
+                        </div>
+                    </div>
+                    
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 class="table-title">
+                                <i class="fas fa-terminal"></i>
+                                SSH Commands
+                            </h3>
+                            <button class="refresh-btn" onclick="refreshData('ssh')">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh Data
+                            </button>
+                        </div>
+                        
+                        <table class="data-table" id="sshTable">
+                            <thead>
+                                <tr>
+                                    <th>Command ID</th>
+                                    <th>Command</th>
+                                    <th>Target Server</th>
+                                    <th>Execution Time</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>CMD-001</strong></td>
+                                    <td><code>systemctl status nginx</code></td>
+                                    <td>server-01</td>
+                                    <td><strong>200ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CMD-002</strong></td>
+                                    <td><code>df -h</code></td>
+                                    <td>server-02</td>
+                                    <td><strong>150ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CMD-003</strong></td>
+                                    <td><code>tail -f /var/log/nginx/access.log</code></td>
+                                    <td>server-01</td>
+                                    <td><strong>500ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Running</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CMD-004</strong></td>
+                                    <td><code>uptime</code></td>
+                                    <td>server-03</td>
+                                    <td><strong>50ms</strong></td>
+                                    <td><span class="status-badge connected"><span class="status-dot"></span>Success</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>© 2024 ServerHub Pro. Enterprise Management Dashboard v2.1.0</p>
+        </footer>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script>
+        // Theme Management
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            
+            if (savedTheme === 'system') {
+                document.documentElement.setAttribute('data-theme', systemPrefersDark ? 'dark' : 'light');
+            } else {
+                document.documentElement.setAttribute('data-theme', savedTheme);
+            }
+            
+            updateThemeIcon();
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon();
+            
+            showToast('Theme Changed', `Switched to ${newTheme} mode successfully`, 'success');
+        }
+
+        function updateThemeIcon() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const icon = document.getElementById('themeIcon');
+            icon.className = currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+        }
+
+        // Login Management
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const remember = document.getElementById('remember').checked;
+            
+            // Simple validation (in real app, this would be server-side)
+            if (username && password) {
+                if (username.toLowerCase() === 'admin' && password === 'password') {
+                    document.getElementById('loginPage').style.display = 'none';
+                    document.getElementById('dashboard').style.display = 'block';
+                    
+                    if (remember) {
+                        localStorage.setItem('rememberedUser', username);
+                    }
+                    
+                    showToast('Login Successful', 'Welcome back to ServerHub Pro!', 'success');
+                    simulateRealTimeData();
+                } else {
+                    const errorMessage = document.getElementById('errorMessage');
+                    errorMessage.style.display = 'flex';
+                    setTimeout(() => {
+                        errorMessage.style.display = 'none';
+                    }, 4000);
+                }
+            }
+        });
+
+        // Logout
+        function logout() {
+            document.getElementById('dashboard').style.display = 'none';
+            document.getElementById('loginPage').style.display = 'flex';
+            document.getElementById('loginForm').reset();
+            localStorage.removeItem('rememberedUser');
+            showToast('Logged Out', 'You have been successfully logged out', 'info');
+        }
+
+        // User Menu
+        function toggleUserMenu() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.user-menu')) {
+                document.getElementById('userDropdown').classList.remove('show');
+            }
+        });
+
+        // Sidebar Management
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('open');
+        }
+
+        // Tab Management
+        function switchTab(tabName, element) {
+            // Hide all tab contents
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Remove active class from all tab buttons
+            const tabButtons = document.querySelectorAll('.tab-button');
+            tabButtons.forEach(button => button.classList.remove('active'));
+            
+            // Remove active class from all sidebar links
+            const sidebarLinks = document.querySelectorAll('.sidebar-link');
+            sidebarLinks.forEach(link => link.classList.remove('active'));
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked button
+            element.classList.add('active');
+            
+            // Add active class to corresponding sidebar link
+            const sidebarLink = document.querySelector(`[onclick="switchTab('${tabName}', this)"]`);
+            if (sidebarLink) {
+                sidebarLink.classList.add('active');
+            }
+            
+            // Add animation to cards
+            setTimeout(() => {
+                const cards = document.querySelectorAll('.stat-card');
+                cards.forEach((card, index) => {
+                    card.style.animation = `slideUp 0.6s ease ${index * 0.1}s forwards`;
+                });
+            }, 100);
+        }
+
+        // Table Search/Filter
+        function filterTable(tableId, searchTerm) {
+            const table = document.getElementById(tableId);
+            const rows = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const cells = row.getElementsByTagName('td');
+                let found = false;
+                
+                for (let j = 0; j < cells.length; j++) {
+                    if (cells[j].textContent.toLowerCase().includes(searchTerm.toLowerCase())) {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                row.style.display = found ? '' : 'none';
+            }
+        }
+
+        // Refresh Data
+        function refreshData(section) {
+            const refreshBtn = event.target.closest('.refresh-btn');
+            const icon = refreshBtn.querySelector('i');
+            const originalText = refreshBtn.innerHTML;
+            
+            // Add spinning animation and change text
+            refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+            refreshBtn.disabled = true;
+            
+            // Simulate data refresh
+            setTimeout(() => {
+                refreshBtn.innerHTML = originalText;
+                refreshBtn.disabled = false;
+                
+                // Update stats randomly
+                updateStats();
+                
+                // Add new random row to table
+                addRandomTableRow(section);
+                
+                showToast('Data Refreshed', `${section.charAt(0).toUpperCase() + section.slice(1)} data has been updated successfully`, 'success');
+            }, 2000);
+        }
+
+        // Add random table row
+        function addRandomTableRow(section) {
+            const tables = {
+                'agents': 'agentsTable',
+                'clients': 'clientsTable',
+                'logs': 'logsTable',
+                'database': 'databaseTable',
+                'ssh': 'sshTable'
+            };
+            
+            const table = document.getElementById(tables[section]);
+            if (!table) return;
+            
+            const tbody = table.querySelector('tbody');
+            const newRow = document.createElement('tr');
+            newRow.style.animation = 'fadeIn 0.5s ease';
+            
+            // Generate random data based on section
+            let rowData = [];
+            const randomId = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+            
+            switch(section) {
+                case 'agents':
+                    rowData = [
+                        `<strong>AGENT-${randomId}</strong>`,
+                        Math.random() > 0.3 ? 
+                            `<span class="status-badge connected"><span class="status-dot"></span>Connected</span>` : 
+                            `<span class="status-badge disconnected"><span class="status-dot"></span>Disconnected</span>`,
+                        new Date().toLocaleString(),
+                        '<em>Just now</em>'
+                    ];
+                    break;
+                case 'clients':
+                    rowData = [
+                        `<strong>CLIENT-${randomId}</strong>`,
+                        Math.random() > 0.3 ? 
+                            `<span class="status-badge connected"><span class="status-dot"></span>Active</span>` : 
+                            `<span class="status-badge disconnected"><span class="status-dot"></span>Inactive</span>`,
+                        new Date().toLocaleString(),
+                        '<em>Just now</em>'
+                    ];
+                    break;
+                case 'logs':
+                    const actions = ['Connection Established', 'Authentication', 'Connection Lost', 'Session Started'];
+                    const entities = ['AGENT', 'CLIENT'];
+                    const entity = entities[Math.floor(Math.random() * entities.length)];
+                    rowData = [
+                        `<strong>LOG-${randomId}</strong>`,
+                        `${entity}-${Math.floor(Math.random() * 10)}`,
+                        actions[Math.floor(Math.random() * actions.length)],
+                        new Date().toLocaleString(),
+                        Math.random() > 0.2 ? 
+                            `<span class="status-badge connected"><span class="status-dot"></span>Success</span>` : 
+                            `<span class="status-badge disconnected"><span class="status-dot"></span>Failed</span>`
+                    ];
+                    break;
+                case 'database':
+                    const queryTypes = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'];
+                    const tables = ['users', 'sessions', 'agents', 'logs'];
+                    rowData = [
+                        `<strong>QUERY-${randomId}</strong>`,
+                        queryTypes[Math.floor(Math.random() * queryTypes.length)],
+                        tables[Math.floor(Math.random() * tables.length)],
+                        `<strong>${Math.floor(Math.random() * 500) + 10}ms</strong>`,
+                        `<span class="status-badge connected"><span class="status-dot"></span>Success</span>`
+                    ];
+                    break;
+                case 'ssh':
+                    const commands = ['systemctl status nginx', 'df -h', 'uptime', 'ps aux', 'netstat -tulpn'];
+                    const servers = ['server-01', 'server-02', 'server-03', 'server-04'];
+                    rowData = [
+                        `<strong>CMD-${randomId}</strong>`,
+                        `<code>${commands[Math.floor(Math.random() * commands.length)]}</code>`,
+                        servers[Math.floor(Math.random() * servers.length)],
+                        `<strong>${Math.floor(Math.random() * 1000) + 50}ms</strong>`,
+                        Math.random() > 0.1 ? 
+                            `<span class="status-badge connected"><span class="status-dot"></span>Success</span>` : 
+                            `<span class="status-badge connected"><span class="status-dot"></span>Running</span>`
+                    ];
+                    break;
+            }
+            
+            // Create cells and add to row
+            rowData.forEach(cellData => {
+                const cell = document.createElement('td');
+                cell.innerHTML = cellData;
+                newRow.appendChild(cell);
+            });
+            
+            // Add row to beginning of table
+            tbody.insertBefore(newRow, tbody.firstChild);
+            
+            // Remove oldest row if more than 10 rows
+            if (tbody.children.length > 10) {
+                tbody.removeChild(tbody.lastChild);
+            }
+        }
+
+        // Update Statistics
+        function updateStats() {
+            const connectedAgents = document.getElementById('connectedAgents');
+            const activeClients = document.getElementById('activeClients');
+            const totalLogs = document.getElementById('totalLogs');
+            
+            // Animate number changes
+            animateValue(connectedAgents, parseInt(connectedAgents.textContent.replace(/,/g, '')), Math.floor(Math.random() * 50) + 10, 1000);
+            animateValue(activeClients, parseInt(activeClients.textContent.replace(/,/g, '')), Math.floor(Math.random() * 200) + 100, 1000);
+            animateValue(totalLogs, parseInt(totalLogs.textContent.replace(/,/g, '')), Math.floor(Math.random() * 5000) + 1000, 1000);
+        }
+
+        // Animate number changes
+        function animateValue(element, start, end, duration) {
+            const range = end - start;
+            const increment = range / (duration / 16);
+            let current = start;
+            
+            const timer = setInterval(() => {
+                current += increment;
+                if ((increment > 0 && current >= end) || (increment < 0 && current <= end)) {
+                    current = end;
+                    clearInterval(timer);
+                }
+                element.textContent = Math.floor(current).toLocaleString();
+            }, 16);
+        }
+
+        // Toast Notifications
+        function showToast(title, message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            
+            const iconMap = {
+                'success': 'check-circle',
+                'error': 'exclamation-circle',
+                'info': 'info-circle'
+            };
+            
+            toast.innerHTML = `
+                <div class="toast-icon">
+                    <i class="fas fa-${iconMap[type]}"></i>
+                </div>
+                <div class="toast-content">
+                    <div class="toast-title">${title}</div>
+                    <div class="toast-message">${message}</div>
+                </div>
+            `;
+            
+            toastContainer.appendChild(toast);
+            
+            // Remove toast after 4 seconds
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease reverse';
+                setTimeout(() => {
+                    if (toastContainer.contains(toast)) {
+                        toastContainer.removeChild(toast);
+                    }
+                }, 300);
+            }, 4000);
+        }
+
+        // Simulate Real-time Data Updates
+        function simulateRealTimeData() {
+            setInterval(() => {
+                // Randomly update some values
+                if (Math.random() > 0.7) {
+                    updateStats();
+                }
+                
+                // Randomly update a status badge
+                const badges = document.querySelectorAll('.status-badge');
+                if (badges.length > 0 && Math.random() > 0.8) {
+                    const randomBadge = badges[Math.floor(Math.random() * badges.length)];
+                    if (randomBadge.classList.contains('connected')) {
+                        randomBadge.classList.remove('connected');
+                        randomBadge.classList.add('disconnected');
+                        const text = randomBadge.textContent.trim();
+                        randomBadge.innerHTML = '<span class="status-dot"></span>' + (text === 'Connected' ? 'Disconnected' : text === 'Active' ? 'Inactive' : text === 'Success' ? 'Failed' : text);
+                    } else if (randomBadge.classList.contains('disconnected')) {
+                        randomBadge.classList.remove('disconnected');
+                        randomBadge.classList.add('connected');
+                        const text = randomBadge.textContent.trim();
+                        randomBadge.innerHTML = '<span class="status-dot"></span>' + (text === 'Disconnected' ? 'Connected' : text === 'Inactive' ? 'Active' : text === 'Failed' ? 'Success' : text);
+                    }
+                }
+            }, 8000);
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            initTheme();
+            
+            // Check for remembered user
+            const rememberedUser = localStorage.getItem('rememberedUser');
+            if (rememberedUser) {
+                document.getElementById('username').value = rememberedUser;
+                document.getElementById('remember').checked = true;
+            }
+            
+            // Add entrance animations
+            setTimeout(() => {
+                const loginCard = document.querySelector('.login-card');
+                if (loginCard) {
+                    loginCard.style.animation = 'fadeInUp 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+                }
+            }, 100);
+            
+            // Close sidebar when clicking outside on mobile
+            document.addEventListener('click', function(e) {
+                const sidebar = document.getElementById('sidebar');
+                const menuToggle = document.querySelector('.mobile-menu-toggle');
+                
+                if (window.innerWidth <= 768 && 
+                    !sidebar.contains(e.target) && 
+                    !menuToggle.contains(e.target) && 
+                    sidebar.classList.contains('open')) {
+                    sidebar.classList.remove('open');
+                }
+            });
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', function() {
+            const sidebar = document.getElementById('sidebar');
+            if (window.innerWidth > 768) {
+                sidebar.classList.remove('open');
+            }
+        });
+
+        // Add keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            // Ctrl/Cmd + K for search
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                const searchInput = document.querySelector('.search-input');
+                if (searchInput) {
+                    searchInput.focus();
+                }
+            }
+            
+            // Ctrl/Cmd + L for logout
+            if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+                e.preventDefault();
+                if (document.getElementById('dashboard').style.display !== 'none') {
+                    logout();
+                }
+            }
+            
+            // Escape to close dropdowns
+            if (e.key === 'Escape') {
+                document.getElementById('userDropdown').classList.remove('show');
+                const sidebar = document.getElementById('sidebar');
+                if (sidebar.classList.contains('open')) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

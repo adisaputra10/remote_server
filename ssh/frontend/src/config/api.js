@@ -38,4 +38,56 @@ api.interceptors.response.use(
   }
 )
 
+// API functions for relay server endpoints
+export const apiService = {
+  // Authentication
+  login(credentials) {
+    return api.post('/login', credentials)
+  },
+
+  logout() {
+    return api.post('/logout')
+  },
+
+  // Agents
+  getAgents() {
+    return api.get('/api/agents')
+  },
+
+  // Clients
+  getClients() {
+    return api.get('/api/clients')
+  },
+
+  // Connection Logs
+  getConnectionLogs() {
+    return api.get('/api/logs')
+  },
+
+  // Tunnel Logs (Database Queries)
+  getTunnelLogs() {
+    return api.get('/api/tunnel-logs')
+  },
+
+  // SSH Logs
+  getSSHLogs() {
+    return api.get('/api/ssh-logs')
+  },
+
+  // Log SSH Command
+  logSSHCommand(data) {
+    return api.post('/api/log-ssh', data)
+  },
+
+  // Log Database Query
+  logQuery(data) {
+    return api.post('/api/log-query', data)
+  },
+
+  // Health Check
+  getHealth() {
+    return api.get('/health')
+  }
+}
+
 export default api
