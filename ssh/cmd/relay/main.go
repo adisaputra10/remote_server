@@ -1139,13 +1139,15 @@ func (rs *RelayServer) cleanupConnection(conn *websocket.Conn) {
 
 	// Remove from clients using fast lookup
 	if clientID, exists := rs.connToClient[conn]; exists {
-		if _, clientExists := rs.clients[clientID]; clientExists {
+		if client, clientExists := rs.clients[clientID]; clientExists {
 			delete(rs.clients, clientID)
 			delete(rs.connToClient, conn)
 			disconnectedClientID = clientID
 			rs.logger.Info("Client disconnected: %s", clientID)
 			// Log asynchronously for performance
 			go rs.logConnection("client", "", clientID, "disconnected", "")
+			// Update client status in database to "disconnected"
+			go rs.saveClientToDatabase(clientID, client.Name, client.AgentID, "disconnected")
 		}
 	}
 
