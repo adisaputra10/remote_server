@@ -938,6 +938,17 @@ func (rs *RelayServer) handleHeartbeat(conn *websocket.Conn, msg *common.Message
 }
 
 func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) {
+	// Debug logging
+	rs.logger.Info("=== RECEIVED DATABASE QUERY ===")
+	rs.logger.Info("SessionID: %s", msg.SessionID)
+	rs.logger.Info("AgentID: %s", msg.AgentID)
+	rs.logger.Info("ClientID: %s", msg.ClientID)
+	rs.logger.Info("Operation: %s", msg.DBOperation)
+	rs.logger.Info("Table: %s", msg.DBTable)
+	rs.logger.Info("Database: %s", msg.DBDatabase)
+	rs.logger.Info("Protocol: %s", msg.DBProtocol)
+	rs.logger.Info("Query: %s", msg.DBQuery[:min(100, len(msg.DBQuery))])
+
 	// Log database query to tunnel_logs table only
 	rs.logTunnelQuery(msg.SessionID, msg.AgentID, msg.ClientID, "inbound", msg.DBProtocol, msg.DBOperation, msg.DBTable, msg.DBDatabase, msg.DBQuery)
 

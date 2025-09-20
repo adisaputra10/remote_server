@@ -338,6 +338,14 @@ func (a *Agent) handleData(msg *common.Message) {
 			clientID := a.clients[msg.SessionID]
 			a.mutex.RUnlock()
 			protocol := a.detectProtocol(target)
+			
+			a.logger.Info("=== EXTRACTED SQL INFO ===")
+			a.logger.Info("Operation: %s", operation)
+			a.logger.Info("Table: %s", tableName)
+			a.logger.Info("Database: %s", databaseName)
+			a.logger.Info("Protocol: %s", protocol)
+			a.logger.Info("Client: %s", clientID)
+			
 			a.sendDatabaseQuery(msg.SessionID, clientID, queryText, operation, tableName, databaseName, protocol)
 		}
 	}
