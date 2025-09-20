@@ -282,12 +282,14 @@ export default {
   font-size: 0.875rem;
   max-width: 400px;
   padding: 0.75rem;
-  color: var(--text-secondary);
 }
 
 .query-text {
   font-family: 'Courier New', monospace;
-  color: #e5e7eb;
+  background: var(--surface-alt);
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   word-break: break-word;
   max-height: 100px;
   overflow-y: auto;

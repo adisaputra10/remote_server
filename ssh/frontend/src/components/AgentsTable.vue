@@ -95,33 +95,9 @@
         </div>
         
         <div class="modal-body">
-          <div class="setup-tabs">
-            <button 
-              :class="['tab-btn', { active: activeTab === 'linux' }]"
-              @click="activeTab = 'linux'"
-            >
-              <i class="fab fa-linux"></i>
-              Linux
-            </button>
-            <button 
-              :class="['tab-btn', { active: activeTab === 'windows' }]"
-              @click="activeTab = 'windows'"
-            >
-              <i class="fab fa-windows"></i>
-              Windows
-            </button>
-            <button 
-              :class="['tab-btn', { active: activeTab === 'docker' }]"
-              @click="activeTab = 'docker'"
-            >
-              <i class="fab fa-docker"></i>
-              Docker
-            </button>
-          </div>
-
           <div class="tab-content">
             <!-- Linux Tab -->
-            <div v-if="activeTab === 'linux'" class="setup-section">
+            <div class="setup-section">
               <h4><i class="fab fa-linux"></i> Linux Agent Installation</h4>
               
               <div class="step">
@@ -156,85 +132,6 @@ EOF</code></pre>
                 <div class="code-block">
                   <pre><code>./agent-linux -config agent-config.json</code></pre>
                   <button class="copy-btn" @click="copyCommand('run-linux')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Windows Tab -->
-            <div v-if="activeTab === 'windows'" class="setup-section">
-              <h4><i class="fab fa-windows"></i> Windows Agent Installation</h4>
-              
-              <div class="step">
-                <h5>1. Download Agent Binary</h5>
-                <div class="code-block">
-                  <pre><code>Invoke-WebRequest -Uri "http://your-server:8080/downloads/agent.exe" -OutFile "agent.exe"</code></pre>
-                  <button class="copy-btn" @click="copyCommand('download-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>2. Create Configuration File</h5>
-                <div class="code-block">
-                  <pre><code>{
-  "relay_server": "http://168.231.119.242:8080",
-  "agent_id": "{{ currentSetupAgentId }}",
-  "token": "your-auth-token"
-}</code></pre>
-                  <button class="copy-btn" @click="copyCommand('config-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>3. Run Agent</h5>
-                <div class="code-block">
-                  <pre><code>.\agent.exe -config agent-config.json</code></pre>
-                  <button class="copy-btn" @click="copyCommand('run-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Docker Tab -->
-            <div v-if="activeTab === 'docker'" class="setup-section">
-              <h4><i class="fab fa-docker"></i> Docker Agent Installation</h4>
-              
-              <div class="step">
-                <h5>1. Run with Docker</h5>
-                <div class="code-block">
-                  <pre><code>docker run -d \
-  --name relay-agent \
-  --restart unless-stopped \
-  -e RELAY_SERVER="http://168.231.119.242:8080" \
-  -e AGENT_ID="{{ currentSetupAgentId }}" \
-  -e TOKEN="your-auth-token" \
-  your-registry/relay-agent:latest</code></pre>
-                  <button class="copy-btn" @click="copyCommand('run-docker')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>2. Docker Compose</h5>
-                <div class="code-block">
-                  <pre><code>version: '3.8'
-services:
-  relay-agent:
-    image: your-registry/relay-agent:latest
-    container_name: relay-agent
-    restart: unless-stopped
-    environment:
-      - RELAY_SERVER=http://168.231.119.242:8080
-      - AGENT_ID={{ currentSetupAgentId }}
-      - TOKEN=your-auth-token</code></pre>
-                  <button class="copy-btn" @click="copyCommand('docker-compose')">
                     <i class="fas fa-copy"></i>
                   </button>
                 </div>
@@ -285,7 +182,6 @@ export default {
     // Setup Modal Data
     const showSetupModal = ref(false)
     const currentSetupAgentId = ref('')
-    const activeTab = ref('linux')
 
     const paginatedAgents = computed(() => {
       const start = (currentPage.value - 1) * itemsPerPage.value
@@ -401,7 +297,6 @@ export default {
       console.log('Opening Setup Modal for agent:', agentId)
       currentSetupAgentId.value = agentId
       showSetupModal.value = true
-      activeTab.value = 'linux'
     }
 
     const closeSetupModal = () => {
@@ -439,72 +334,12 @@ export default {
       }
     }
 
-    const copyServiceConfig = () => {
-      const serviceConfig = `sudo tee /etc/systemd/system/relay-agent.service > /dev/null << EOF
-[Unit]
-Description=Relay Agent
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/relay-agent
-ExecStart=/opt/relay-agent/agent-linux -config /opt/relay-agent/agent-config.json
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable relay-agent
-sudo systemctl start relay-agent`
-      copyToClipboard(serviceConfig)
-    }
-
-    const copyDockerCompose = () => {
-      const dockerCompose = `version: '3.8'
-services:
-  relay-agent:
-    image: your-registry/relay-agent:latest
-    container_name: relay-agent
-    restart: unless-stopped
-    environment:
-      - RELAY_SERVER=http://168.231.119.242:8080
-      - AGENT_ID=agent-docker-\${HOSTNAME}
-      - TOKEN=your-auth-token
-    networks:
-      - relay-network
-
-networks:
-  relay-network:
-    driver: bridge`
-      copyToClipboard(dockerCompose)
-    }
-
-    const copyLinuxConfig = () => {
-      const linuxConfig = `cat > agent-config.json << EOF
-{
-  "relay_server": "http://168.231.119.242:8080",
-  "agent_id": "agent-linux-$(hostname)",
-  "token": "your-auth-token"
-}
-EOF`
-      copyToClipboard(linuxConfig)
-    }
-
     // Copy command helper
     const copyCommand = (commandType) => {
       const commands = {
         'download-linux': 'wget http://your-server:8080/downloads/agent-linux\nchmod +x agent-linux',
         'config-linux': 'cat > agent-config.json << EOF\n{\n  "relay_server": "http://168.231.119.242:8080",\n  "agent_id": "agent-linux-$(hostname)",\n  "token": "your-auth-token"\n}\nEOF',
-        'run-linux': './agent-linux -config agent-config.json',
-        'download-windows': 'Invoke-WebRequest -Uri "http://your-server:8080/downloads/agent.exe" -OutFile "agent.exe"',
-        'config-windows': '{\n  "relay_server": "http://168.231.119.242:8080",\n  "agent_id": "agent-windows-%COMPUTERNAME%",\n  "token": "your-auth-token"\n}',
-        'run-windows': '.\\agent.exe -config agent-config.json',
-        'run-docker': 'docker run -d \\\n  --name relay-agent \\\n  --restart unless-stopped \\\n  -e RELAY_SERVER="http://168.231.119.242:8080" \\\n  -e AGENT_ID="agent-docker-$(hostname)" \\\n  -e TOKEN="your-auth-token" \\\n  your-registry/relay-agent:latest',
-        'docker-compose': 'version: \'3.8\'\nservices:\n  relay-agent:\n    image: your-registry/relay-agent:latest\n    container_name: relay-agent\n    restart: unless-stopped\n    environment:\n      - RELAY_SERVER=http://168.231.119.242:8080\n      - AGENT_ID=agent-docker-${HOSTNAME}\n      - TOKEN=your-auth-token'
+        'run-linux': './agent-linux -config agent-config.json'
       }
       
       const command = commands[commandType]
@@ -556,7 +391,6 @@ EOF`
       itemsPerPage,
       showSetupModal,
       currentSetupAgentId,
-      activeTab,
       refreshData,
       viewDetails,
       handlePageChange,
@@ -564,9 +398,6 @@ EOF`
       openSetupModal,
       closeSetupModal,
       copyToClipboard,
-      copyServiceConfig,
-      copyDockerCompose,
-      copyLinuxConfig,
       copyCommand,
       deleteAgent
     }
