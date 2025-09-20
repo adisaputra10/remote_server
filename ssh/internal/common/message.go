@@ -35,6 +35,7 @@ type Message struct {
 	DBQuery     string `json:"db_query,omitempty"`
 	DBOperation string `json:"db_operation,omitempty"`
 	DBTable     string `json:"db_table,omitempty"`
+	DBDatabase  string `json:"db_database,omitempty"`
 	DBProtocol  string `json:"db_protocol,omitempty"`
 }
 

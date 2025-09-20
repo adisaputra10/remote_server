@@ -319,13 +319,13 @@ func (a *Agent) handleData(msg *common.Message) {
 
 		// Also extract and send query to relay if it looks like SQL
 		queryText := string(msg.Data)
-		if operation, tableName := a.extractSQLInfo(queryText); operation != "" {
+		if operation, tableName, databaseName := a.extractSQLInfo(queryText); operation != "" {
 			a.mutex.RLock()
 			target := a.targets[msg.SessionID]
 			clientID := a.clients[msg.SessionID]
 			a.mutex.RUnlock()
 			protocol := a.detectProtocol(target)
-			a.sendDatabaseQuery(msg.SessionID, clientID, queryText, operation, tableName, protocol)
+			a.sendDatabaseQuery(msg.SessionID, clientID, queryText, operation, tableName, databaseName, protocol)
 		}
 	}
 
@@ -515,7 +515,7 @@ func (a *Agent) sendBinarySSHData(msg *common.Message) error {
 	return a.conn.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableName, protocol string) {
+func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableName, databaseName, protocol string) {
 	msg := common.NewMessage(common.MsgTypeDBQuery)
 	msg.AgentID = a.id
 	msg.ClientID = clientID
@@ -523,6 +523,7 @@ func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableNa
 	msg.DBQuery = query
 	msg.DBOperation = operation
 	msg.DBTable = tableName
+	msg.DBDatabase = databaseName
 	msg.DBProtocol = protocol
 
 	if err := a.sendMessage(msg); err != nil {
@@ -532,28 +533,39 @@ func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableNa
 	}
 }
 
-func (a *Agent) extractSQLInfo(queryText string) (operation, tableName string) {
-	// Simple SQL parser - extract operation and table name
+func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, databaseName string) {
+	// Simple SQL parser - extract operation, table name, and database name
 	query := strings.TrimSpace(strings.ToUpper(queryText))
 
 	// Skip MySQL protocol headers and binary data
 	if len(query) < 10 || query[0] < 32 {
-		return "", ""
+		return "", "", ""
 	}
 
 	words := strings.Fields(query)
 	if len(words) < 2 {
-		return "", ""
+		return "", "", ""
 	}
 
 	operation = words[0]
+
+	// Extract database name from table references like "database.table"
+	extractDBFromTable := func(tableRef string) (string, string) {
+		if strings.Contains(tableRef, ".") {
+			parts := strings.Split(tableRef, ".")
+			if len(parts) >= 2 {
+				return strings.Trim(parts[0], "`"), strings.Trim(parts[1], "`")
+			}
+		}
+		return "", strings.Trim(tableRef, "`")
+	}
 
 	switch operation {
 	case "SELECT":
 		// Find FROM keyword
 		for i, word := range words {
 			if word == "FROM" && i+1 < len(words) {
-				tableName = strings.Trim(words[i+1], ",();")
+				databaseName, tableName = extractDBFromTable(strings.Trim(words[i+1], ",();"))
 				break
 			}
 		}
@@ -561,7 +573,7 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName string) {
 		// Find INTO keyword
 		for i, word := range words {
 			if word == "INTO" && i+1 < len(words) {
-				tableName = strings.Trim(words[i+1], ",();")
+				databaseName, tableName = extractDBFromTable(strings.Trim(words[i+1], ",();"))
 				break
 			}
 		}
@@ -569,22 +581,27 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName string) {
 		// Table name usually follows UPDATE or DELETE FROM
 		if len(words) > 1 {
 			if operation == "DELETE" && words[1] == "FROM" && len(words) > 2 {
-				tableName = strings.Trim(words[2], ",();")
+				databaseName, tableName = extractDBFromTable(strings.Trim(words[2], ",();"))
 			} else if operation == "UPDATE" {
-				tableName = strings.Trim(words[1], ",();")
+				databaseName, tableName = extractDBFromTable(strings.Trim(words[1], ",();"))
 			}
 		}
 	case "CREATE", "DROP", "ALTER":
 		// Find table name after TABLE keyword
 		for i, word := range words {
 			if word == "TABLE" && i+1 < len(words) {
-				tableName = strings.Trim(words[i+1], ",();")
+				databaseName, tableName = extractDBFromTable(strings.Trim(words[i+1], ",();"))
 				break
 			}
 		}
+	case "USE":
+		// USE database_name
+		if len(words) > 1 {
+			databaseName = strings.Trim(words[1], ",();`")
+		}
 	}
 
-	return operation, tableName
+	return operation, tableName, databaseName
 }
 
 func (a *Agent) detectProtocol(target string) string {

@@ -27,6 +27,9 @@
               Operation
             </th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Database
+            </th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Query
             </th>
           </tr>
@@ -52,6 +55,9 @@
                 {{ query.operation }}
               </span>
             </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+              {{ query.database_name || '-' }}
+            </td>
             <td class="px-6 py-4 text-sm text-gray-500 max-w-md">
               <div class="truncate" :title="query.query_text">
                 {{ truncateQuery(query.query_text) }}
@@ -59,7 +65,7 @@
             </td>
           </tr>
           <tr v-if="queries.length === 0">
-            <td colspan="5" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+            <td colspan="6" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
               No database queries logged
             </td>
           </tr>

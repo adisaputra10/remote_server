@@ -121,14 +121,15 @@ type SSHTunnelLogRequest struct {
 }
 
 type QueryLogRequest struct {
-	SessionID string `json:"session_id"`
-	ClientID  string `json:"client_id"`
-	AgentID   string `json:"agent_id"`
-	Direction string `json:"direction"`
-	Protocol  string `json:"protocol"`
-	Operation string `json:"operation"`
-	TableName string `json:"table_name"`
-	QueryText string `json:"query_text"`
+	SessionID    string `json:"session_id"`
+	ClientID     string `json:"client_id"`
+	AgentID      string `json:"agent_id"`
+	Direction    string `json:"direction"`
+	Protocol     string `json:"protocol"`
+	Operation    string `json:"operation"`
+	TableName    string `json:"table_name"`
+	DatabaseName string `json:"database_name"`
+	QueryText    string `json:"query_text"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -265,6 +266,7 @@ func (rs *RelayServer) initDatabase() {
 	alterQueries := []string{
 		`ALTER TABLE tunnel_logs ADD COLUMN agent_id VARCHAR(100) AFTER session_id`,
 		`ALTER TABLE tunnel_logs ADD COLUMN client_id VARCHAR(100) AFTER agent_id`,
+		`ALTER TABLE tunnel_logs ADD COLUMN database_name VARCHAR(100) AFTER table_name`,
 	}
 
 	for _, query := range alterQueries {
@@ -493,7 +495,7 @@ func (rs *RelayServer) isAllowedOperation(operation string) bool {
 	return false
 }
 
-func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, protocol, operation, tableName, queryText string) {
+func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, protocol, operation, tableName, databaseName, queryText string) {
 	// Clean all string parameters before processing
 	sessionID = rs.cleanString(sessionID)
 	agentID = rs.cleanString(agentID)
@@ -502,6 +504,7 @@ func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, p
 	protocol = rs.cleanString(protocol)
 	operation = rs.cleanOperation(operation) // Use special cleaning for operation
 	tableName = rs.cleanString(tableName)
+	databaseName = rs.cleanString(databaseName)
 	queryText = rs.cleanString(queryText)
 
 	// Check if this operation should be saved to database
@@ -511,8 +514,8 @@ func (rs *RelayServer) logTunnelQuery(sessionID, agentID, clientID, direction, p
 	}
 
 	_, err := rs.db.Exec(
-		"INSERT INTO tunnel_logs (session_id, agent_id, client_id, direction, protocol, operation, table_name, query_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, agentID, clientID, direction, protocol, operation, tableName, queryText,
+		"INSERT INTO tunnel_logs (session_id, agent_id, client_id, direction, protocol, operation, table_name, database_name, query_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, agentID, clientID, direction, protocol, operation, tableName, databaseName, queryText,
 	)
 	if err != nil {
 		rs.logger.Error("Failed to log tunnel query: %v", err)
@@ -936,10 +939,10 @@ func (rs *RelayServer) handleHeartbeat(conn *websocket.Conn, msg *common.Message
 
 func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) {
 	// Log database query to tunnel_logs table only
-	rs.logTunnelQuery(msg.SessionID, msg.AgentID, msg.ClientID, "inbound", msg.DBProtocol, msg.DBOperation, msg.DBTable, msg.DBQuery)
+	rs.logTunnelQuery(msg.SessionID, msg.AgentID, msg.ClientID, "inbound", msg.DBProtocol, msg.DBOperation, msg.DBTable, msg.DBDatabase, msg.DBQuery)
 
-	rs.logger.Info("Database query logged from client %s: %s %s",
-		msg.ClientID, msg.DBOperation, msg.DBTable)
+	rs.logger.Info("Database query logged from client %s: %s %s.%s",
+		msg.ClientID, msg.DBOperation, msg.DBDatabase, msg.DBTable)
 }
 
 // handleShellCommand forwards shell commands from client to agent
@@ -1537,7 +1540,7 @@ func cleanHTMLEntities(text string) string {
 }
 
 func (rs *RelayServer) handleAPITunnelLogs(w http.ResponseWriter, r *http.Request) {
-	rows, err := rs.db.Query("SELECT session_id, agent_id, client_id, direction, protocol, operation, table_name, query_text, timestamp FROM tunnel_logs ORDER BY timestamp DESC LIMIT 100")
+	rows, err := rs.db.Query("SELECT session_id, agent_id, client_id, direction, protocol, operation, table_name, database_name, query_text, timestamp FROM tunnel_logs ORDER BY timestamp DESC LIMIT 100")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1546,10 +1549,10 @@ func (rs *RelayServer) handleAPITunnelLogs(w http.ResponseWriter, r *http.Reques
 
 	var logs []map[string]interface{}
 	for rows.Next() {
-		var sessionID, agentID, clientID, direction, protocol, operation, tableName, queryText sql.NullString
+		var sessionID, agentID, clientID, direction, protocol, operation, tableName, databaseName, queryText sql.NullString
 		var timestamp time.Time
 
-		err := rows.Scan(&sessionID, &agentID, &clientID, &direction, &protocol, &operation, &tableName, &queryText, &timestamp)
+		err := rows.Scan(&sessionID, &agentID, &clientID, &direction, &protocol, &operation, &tableName, &databaseName, &queryText, &timestamp)
 		if err != nil {
 			continue
 		}
@@ -1558,15 +1561,16 @@ func (rs *RelayServer) handleAPITunnelLogs(w http.ResponseWriter, r *http.Reques
 		cleanedQueryText := rs.cleanString(cleanHTMLEntities(queryText.String))
 
 		log := map[string]interface{}{
-			"session_id": rs.cleanString(sessionID.String),
-			"agent_id":   rs.cleanString(agentID.String),
-			"client_id":  rs.cleanString(clientID.String),
-			"direction":  rs.cleanString(direction.String),
-			"protocol":   rs.cleanString(protocol.String),
-			"operation":  rs.cleanOperation(operation.String),
-			"table_name": rs.cleanString(tableName.String),
-			"query_text": cleanedQueryText,
-			"timestamp":  timestamp,
+			"session_id":    rs.cleanString(sessionID.String),
+			"agent_id":      rs.cleanString(agentID.String),
+			"client_id":     rs.cleanString(clientID.String),
+			"direction":     rs.cleanString(direction.String),
+			"protocol":      rs.cleanString(protocol.String),
+			"operation":     rs.cleanOperation(operation.String),
+			"table_name":    rs.cleanString(tableName.String),
+			"database_name": rs.cleanString(databaseName.String),
+			"query_text":    cleanedQueryText,
+			"timestamp":     timestamp,
 		}
 		logs = append(logs, log)
 	}
@@ -1595,7 +1599,7 @@ func (rs *RelayServer) handleAPILogQuery(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Log the query
-	rs.logTunnelQuery(req.SessionID, req.AgentID, req.ClientID, req.Direction, req.Protocol, req.Operation, req.TableName, req.QueryText)
+	rs.logTunnelQuery(req.SessionID, req.AgentID, req.ClientID, req.Direction, req.Protocol, req.Operation, req.TableName, req.DatabaseName, req.QueryText)
 
 	// Return success response
 	response := map[string]interface{}{
