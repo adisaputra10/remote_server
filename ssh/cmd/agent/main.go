@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -557,13 +558,14 @@ func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableNa
 }
 
 func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, databaseName string) {
-	// Simple SQL parser - extract operation, table name, and database name
-	query := strings.TrimSpace(strings.ToUpper(queryText))
-
-	// Skip MySQL protocol headers and binary data
-	if len(query) < 10 || query[0] < 32 {
+	// Clean and extract SQL from potentially binary data
+	cleanQuery := a.extractCleanSQL(queryText)
+	if cleanQuery == "" {
 		return "", "", ""
 	}
+
+	// Simple SQL parser - extract operation, table name, and database name
+	query := strings.TrimSpace(strings.ToUpper(cleanQuery))
 
 	words := strings.Fields(query)
 	if len(words) < 2 {
@@ -625,6 +627,67 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, database
 	}
 
 	return operation, tableName, databaseName
+}
+
+// extractCleanSQL extracts clean SQL commands from potentially binary data
+func (a *Agent) extractCleanSQL(data string) string {
+	// Look for SQL keywords in the data
+	sqlKeywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "SHOW", "DESCRIBE", "EXPLAIN"}
+	
+	// Try to find SQL patterns
+	dataUpper := strings.ToUpper(data)
+	
+	for _, keyword := range sqlKeywords {
+		if idx := strings.Index(dataUpper, keyword); idx >= 0 {
+			// Found SQL keyword, extract from this position
+			remaining := data[idx:]
+			
+			// Clean the SQL by removing non-printable characters but keep SQL-valid chars
+			var cleaned strings.Builder
+			inQuote := false
+			quoteChar := byte(0)
+			
+			for i, b := range []byte(remaining) {
+				// Handle quotes
+				if (b == '\'' || b == '"' || b == '`') && (i == 0 || remaining[i-1] != '\\') {
+					if !inQuote {
+						inQuote = true
+						quoteChar = b
+					} else if b == quoteChar {
+						inQuote = false
+						quoteChar = 0
+					}
+					cleaned.WriteByte(b)
+					continue
+				}
+				
+				// If in quote, keep everything
+				if inQuote {
+					cleaned.WriteByte(b)
+					continue
+				}
+				
+				// Keep printable ASCII chars and some special SQL chars
+				if (b >= 32 && b <= 126) || b == '\n' || b == '\r' || b == '\t' {
+					cleaned.WriteByte(b)
+				} else if b < 32 || b > 126 {
+					// Replace non-printable with space
+					cleaned.WriteByte(' ')
+				}
+			}
+			
+			result := strings.TrimSpace(cleaned.String())
+			// Remove multiple spaces
+			result = regexp.MustCompile(`\s+`).ReplaceAllString(result, " ")
+			
+			// Validate that result looks like SQL
+			if len(result) >= 6 && strings.Contains(strings.ToUpper(result), keyword) {
+				return result
+			}
+		}
+	}
+	
+	return ""
 }
 
 // extractDatabaseFromHandshake extracts database name from MySQL connection handshake
