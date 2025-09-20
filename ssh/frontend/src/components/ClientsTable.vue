@@ -39,6 +39,7 @@
               <th>STATUS</th>
               <th>CONNECTED AT</th>
               <th>LAST PING</th>
+              <th>ACTIONS</th>
             </tr>
           </thead>
           <tbody>
@@ -52,6 +53,24 @@
               </td>
               <td>{{ client.connectedAt }}</td>
               <td>{{ client.lastPing }}</td>
+              <td>
+                <div class="action-buttons">
+                  <button 
+                    class="action-btn setup-btn with-text" 
+                    @click="openSetupModal(client.id)"
+                    title="Setup Client">
+                    <i class="fas fa-cog"></i>
+                    <span>Setup</span>
+                  </button>
+                  <button 
+                    class="action-btn delete-btn with-text" 
+                    @click="deleteClient(client.id)"
+                    title="Delete Client">
+                    <i class="fas fa-trash"></i>
+                    <span>Delete</span>
+                  </button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -125,6 +144,201 @@
         </form>
       </div>
     </div>
+
+    <!-- Setup Client Modal -->
+    <div v-if="showSetupModal" class="modal-overlay" @click="closeSetupModal">
+      <div class="modal setup-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Setup Client: {{ currentSetupClientId }}</h3>
+          <button class="btn-close" @click="closeSetupModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="setup-tabs">
+            <button 
+              :class="['tab-btn', { active: activeTab === 'windows' }]"
+              @click="activeTab = 'windows'"
+            >
+              <i class="fab fa-windows"></i>
+              Windows
+            </button>
+            <button 
+              :class="['tab-btn', { active: activeTab === 'linux' }]"
+              @click="activeTab = 'linux'"
+            >
+              <i class="fab fa-linux"></i>
+              Linux
+            </button>
+            <button 
+              :class="['tab-btn', { active: activeTab === 'docker' }]"
+              @click="activeTab = 'docker'"
+            >
+              <i class="fab fa-docker"></i>
+              Docker
+            </button>
+          </div>
+
+          <div class="tab-content">
+            <!-- Windows Tab -->
+            <div v-if="activeTab === 'windows'" class="setup-section">
+              <h4><i class="fab fa-windows"></i> Windows Client Installation</h4>
+              
+              <div class="step">
+                <h5>1. Download Client Binary</h5>
+                <div class="code-block">
+                  <pre><code>Invoke-WebRequest -Uri "http://168.231.119.242:8080/downloads/client.exe" -OutFile "client.exe"</code></pre>
+                  <button class="copy-btn" @click="copyCommand('download-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Create Configuration File</h5>
+                <div class="code-block">
+                  <pre><code>{
+  "relay_server": "http://168.231.119.242:8080",
+  "client_id": "{{ currentSetupClientId }}",
+  "token": "your-auth-token"
+}</code></pre>
+                  <button class="copy-btn" @click="copyCommand('config-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>3. Run Client</h5>
+                <div class="code-block">
+                  <pre><code>.\client.exe -config client-config.json</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Linux Tab -->
+            <div v-if="activeTab === 'linux'" class="setup-section">
+              <h4><i class="fab fa-linux"></i> Linux Client Installation</h4>
+              
+              <div class="step">
+                <h5>1. Download Client Binary</h5>
+                <div class="code-block">
+                  <pre><code>wget http://168.231.119.242:8080/downloads/client-linux
+chmod +x client-linux</code></pre>
+                  <button class="copy-btn" @click="copyCommand('download-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Create Configuration</h5>
+                <div class="code-block">
+                  <pre><code>cat > client-config.json << EOF
+{
+  "relay_server": "http://168.231.119.242:8080",
+  "client_id": "{{ currentSetupClientId }}",
+  "token": "your-auth-token"
+}
+EOF</code></pre>
+                  <button class="copy-btn" @click="copyCommand('config-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>3. Run Client</h5>
+                <div class="code-block">
+                  <pre><code>./client-linux -config client-config.json</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Docker Tab -->
+            <div v-if="activeTab === 'docker'" class="setup-section">
+              <h4><i class="fab fa-docker"></i> Docker Client Installation</h4>
+              
+              <div class="step">
+                <h5>1. Run with Docker</h5>
+                <div class="code-block">
+                  <pre><code>docker run -d \
+  --name relay-client \
+  --restart unless-stopped \
+  -e RELAY_SERVER="http://168.231.119.242:8080" \
+  -e CLIENT_ID="{{ currentSetupClientId }}" \
+  -e TOKEN="your-auth-token" \
+  your-registry/relay-client:latest</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-docker')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Docker Compose</h5>
+                <div class="code-block">
+                  <pre><code>version: '3.8'
+services:
+  relay-client:
+    image: your-registry/relay-client:latest
+    container_name: relay-client
+    restart: unless-stopped
+    environment:
+      - RELAY_SERVER=http://168.231.119.242:8080
+      - CLIENT_ID={{ currentSetupClientId }}
+      - TOKEN=your-auth-token</code></pre>
+                  <button class="copy-btn" @click="copyCommand('docker-compose')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Client Confirmation Modal -->
+    <div v-if="showDeleteModal" class="modal-overlay" @click="closeDeleteModal">
+      <div class="modal delete-modal" @click.stop>
+        <div class="modal-header">
+          <h3>
+            <i class="fas fa-exclamation-triangle text-warning"></i>
+            Confirm Delete
+          </h3>
+          <button class="btn-close" @click="closeDeleteModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <p class="delete-warning">
+            Are you sure you want to delete client <strong>{{ clientToDelete }}</strong>?
+          </p>
+          <p class="delete-note">
+            This action cannot be undone. The client will be permanently removed from the system.
+          </p>
+        </div>
+        
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="closeDeleteModal">
+            Cancel
+          </button>
+          <button type="button" class="btn btn-danger" @click="deleteClient">
+            <i class="fas fa-trash"></i>
+            Delete Client
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -153,6 +367,15 @@ export default {
       name: '',
       token: ''
     })
+
+    // Setup Modal Data
+    const showSetupModal = ref(false)
+    const currentSetupClientId = ref('')
+    const activeTab = ref('windows')
+
+    // Delete Modal Data  
+    const showDeleteModal = ref(false)
+    const clientToDelete = ref('')
 
     const paginatedClients = computed(() => {
       const start = (currentPage.value - 1) * itemsPerPage.value
@@ -295,6 +518,92 @@ export default {
       }
     }
 
+    // Setup and Delete Functions
+    const showSetup = (clientId) => {
+      console.log(`Showing setup for client: ${clientId}`)
+      currentSetupClientId.value = clientId
+      activeTab.value = 'windows'
+      showSetupModal.value = true
+    }
+
+    const showDelete = (clientId) => {
+      console.log(`Showing delete confirmation for client: ${clientId}`)
+      clientToDelete.value = clientId
+      showDeleteModal.value = true
+    }
+
+    const closeSetupModal = () => {
+      showSetupModal.value = false
+      currentSetupClientId.value = ''
+      activeTab.value = 'windows'
+    }
+
+    const closeDeleteModal = () => {
+      showDeleteModal.value = false
+      clientToDelete.value = ''
+    }
+
+    const deleteClient = async () => {
+      if (!clientToDelete.value) return
+      
+      try {
+        console.log(`Deleting client: ${clientToDelete.value}`)
+        await apiService.deleteClient(clientToDelete.value)
+        
+        // Refresh the table after deletion
+        await fetchClients()
+        closeDeleteModal()
+        
+        console.log(`Client ${clientToDelete.value} deleted successfully`)
+        alert(`Client ${clientToDelete.value} deleted successfully`)
+      } catch (error) {
+        console.error('Error deleting client:', error)
+        alert('Failed to delete client: ' + (error.response?.data?.error || error.message))
+      }
+    }
+
+    const copyCommand = (type) => {
+      let command = ''
+      const clientId = currentSetupClientId.value
+      
+      switch(type) {
+        case 'download-windows':
+          command = 'Invoke-WebRequest -Uri "http://168.231.119.242:8080/downloads/client.exe" -OutFile "client.exe"'
+          break
+        case 'config-windows':
+          command = JSON.stringify({
+            relay_server: "http://168.231.119.242:8080",
+            client_id: clientId,
+            token: "your-auth-token"
+          }, null, 2)
+          break
+        case 'run-windows':
+          command = '.\\client.exe -config client-config.json'
+          break
+        case 'download-linux':
+          command = 'wget http://168.231.119.242:8080/downloads/client-linux\nchmod +x client-linux'
+          break
+        case 'config-linux':
+          command = `cat > client-config.json << EOF\n{\n  "relay_server": "http://168.231.119.242:8080",\n  "client_id": "${clientId}",\n  "token": "your-auth-token"\n}\nEOF`
+          break
+        case 'run-linux':
+          command = './client-linux -config client-config.json'
+          break
+        case 'run-docker':
+          command = `docker run -d \\\n  --name relay-client \\\n  --restart unless-stopped \\\n  -e RELAY_SERVER="http://168.231.119.242:8080" \\\n  -e CLIENT_ID="${clientId}" \\\n  -e TOKEN="your-auth-token" \\\n  your-registry/relay-client:latest`
+          break
+        case 'docker-compose':
+          command = `version: '3.8'\nservices:\n  relay-client:\n    image: your-registry/relay-client:latest\n    container_name: relay-client\n    restart: unless-stopped\n    environment:\n      - RELAY_SERVER=http://168.231.119.242:8080\n      - CLIENT_ID=${clientId}\n      - TOKEN=your-auth-token`
+          break
+      }
+      
+      navigator.clipboard.writeText(command).then(() => {
+        console.log('Command copied to clipboard')
+      }).catch(err => {
+        console.error('Failed to copy command:', err)
+      })
+    }
+
     const getStatusText = (status) => {
       switch (status) {
         case 'success':
@@ -325,6 +634,11 @@ export default {
       showAddModal,
       submitting,
       newClient,
+      showSetupModal,
+      currentSetupClientId,
+      activeTab,
+      showDeleteModal,
+      clientToDelete,
       refreshData,
       viewDetails,
       disconnectClient,
@@ -332,7 +646,13 @@ export default {
       getStatusText,
       openAddClientModal,
       closeAddClientModal,
-      submitClient
+      submitClient,
+      showSetup,
+      showDelete,
+      closeSetupModal,
+      closeDeleteModal,
+      deleteClient,
+      copyCommand
     }
   }
 }
@@ -561,5 +881,147 @@ export default {
 .modal-footer .btn-success:hover:not(:disabled) {
   background: var(--color-success-dark);
   transform: translateY(-1px);
+}
+
+.modal-footer .btn-danger {
+  background: var(--color-danger);
+  color: white;
+}
+
+.modal-footer .btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-dark);
+  transform: translateY(-1px);
+}
+
+/* Setup Modal Styles */
+.setup-modal {
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.setup-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 1.5rem;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.tab-btn:hover {
+  background: var(--surface-alt);
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--color-primary);
+  border-bottom: 2px solid var(--color-primary);
+  background: var(--surface-alt);
+}
+
+.setup-section h4 {
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.1rem;
+}
+
+.step {
+  margin-bottom: 2rem;
+}
+
+.step h5 {
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+}
+
+.code-block {
+  position: relative;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.code-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.75rem;
+}
+
+.copy-btn:hover {
+  background: var(--color-primary-dark);
+  transform: scale(1.05);
+}
+
+/* Action buttons with text */
+.action-btn.with-text {
+  width: auto;
+  padding: 0.5rem 0.75rem;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  min-width: 70px;
+}
+
+.action-btn.with-text i {
+  font-size: 0.8rem;
+}
+
+/* Delete modal styles */
+.delete-modal {
+  max-width: 450px;
+}
+
+.delete-warning {
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.delete-note {
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.text-warning {
+  color: var(--color-warning);
 }
 </style>

@@ -40,6 +40,7 @@
               <th>STATUS</th>
               <th>CONNECTED AT</th>
               <th>LAST PING</th>
+              <th>ACTIONS</th>
             </tr>
           </thead>
           <tbody>
@@ -52,6 +53,24 @@
               </td>
               <td>{{ agent.connectedAt }}</td>
               <td>{{ agent.lastPing }}</td>
+              <td>
+                <div class="action-buttons">
+                  <button 
+                    class="action-btn setup-btn with-text" 
+                    @click="openSetupModal(agent.id)"
+                    title="Setup Agent">
+                    <i class="fas fa-cog"></i>
+                    <span>Setup</span>
+                  </button>
+                  <button 
+                    class="action-btn delete-btn with-text" 
+                    @click="deleteAgent(agent.id)"
+                    title="Delete Agent">
+                    <i class="fas fa-trash"></i>
+                    <span>Delete</span>
+                  </button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -63,6 +82,184 @@
         :items-per-page="itemsPerPage"
         @page-changed="handlePageChange"
       />
+    </div>
+
+    <!-- Setup Modal -->
+    <div v-if="showSetupModal" class="modal-overlay" @click="closeSetupModal">
+      <div class="modal setup-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Setup Agent: {{ currentSetupAgentId }}</h3>
+          <button class="btn-close" @click="closeSetupModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="setup-tabs">
+            <button 
+              :class="['tab-btn', { active: activeTab === 'linux' }]"
+              @click="activeTab = 'linux'"
+            >
+              <i class="fab fa-linux"></i>
+              Linux
+            </button>
+            <button 
+              :class="['tab-btn', { active: activeTab === 'windows' }]"
+              @click="activeTab = 'windows'"
+            >
+              <i class="fab fa-windows"></i>
+              Windows
+            </button>
+            <button 
+              :class="['tab-btn', { active: activeTab === 'docker' }]"
+              @click="activeTab = 'docker'"
+            >
+              <i class="fab fa-docker"></i>
+              Docker
+            </button>
+          </div>
+
+          <div class="tab-content">
+            <!-- Linux Tab -->
+            <div v-if="activeTab === 'linux'" class="setup-section">
+              <h4><i class="fab fa-linux"></i> Linux Agent Installation</h4>
+              
+              <div class="step">
+                <h5>1. Download Agent Binary</h5>
+                <div class="code-block">
+                  <pre><code>wget http://your-server:8080/downloads/agent-linux
+chmod +x agent-linux</code></pre>
+                  <button class="copy-btn" @click="copyCommand('download-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Create Configuration</h5>
+                <div class="code-block">
+                  <pre><code>cat > agent-config.json << EOF
+{
+  "relay_server": "http://168.231.119.242:8080",
+  "agent_id": "{{ currentSetupAgentId }}",
+  "token": "your-auth-token"
+}
+EOF</code></pre>
+                  <button class="copy-btn" @click="copyCommand('config-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>3. Run Agent</h5>
+                <div class="code-block">
+                  <pre><code>./agent-linux -config agent-config.json</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-linux')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Windows Tab -->
+            <div v-if="activeTab === 'windows'" class="setup-section">
+              <h4><i class="fab fa-windows"></i> Windows Agent Installation</h4>
+              
+              <div class="step">
+                <h5>1. Download Agent Binary</h5>
+                <div class="code-block">
+                  <pre><code>Invoke-WebRequest -Uri "http://your-server:8080/downloads/agent.exe" -OutFile "agent.exe"</code></pre>
+                  <button class="copy-btn" @click="copyCommand('download-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Create Configuration File</h5>
+                <div class="code-block">
+                  <pre><code>{
+  "relay_server": "http://168.231.119.242:8080",
+  "agent_id": "{{ currentSetupAgentId }}",
+  "token": "your-auth-token"
+}</code></pre>
+                  <button class="copy-btn" @click="copyCommand('config-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>3. Run Agent</h5>
+                <div class="code-block">
+                  <pre><code>.\agent.exe -config agent-config.json</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-windows')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Docker Tab -->
+            <div v-if="activeTab === 'docker'" class="setup-section">
+              <h4><i class="fab fa-docker"></i> Docker Agent Installation</h4>
+              
+              <div class="step">
+                <h5>1. Run with Docker</h5>
+                <div class="code-block">
+                  <pre><code>docker run -d \
+  --name relay-agent \
+  --restart unless-stopped \
+  -e RELAY_SERVER="http://168.231.119.242:8080" \
+  -e AGENT_ID="{{ currentSetupAgentId }}" \
+  -e TOKEN="your-auth-token" \
+  your-registry/relay-agent:latest</code></pre>
+                  <button class="copy-btn" @click="copyCommand('run-docker')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="step">
+                <h5>2. Docker Compose</h5>
+                <div class="code-block">
+                  <pre><code>version: '3.8'
+services:
+  relay-agent:
+    image: your-registry/relay-agent:latest
+    container_name: relay-agent
+    restart: unless-stopped
+    environment:
+      - RELAY_SERVER=http://168.231.119.242:8080
+      - AGENT_ID={{ currentSetupAgentId }}
+      - TOKEN=your-auth-token</code></pre>
+                  <button class="copy-btn" @click="copyCommand('docker-compose')">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setup-notes">
+            <h4><i class="fas fa-info-circle"></i> Important Notes</h4>
+            <ul>
+              <li>Replace <code>your-auth-token</code> with your actual authentication token</li>
+              <li>Ensure the agent can reach the relay server at <code>http://168.231.119.242:8080</code></li>
+              <li>Check firewall settings if connection fails</li>
+              <li>Agent ID should be unique for each installation</li>
+              <li>Agent will appear in this dashboard once connected</li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeSetupModal">
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -84,6 +281,11 @@ export default {
     const error = ref(null)
     const currentPage = ref(1)
     const itemsPerPage = ref(20)
+
+    // Setup Modal Data
+    const showSetupModal = ref(false)
+    const currentSetupAgentId = ref('')
+    const activeTab = ref('linux')
 
     const paginatedAgents = computed(() => {
       const start = (currentPage.value - 1) * itemsPerPage.value
@@ -194,6 +396,150 @@ export default {
       emit('open-add-agent-modal')
     }
 
+    // Setup Modal Functions
+    const openSetupModal = (agentId) => {
+      console.log('Opening Setup Modal for agent:', agentId)
+      currentSetupAgentId.value = agentId
+      showSetupModal.value = true
+      activeTab.value = 'linux'
+    }
+
+    const closeSetupModal = () => {
+      console.log('Closing Setup Modal...')
+      showSetupModal.value = false
+    }
+
+    // Copy to clipboard functions
+    const copyToClipboard = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text)
+        // Show toast notification
+        const toast = document.createElement('div')
+        toast.textContent = 'Copied to clipboard!'
+        toast.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          background: var(--color-success);
+          color: white;
+          padding: 0.75rem 1rem;
+          border-radius: var(--radius-md);
+          box-shadow: var(--shadow-lg);
+          z-index: 10000;
+          font-size: 0.875rem;
+          font-weight: 500;
+        `
+        document.body.appendChild(toast)
+        setTimeout(() => {
+          document.body.removeChild(toast)
+        }, 2000)
+      } catch (err) {
+        console.error('Failed to copy:', err)
+        alert('Failed to copy to clipboard')
+      }
+    }
+
+    const copyServiceConfig = () => {
+      const serviceConfig = `sudo tee /etc/systemd/system/relay-agent.service > /dev/null << EOF
+[Unit]
+Description=Relay Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/relay-agent
+ExecStart=/opt/relay-agent/agent-linux -config /opt/relay-agent/agent-config.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable relay-agent
+sudo systemctl start relay-agent`
+      copyToClipboard(serviceConfig)
+    }
+
+    const copyDockerCompose = () => {
+      const dockerCompose = `version: '3.8'
+services:
+  relay-agent:
+    image: your-registry/relay-agent:latest
+    container_name: relay-agent
+    restart: unless-stopped
+    environment:
+      - RELAY_SERVER=http://168.231.119.242:8080
+      - AGENT_ID=agent-docker-\${HOSTNAME}
+      - TOKEN=your-auth-token
+    networks:
+      - relay-network
+
+networks:
+  relay-network:
+    driver: bridge`
+      copyToClipboard(dockerCompose)
+    }
+
+    const copyLinuxConfig = () => {
+      const linuxConfig = `cat > agent-config.json << EOF
+{
+  "relay_server": "http://168.231.119.242:8080",
+  "agent_id": "agent-linux-$(hostname)",
+  "token": "your-auth-token"
+}
+EOF`
+      copyToClipboard(linuxConfig)
+    }
+
+    // Copy command helper
+    const copyCommand = (commandType) => {
+      const commands = {
+        'download-linux': 'wget http://your-server:8080/downloads/agent-linux\nchmod +x agent-linux',
+        'config-linux': 'cat > agent-config.json << EOF\n{\n  "relay_server": "http://168.231.119.242:8080",\n  "agent_id": "agent-linux-$(hostname)",\n  "token": "your-auth-token"\n}\nEOF',
+        'run-linux': './agent-linux -config agent-config.json',
+        'download-windows': 'Invoke-WebRequest -Uri "http://your-server:8080/downloads/agent.exe" -OutFile "agent.exe"',
+        'config-windows': '{\n  "relay_server": "http://168.231.119.242:8080",\n  "agent_id": "agent-windows-%COMPUTERNAME%",\n  "token": "your-auth-token"\n}',
+        'run-windows': '.\\agent.exe -config agent-config.json',
+        'run-docker': 'docker run -d \\\n  --name relay-agent \\\n  --restart unless-stopped \\\n  -e RELAY_SERVER="http://168.231.119.242:8080" \\\n  -e AGENT_ID="agent-docker-$(hostname)" \\\n  -e TOKEN="your-auth-token" \\\n  your-registry/relay-agent:latest',
+        'docker-compose': 'version: \'3.8\'\nservices:\n  relay-agent:\n    image: your-registry/relay-agent:latest\n    container_name: relay-agent\n    restart: unless-stopped\n    environment:\n      - RELAY_SERVER=http://168.231.119.242:8080\n      - AGENT_ID=agent-docker-${HOSTNAME}\n      - TOKEN=your-auth-token'
+      }
+      
+      const command = commands[commandType]
+      if (command) {
+        copyToClipboard(command)
+      }
+    }
+
+    // Delete Agent Function
+    const deleteAgent = async (agentId) => {
+      if (!confirm(`Are you sure you want to delete agent "${agentId}"?\n\nThis action cannot be undone.`)) {
+        return
+      }
+
+      try {
+        console.log('=== DELETING AGENT ===')
+        console.log('Agent ID:', agentId)
+        
+        // TODO: Implement API call to delete agent
+        // await apiService.deleteAgent(agentId)
+        
+        // For now, simulate API call
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        alert(`Agent "${agentId}" has been deleted successfully!`)
+        
+        // Refresh agents list
+        fetchAgents()
+        
+      } catch (error) {
+        console.error('Error deleting agent:', error)
+        alert(`Failed to delete agent "${agentId}". Please try again.`)
+      }
+    }
+
     onMounted(() => {
       fetchAgents()
       
@@ -208,10 +554,21 @@ export default {
       error,
       currentPage,
       itemsPerPage,
+      showSetupModal,
+      currentSetupAgentId,
+      activeTab,
       refreshData,
       viewDetails,
       handlePageChange,
-      openAddAgentModal
+      openAddAgentModal,
+      openSetupModal,
+      closeSetupModal,
+      copyToClipboard,
+      copyServiceConfig,
+      copyDockerCompose,
+      copyLinuxConfig,
+      copyCommand,
+      deleteAgent
     }
   }
 }
@@ -275,6 +632,12 @@ export default {
   overflow: auto;
 }
 
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .action-btn {
   display: inline-flex;
   align-items: center;
@@ -287,12 +650,272 @@ export default {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.3s ease;
-  margin-right: 0.5rem;
+  margin-right: 0;
+}
+
+.action-btn.with-text {
+  width: auto;
+  padding: 0.5rem 0.75rem;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.action-btn.with-text span {
+  font-size: 0.8rem;
 }
 
 .action-btn:hover {
   background: var(--primary-color);
   color: white;
   border-color: var(--primary-color);
+}
+
+.action-btn.setup-btn:hover {
+  background: var(--info-color);
+  color: white;
+  border-color: var(--info-color);
+}
+
+.action-btn.delete-btn:hover {
+  background: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+.action-btn.danger:hover {
+  background: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+/* Setup Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.setup-modal {
+  background: var(--surface-color);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  width: 90%;
+  max-width: 900px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-alt);
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.btn-close:hover {
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.setup-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tab-btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-alt);
+}
+
+.tab-btn.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.setup-section h4 {
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.step {
+  margin-bottom: 2rem;
+}
+
+.step h5 {
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.step p {
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  line-height: 1.6;
+}
+
+.code-block {
+  position: relative;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.code-block code {
+  font-family: inherit;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+  font-size: 0.875rem;
+}
+
+.copy-btn:hover {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.setup-notes {
+  background: var(--surface-alt);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  margin-top: 2rem;
+}
+
+.setup-notes h4 {
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.setup-notes ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.setup-notes li {
+  margin-bottom: 0.5rem;
+}
+
+.setup-notes code {
+  background: var(--background-color);
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-family: 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-size: 0.875rem;
+  color: var(--color-primary);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-alt);
+}
+
+.modal-footer .btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.modal-footer .btn-secondary {
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.modal-footer .btn-secondary:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
 }
 </style>

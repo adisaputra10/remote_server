@@ -3,10 +3,17 @@
   --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   --primary-color: #667eea;
   --primary-dark: #5a67d8;
+  --color-primary: #667eea;
+  --color-primary-dark: #5a67d8;
   --secondary-color: #4a5568;
   --success-color: #48bb78;
+  --color-success: #48bb78;
+  --color-success-dark: #38a169;
   --warning-color: #ed8936;
+  --color-warning: #ed8936;
   --danger-color: #f56565;
+  --color-danger: #f56565;
+  --color-danger-dark: #e53e3e;
   --purple-color: #9f7aea;
   --info-color: #4299e1;
   --background-color: #f7fafc;
@@ -115,6 +122,17 @@ body {
 }
 
 .btn-success:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.btn-info {
+  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+  color: white;
+  box-shadow: var(--shadow);
+}
+
+.btn-info:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }

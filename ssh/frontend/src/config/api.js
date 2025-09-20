@@ -54,9 +54,17 @@ export const apiService = {
     return api.get('/api/agents')
   },
 
+  deleteAgent(agentId) {
+    return api.delete(`/api/agents/${agentId}`)
+  },
+
   // Clients
   getClients() {
     return api.get('/api/clients')
+  },
+
+  deleteClient(clientId) {
+    return api.delete(`/api/clients/${clientId}`)
   },
 
   // Connection Logs
