@@ -660,13 +660,6 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, database
 			databaseName = strings.Trim(words[1], ",();`")
 		}
 	}
-		}
-	case "USE":
-		// USE database_name
-		if len(words) > 1 {
-			databaseName = strings.Trim(words[1], ",();`")
-		}
-	}
 
 	return operation, tableName, databaseName
 }
