@@ -24,13 +24,7 @@
               Client ID
             </th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Protocol
-            </th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Operation
-            </th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Table
             </th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Query
@@ -51,25 +45,12 @@
             <td class="px-6 py-4 whitespace-nowrap">
               <span
                 :class="[
-                  getProtocolColor(query.protocol),
-                  'inline-flex px-2 py-1 text-xs font-semibold rounded-full'
-                ]"
-              >
-                {{ query.protocol }}
-              </span>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap">
-              <span
-                :class="[
                   getOperationColor(query.operation),
                   'inline-flex px-2 py-1 text-xs font-semibold rounded-full'
                 ]"
               >
                 {{ query.operation }}
               </span>
-            </td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-              {{ query.table_name || '-' }}
             </td>
             <td class="px-6 py-4 text-sm text-gray-500 max-w-md">
               <div class="truncate" :title="query.query_text">
@@ -78,7 +59,7 @@
             </td>
           </tr>
           <tr v-if="queries.length === 0">
-            <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+            <td colspan="5" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
               No database queries logged
             </td>
           </tr>
@@ -102,15 +83,6 @@ export default {
     formatDate(dateString) {
       if (!dateString) return 'N/A'
       return new Date(dateString).toLocaleString()
-    },
-    getProtocolColor(protocol) {
-      const colors = {
-        'mysql': 'bg-blue-100 text-blue-800',
-        'postgresql': 'bg-indigo-100 text-indigo-800',
-        'mongodb': 'bg-green-100 text-green-800',
-        'redis': 'bg-red-100 text-red-800'
-      }
-      return colors[protocol] || 'bg-gray-100 text-gray-800'
     },
     getOperationColor(operation) {
       const colors = {
