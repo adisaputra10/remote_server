@@ -57,14 +57,14 @@
                 <div class="action-buttons">
                   <button 
                     class="action-btn setup-btn with-text" 
-                    @click="openSetupModal(client.id)"
+                    @click="showSetup(client.id)"
                     title="Setup Client">
                     <i class="fas fa-cog"></i>
                     <span>Setup</span>
                   </button>
                   <button 
                     class="action-btn delete-btn with-text" 
-                    @click="deleteClient(client.id)"
+                    @click="showDelete(client.id)"
                     title="Delete Client">
                     <i class="fas fa-trash"></i>
                     <span>Delete</span>
