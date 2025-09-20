@@ -935,25 +935,11 @@ func (rs *RelayServer) handleHeartbeat(conn *websocket.Conn, msg *common.Message
 }
 
 func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) {
-	// Log database query to tunnel_logs table
+	// Log database query to tunnel_logs table only
 	rs.logTunnelQuery(msg.SessionID, msg.AgentID, msg.ClientID, "inbound", msg.DBProtocol, msg.DBOperation, msg.DBTable, msg.DBQuery)
 
-	// Also log to connection_logs for visibility
-	clientID := msg.ClientID
-	if clientID == "" {
-		clientID = "unknown"
-	}
-	agentID := msg.AgentID
-	if agentID == "" {
-		agentID = "unknown"
-	}
-
-	details := fmt.Sprintf("Query: %s, Table: %s, Protocol: %s",
-		msg.DBQuery, msg.DBTable, msg.DBProtocol)
-	rs.logConnection("database", agentID, clientID, "database_query", details)
-
 	rs.logger.Info("Database query logged from client %s: %s %s",
-		clientID, msg.DBOperation, msg.DBTable)
+		msg.ClientID, msg.DBOperation, msg.DBTable)
 }
 
 // handleShellCommand forwards shell commands from client to agent
