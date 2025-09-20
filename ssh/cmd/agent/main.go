@@ -317,6 +317,16 @@ func (a *Agent) handleData(msg *common.Message) {
 	if dbExists {
 		dbLogger.LogData(msg.Data, "CLIENT->TARGET", msg.SessionID)
 
+		// Check for MySQL connection handshake to extract database name
+		if databaseName := a.extractDatabaseFromHandshake(msg.Data); databaseName != "" {
+			a.mutex.RLock()
+			target := a.targets[msg.SessionID]
+			clientID := a.clients[msg.SessionID]
+			a.mutex.RUnlock()
+			protocol := a.detectProtocol(target)
+			a.sendDatabaseQuery(msg.SessionID, clientID, fmt.Sprintf("USE %s", databaseName), "CONNECT", "", databaseName, protocol)
+		}
+
 		// Also extract and send query to relay if it looks like SQL
 		queryText := string(msg.Data)
 		if operation, tableName, databaseName := a.extractSQLInfo(queryText); operation != "" {
@@ -602,6 +612,63 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, database
 	}
 
 	return operation, tableName, databaseName
+}
+
+// extractDatabaseFromHandshake extracts database name from MySQL connection handshake
+func (a *Agent) extractDatabaseFromHandshake(data []byte) string {
+	// MySQL client connection packet structure:
+	// - Protocol version (1 byte)
+	// - Capability flags (4 bytes)
+	// - Max packet size (4 bytes)
+	// - Character set (1 byte)
+	// - Reserved (23 bytes)
+	// - Username (null-terminated string)
+	// - Auth response length + auth response
+	// - Database name (null-terminated string) - if CLIENT_CONNECT_WITH_DB flag is set
+	
+	if len(data) < 36 { // Minimum packet size
+		return ""
+	}
+	
+	// Check if this looks like a MySQL handshake response (client login packet)
+	// Look for capability flags that include CLIENT_CONNECT_WITH_DB (0x00000008)
+	if len(data) >= 8 {
+		capabilityFlags := uint32(data[4]) | uint32(data[5])<<8 | uint32(data[6])<<16 | uint32(data[7])<<24
+		hasConnectWithDB := (capabilityFlags & 0x00000008) != 0
+		
+		if hasConnectWithDB {
+			// Skip fixed fields (36 bytes)
+			offset := 36
+			
+			// Skip username (null-terminated)
+			for offset < len(data) && data[offset] != 0 {
+				offset++
+			}
+			if offset >= len(data) {
+				return ""
+			}
+			offset++ // Skip null terminator
+			
+			// Skip auth response length and auth response
+			if offset < len(data) {
+				authLength := int(data[offset])
+				offset += 1 + authLength
+			}
+			
+			// Extract database name (null-terminated)
+			if offset < len(data) {
+				dbStart := offset
+				for offset < len(data) && data[offset] != 0 {
+					offset++
+				}
+				if offset > dbStart {
+					return string(data[dbStart:offset])
+				}
+			}
+		}
+	}
+	
+	return ""
 }
 
 func (a *Agent) detectProtocol(target string) string {
