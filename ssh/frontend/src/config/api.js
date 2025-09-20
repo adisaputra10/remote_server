@@ -54,6 +54,10 @@ export const apiService = {
     return api.get('/api/agents')
   },
 
+  addAgent(agentData) {
+    return api.post('/api/agents', agentData)
+  },
+
   deleteAgent(agentId) {
     return api.delete(`/api/agents/${agentId}`)
   },

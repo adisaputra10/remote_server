@@ -235,6 +235,7 @@ func (rs *RelayServer) initDatabase() {
 		`CREATE TABLE IF NOT EXISTS agents (
             id INT AUTO_INCREMENT PRIMARY KEY,
             agent_id VARCHAR(100) UNIQUE NOT NULL,
+            token VARCHAR(255),
             status VARCHAR(20) DEFAULT 'connected',
             connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -275,6 +276,7 @@ func (rs *RelayServer) initDatabase() {
 		`ALTER TABLE tunnel_logs ADD COLUMN agent_id VARCHAR(100) AFTER session_id`,
 		`ALTER TABLE tunnel_logs ADD COLUMN client_id VARCHAR(100) AFTER agent_id`,
 		`ALTER TABLE tunnel_logs ADD COLUMN database_name VARCHAR(100) AFTER table_name`,
+		`ALTER TABLE agents ADD COLUMN token VARCHAR(255) AFTER agent_id`,
 	}
 
 	for _, query := range alterQueries {
@@ -1498,6 +1500,17 @@ func (rs *RelayServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 // API Handlers
 func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetAgents(w, r)
+	case "POST":
+		rs.handleAddAgent(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 	// Get agents from database instead of memory
 	rows, err := rs.db.Query(`
 		SELECT agent_id, status, connected_at, last_ping 
@@ -1535,6 +1548,83 @@ func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(agents)
+}
+
+func (rs *RelayServer) handleAddAgent(w http.ResponseWriter, r *http.Request) {
+	var agentData struct {
+		AgentID string `json:"agent_id"`
+		Token   string `json:"token"`
+		Status  string `json:"status"`
+	}
+
+	// Parse JSON body
+	err := json.NewDecoder(r.Body).Decode(&agentData)
+	if err != nil {
+		rs.logger.Error("Failed to parse agent data: %v", err)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if agentData.AgentID == "" {
+		http.Error(w, "agent_id is required", http.StatusBadRequest)
+		return
+	}
+	if agentData.Token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set default status if not provided
+	if agentData.Status == "" {
+		agentData.Status = "disconnected"
+	}
+
+	// Clean data
+	agentID := rs.cleanString(agentData.AgentID)
+	token := rs.cleanString(agentData.Token)
+	status := rs.cleanString(agentData.Status)
+
+	rs.logger.Info("Adding new agent: %s", agentID)
+
+	// Check if agent already exists
+	var existingCount int
+	err = rs.db.QueryRow("SELECT COUNT(*) FROM agents WHERE agent_id = ?", agentID).Scan(&existingCount)
+	if err != nil {
+		rs.logger.Error("Failed to check existing agent: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if existingCount > 0 {
+		http.Error(w, "Agent already exists", http.StatusConflict)
+		return
+	}
+
+	// Insert new agent
+	_, err = rs.db.Exec(`
+		INSERT INTO agents (agent_id, token, status, connected_at, last_ping) 
+		VALUES (?, ?, ?, NOW(), NOW())`,
+		agentID, token, status,
+	)
+	if err != nil {
+		rs.logger.Error("Failed to insert agent: %v", err)
+		http.Error(w, "Failed to add agent", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Agent added successfully: %s", agentID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success":  true,
+		"message":  "Agent added successfully",
+		"agent_id": agentID,
+		"status":   status,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (rs *RelayServer) handleAPIClients(w http.ResponseWriter, r *http.Request) {

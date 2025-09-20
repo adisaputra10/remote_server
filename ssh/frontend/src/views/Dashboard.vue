@@ -158,15 +158,21 @@
           
           <div class="form-group">
             <label for="agentToken">Agent Token</label>
-            <input 
-              type="password" 
-              id="agentToken" 
-              v-model="newAgent.token" 
-              placeholder="Enter agent authentication token"
-              required
-              class="form-input"
-            />
-            <small class="form-help">Authentication token for agent connection</small>
+            <div class="token-input-group">
+              <input 
+                type="password" 
+                id="agentToken" 
+                v-model="newAgent.token" 
+                placeholder="Enter agent authentication token or generate one"
+                required
+                class="form-input"
+              />
+              <button type="button" @click="generateToken" class="btn btn-secondary btn-generate">
+                <i class="fas fa-random"></i>
+                Generate
+              </button>
+            </div>
+            <small class="form-help">Authentication token for agent connection (auto-generated or custom)</small>
           </div>
           
           <div class="form-actions">
@@ -308,11 +314,26 @@ export default {
     const openAddAgentModal = () => {
       console.log('Opening Add Agent Modal...')
       showAddAgentModal.value = true
-      // Reset form
+      // Reset form with auto-generated token
       newAgent.value = {
         agentId: '',
-        token: ''
+        token: generateRandomToken()
       }
+    }
+
+    const generateRandomToken = () => {
+      // Generate a secure random token (32 characters)
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+      let result = ''
+      for (let i = 0; i < 32; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length))
+      }
+      return result
+    }
+
+    const generateToken = () => {
+      console.log('Generating new token...')
+      newAgent.value.token = generateRandomToken()
     }
 
     const closeAddAgentModal = () => {
@@ -341,13 +362,21 @@ export default {
           return
         }
 
-        // TODO: Call API to add agent
-        // For now, just simulate success
-        console.log('Simulating agent addition...')
-        await new Promise(resolve => setTimeout(resolve, 2000))
+        // Prepare agent data
+        const agentData = {
+          agent_id: newAgent.value.agentId.trim(),
+          token: newAgent.value.token.trim(),
+          status: 'disconnected' // Initially disconnected until agent connects
+        }
+
+        console.log('Sending agent data to API:', agentData)
+        
+        // Call API to add agent
+        const response = await apiService.addAgent(agentData)
+        console.log('API Response:', response.data)
         
         console.log('✅ Agent added successfully!')
-        alert(`Agent "${newAgent.value.agentId}" added successfully!`)
+        alert(`Agent "${newAgent.value.agentId}" added successfully!\n\nAgent ID: ${newAgent.value.agentId}\nStatus: Ready for connection`)
         
         // Close modal and refresh stats
         closeAddAgentModal()
@@ -356,7 +385,15 @@ export default {
       } catch (error) {
         console.error('=== ADD AGENT ERROR ===')
         console.error('Error adding agent:', error)
-        alert(`Failed to add agent: ${error.message}`)
+        
+        let errorMessage = 'Failed to add agent'
+        if (error.response?.data?.error) {
+          errorMessage = error.response.data.error
+        } else if (error.message) {
+          errorMessage = error.message
+        }
+        
+        alert(`Failed to add agent: ${errorMessage}`)
       } finally {
         addingAgent.value = false
       }
@@ -411,6 +448,7 @@ export default {
       openAddAgentModal,
       closeAddAgentModal,
       submitAgent,
+      generateToken,
       // Other functions
       toggleSidebar,
       toggleUserMenu,
@@ -879,5 +917,29 @@ export default {
   .stat-value {
     font-size: 1.5rem;
   }
+}
+
+/* Token Input Group Styles */
+.token-input-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.token-input-group .form-input {
+  flex: 1;
+}
+
+.btn-generate {
+  white-space: nowrap;
+  padding: 0.75rem 1rem;
+  min-width: auto;
+  font-size: 0.875rem;
+}
+
+.btn-generate:hover {
+  background: var(--surface-alt);
+  border-color: var(--border-color);
+  transform: translateY(-1px);
 }
 </style>
