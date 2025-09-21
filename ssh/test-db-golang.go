@@ -16,7 +16,7 @@ func main() {
 
 	// Database connection parameters
 	// Using tunnel port 3307 instead of direct MySQL port 3306
-	dsn := "root:root@tcp(localhost:3307)/db1?parseTime=true"
+	dsn := "root:rootpassword@tcp(localhost:3307)/db?parseTime=true"
 
 	fmt.Printf("Connecting to MySQL via tunnel: %s\n", dsn)
 

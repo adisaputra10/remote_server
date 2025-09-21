@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -74,6 +75,130 @@ type UniversalSSHLogRequest struct {
 	Data      string `json:"data"`
 }
 
+// CommandLoggingReader wraps os.Stdin to log commands
+type CommandLoggingReader struct {
+	reader *bufio.Reader
+	logger *common.Logger
+	buffer []byte
+	client *UniversalClient // Reference to client for sending to database
+}
+
+// LoggingWriter wraps output streams to log all SSH session data
+type LoggingWriter struct {
+	writer   io.Writer
+	logger   *common.Logger
+	prefix   string
+	client   *UniversalClient // Reference to client for sending to database
+	original io.Writer        // Keep original writer for clean output
+}
+
+func NewLoggingWriter(writer io.Writer, logger *common.Logger, prefix string, client *UniversalClient) *LoggingWriter {
+	return &LoggingWriter{
+		writer:   writer,
+		logger:   logger,
+		prefix:   prefix,
+		client:   client,
+		original: writer,
+	}
+}
+
+func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
+	// Log the data to file only (not to stdout)
+	if len(p) > 0 {
+		data := strings.TrimSpace(string(p))
+		if data != "" && !strings.Contains(data, "INFO:") {
+			// Log to file
+			lw.logger.Info("%s: %s", lw.prefix, data)
+			// Send to database via relay
+			go lw.sendToDatabase(data)
+		}
+	}
+	// Forward to original writer for clean display
+	return lw.original.Write(p)
+}
+
+func (lw *LoggingWriter) sendToDatabase(data string) {
+	if lw.client == nil || lw.client.tunnelConn == nil {
+		return
+	}
+	
+	logRequest := UniversalSSHLogRequest{
+		SessionID: lw.client.sessionID,
+		ClientID:  lw.client.id,
+		AgentID:   lw.client.agentID,
+		Direction: lw.prefix,
+		User:      lw.client.sshUser,
+		Host:      lw.client.sshHost,
+		Port:      lw.client.localPort,
+		Command:   "",
+		Data:      data,
+	}
+
+	logMsg := common.NewMessage(common.MsgTypeSSHLog)
+	logMsg.SessionID = lw.client.sessionID
+	logMsg.ClientID = lw.client.id
+	logMsg.AgentID = lw.client.agentID
+	
+	// Convert to JSON and send
+	if logData, err := json.Marshal(logRequest); err == nil {
+		logMsg.Data = logData
+		lw.client.tunnelConn.WriteJSON(logMsg)
+	}
+}
+
+func NewCommandLoggingReader(logger *common.Logger, client *UniversalClient) *CommandLoggingReader {
+	return &CommandLoggingReader{
+		reader: bufio.NewReader(os.Stdin),
+		logger: logger,
+		buffer: make([]byte, 0),
+		client: client,
+	}
+}
+
+func (clr *CommandLoggingReader) Read(p []byte) (n int, err error) {
+	n, err = clr.reader.Read(p)
+	if n > 0 {
+		// Log all input data
+		data := string(p[:n])
+		cleanData := strings.TrimSpace(strings.ReplaceAll(data, "\r", ""))
+		if cleanData != "" && cleanData != "\n" {
+			clr.logger.Info("INPUT: %s", cleanData)
+			// Send to database
+			go clr.sendToDatabase(cleanData)
+		}
+	}
+	return n, err
+}
+
+func (clr *CommandLoggingReader) sendToDatabase(data string) {
+	if clr.client == nil || clr.client.tunnelConn == nil {
+		return
+	}
+	
+	logRequest := UniversalSSHLogRequest{
+		SessionID: clr.client.sessionID,
+		ClientID:  clr.client.id,
+		AgentID:   clr.client.agentID,
+		Direction: "INPUT",
+		User:      clr.client.sshUser,
+		Host:      clr.client.sshHost,
+		Port:      clr.client.localPort,
+		Command:   data,
+		Data:      data,
+	}
+
+	logMsg := common.NewMessage(common.MsgTypeSSHLog)
+	logMsg.SessionID = clr.client.sessionID
+	logMsg.ClientID = clr.client.id
+	logMsg.AgentID = clr.client.agentID
+	
+	// Convert to JSON and send
+	if logData, err := json.Marshal(logRequest); err == nil {
+		logMsg.Data = logData
+		clr.client.tunnelConn.WriteJSON(logMsg)
+	}
+}
+
 // Load configuration from file, environment, or defaults
 func loadConfig() Config {
 	config := Config{
@@ -119,6 +244,34 @@ func getRelayDisplayName(relayURL string) string {
 
 	// Return the actual URL without ws:// prefix
 	return strings.Replace(relayURL, "ws://", "", 1)
+}
+
+// createFileOnlyLogger creates a logger that only writes to file, not console
+func createFileOnlyLogger(prefix string) *common.Logger {
+	logger := &common.Logger{}
+	
+	// Create logs directory if it doesn't exist
+	logDir := "logs"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		log.Printf("Failed to create log directory: %v", err)
+		return common.NewLogger(prefix) // fallback to default
+	}
+	
+	// Create log file
+	logFileName := fmt.Sprintf("%s.log", prefix)
+	logPath := filepath.Join(logDir, logFileName)
+	
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Printf("Failed to open log file %s: %v", logPath, err)
+		return common.NewLogger(prefix) // fallback to default
+	}
+	
+	// Setup logger with file only (no stdout)
+	logger.SetFileOnly(file, prefix)
+	
+	log.Printf("Logging to file: %s", logPath)
+	return logger
 }
 
 func main() {
@@ -170,7 +323,7 @@ func main() {
 				relayURL:    relayURL,
 				agentID:     agentID,
 				token:       token,
-				logger:      common.NewLogger(fmt.Sprintf("UNIVERSAL-%s", clientID)),
+				logger:      createFileOnlyLogger(fmt.Sprintf("UNIVERSAL-%s", clientID)),
 				sessions:    make(map[string]net.Conn),
 				targets:     make(map[string]string),
 				agentIDs:    make(map[string]string),
@@ -179,6 +332,13 @@ func main() {
 				sshUser:     sshUser,
 				sshPassword: sshPassword,
 				httpClient:  &http.Client{Timeout: 5 * time.Second},
+			}
+
+			// Debug: Log token status
+			if token == "" {
+				fmt.Println("🚨 WARNING: Token is empty!")
+			} else {
+				fmt.Printf("🔑 Token loaded: %s...%s\n", token[:min(8, len(token))], token[max(0, len(token)-8):])
 			}
 
 			// Setup signal handling
@@ -270,10 +430,26 @@ func (c *UniversalClient) runTunnelMode(localAddr, target string, interactive bo
 }
 
 func (c *UniversalClient) connectToRelay() error {
-	conn, _, err := websocket.DefaultDialer.Dial(c.relayURL, nil)
+	c.logger.Info("Attempting to connect to relay server: %s", c.relayURL)
+	
+	// Add headers for debugging
+	headers := http.Header{}
+	headers.Set("User-Agent", "UniversalClient/1.0")
+	
+	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 30 * time.Second
+	
+	conn, resp, err := dialer.Dial(c.relayURL, headers)
 	if err != nil {
-		return err
+		c.logger.Error("WebSocket connection failed: %v", err)
+		if resp != nil {
+			c.logger.Error("HTTP Response Status: %s", resp.Status)
+			c.logger.Error("HTTP Response Headers: %v", resp.Header)
+		}
+		return fmt.Errorf("failed to connect to relay: %v", err)
 	}
+	
+	c.logger.Info("Successfully connected to relay server")
 	c.conn = conn
 	c.running = true
 
@@ -514,20 +690,51 @@ func (c *UniversalClient) runIntegratedMode(tunnelOnly bool) error {
 }
 
 func (c *UniversalClient) createSSHTunnel() error {
+	// c.logger.Info("Creating SSH tunnel, connecting to relay: %s", c.relayURL)
+	
+	// Add headers for debugging
+	headers := http.Header{}
+	headers.Set("User-Agent", "UniversalClient-SSH/1.0")
+	
+	dialer := websocket.DefaultDialer
+	dialer.HandshakeTimeout = 30 * time.Second
+	
 	// Connect to relay
-	conn, _, err := websocket.DefaultDialer.Dial(c.relayURL, nil)
+	conn, resp, err := dialer.Dial(c.relayURL, headers)
 	if err != nil {
-		return err
+		c.logger.Error("SSH Tunnel WebSocket connection failed: %v", err)
+		if resp != nil {
+			c.logger.Error("HTTP Response Status: %s", resp.Status)
+			c.logger.Error("HTTP Response Headers: %v", resp.Header)
+		}
+		return fmt.Errorf("failed to create tunnel: %v", err)
 	}
+	
+	// c.logger.Info("SSH Tunnel successfully connected to relay server")
 	c.tunnelConn = conn
 
 	// Register
 	registerMsg := common.NewMessage(common.MsgTypeRegister)
 	registerMsg.ClientID = c.id
 	registerMsg.ClientName = c.name
+	registerMsg.Token = c.token  // Add token to register message
 	if err := c.tunnelConn.WriteJSON(registerMsg); err != nil {
 		return err
 	}
+	
+	// c.logger.Info("Waiting for registration response...")
+	
+	// Wait for registration response
+	var response common.Message
+	if err := c.tunnelConn.ReadJSON(&response); err != nil {
+		return fmt.Errorf("failed to read registration response: %v", err)
+	}
+	
+	if response.Type == common.MsgTypeError {
+		return fmt.Errorf("registration failed: %s", response.Error)
+	}
+	
+	// c.logger.Info("Registration successful")
 
 	// Request tunnel
 	c.sessionID = fmt.Sprintf("ssh_%d", time.Now().UnixNano())
@@ -537,73 +744,169 @@ func (c *UniversalClient) createSSHTunnel() error {
 	connectMsg.AgentID = c.agentID
 	connectMsg.Target = "127.0.0.1:22"
 
+	// c.logger.Info("Sending connect message to agent: %s, target: %s", c.agentID, connectMsg.Target)
 	if err := c.tunnelConn.WriteJSON(connectMsg); err != nil {
+		c.logger.Error("Failed to send connect message: %v", err)
 		return err
 	}
+	// c.logger.Info("Connect message sent successfully")
 
-	// Start tunnel listener
-	go c.startSSHTunnelListener()
+	// Start tunnel listener and wait for it to be ready
+	// c.logger.Info("Starting SSH tunnel listener on port: %s", c.localPort)
+	listenerReady := make(chan bool)
+	go c.startSSHTunnelListener(listenerReady)
+	
+	// Wait for listener to be ready
+	<-listenerReady
+	
+	// c.logger.Info("SSH tunnel setup completed - ready for connections")
+	
+	// Create direct interactive SSH session instead of waiting
+	// c.logger.Info("Creating direct SSH connection to %s@%s through tunnel", c.sshUser, c.sshHost)
+	
+	// Start interactive SSH session immediately
+	if err := c.startInteractiveSSHSession(); err != nil {
+		c.logger.Error("Failed to start interactive SSH session: %v", err)
+		return err
+	}
+	
 	return nil
 }
 
-func (c *UniversalClient) startSSHTunnelListener() {
+func (c *UniversalClient) startSSHTunnelListener(ready chan bool) {
+	// c.logger.Info("Attempting to create SSH tunnel listener on port: %s", c.localPort)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", c.localPort))
 	if err != nil {
 		c.logger.Error("SSH tunnel listener failed: %v", err)
+		close(ready)
 		return
 	}
 	defer listener.Close()
+	
+	// c.logger.Info("SSH tunnel listener started successfully on port: %s", c.localPort)
+	// c.logger.Info("Ready to accept SSH connections on 127.0.0.1:%s", c.localPort)
+
+	// Signal that listener is ready
+	ready <- true
+	close(ready)
 
 	for {
+		// c.logger.Info("Waiting for SSH connection...")
 		conn, err := listener.Accept()
 		if err != nil {
+			c.logger.Error("Failed to accept connection: %v", err)
 			continue
 		}
+		// c.logger.Info("New SSH connection accepted from: %s", conn.RemoteAddr())
 		go c.handleSSHTunnelConnection(conn)
 	}
 }
 
 func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 	defer conn.Close()
+	// c.logger.Info("New SSH connection established")
+
+	// Create a dedicated WebSocket connection for this SSH session
+	sessionConn, _, err := websocket.DefaultDialer.Dial(c.relayURL, nil)
+	if err != nil {
+		c.logger.Error("Failed to create session WebSocket: %v", err)
+		return
+	}
+	defer sessionConn.Close()
+
+	// Register this session
+	sessionID := fmt.Sprintf("ssh_%d", time.Now().UnixNano())
+	
+	registerMsg := common.NewMessage(common.MsgTypeRegister)
+	registerMsg.ClientID = c.id
+	registerMsg.ClientName = c.name
+	registerMsg.Token = c.token
+	if err := sessionConn.WriteJSON(registerMsg); err != nil {
+		c.logger.Error("Session registration failed: %v", err)
+		return
+	}
+
+	// Wait for registration response
+	var regResponse common.Message
+	if err := sessionConn.ReadJSON(&regResponse); err != nil {
+		c.logger.Error("Failed to read session registration response: %v", err)
+		return
+	}
+	
+	if regResponse.Type == common.MsgTypeError {
+		c.logger.Error("Session registration failed: %s", regResponse.Error)
+		return
+	}
+
+	// Request tunnel connection
+	connectMsg := common.NewMessage(common.MsgTypeConnect)
+	connectMsg.SessionID = sessionID
+	connectMsg.ClientID = c.id
+	connectMsg.AgentID = c.agentID
+	connectMsg.Target = "127.0.0.1:22"
+
+	if err := sessionConn.WriteJSON(connectMsg); err != nil {
+		c.logger.Error("Failed to send connect message: %v", err)
+		return
+	}
+
+	c.logger.Info("SSH session %s established", sessionID)
 
 	// Forward data between local connection and tunnel
 	done := make(chan bool, 2)
 
-	// Local -> Tunnel
+	// Local -> Tunnel (with command logging)
 	go func() {
 		defer func() { done <- true }()
 		buffer := make([]byte, 4096)
+		commandBuffer := make([]byte, 0)
+		
 		for {
 			n, err := conn.Read(buffer)
 			if err != nil {
+				c.logger.Debug("Local connection read error: %v", err)
 				return
 			}
 
+			// Log command detection
+			c.logSSHCommand(buffer[:n], &commandBuffer, sessionID, "outgoing")
+
 			dataMsg := common.NewMessage(common.MsgTypeData)
-			dataMsg.SessionID = c.sessionID
+			dataMsg.SessionID = sessionID
 			dataMsg.ClientID = c.id
 			dataMsg.Data = buffer[:n]
-			if err := c.tunnelConn.WriteJSON(dataMsg); err != nil {
+			if err := sessionConn.WriteJSON(dataMsg); err != nil {
+				c.logger.Debug("WebSocket write error: %v", err)
 				return
 			}
 		}
 	}()
 
-	// Tunnel -> Local
+	// Tunnel -> Local (with command logging)
 	go func() {
 		defer func() { done <- true }()
+		responseBuffer := make([]byte, 0)
+		
 		for {
 			var msg common.Message
-			if err := c.tunnelConn.ReadJSON(&msg); err != nil {
+			if err := sessionConn.ReadJSON(&msg); err != nil {
+				c.logger.Debug("WebSocket read error: %v", err)
 				return
 			}
-			if msg.Type == common.MsgTypeData && msg.SessionID == c.sessionID {
-				conn.Write(msg.Data)
+			if msg.Type == common.MsgTypeData && msg.SessionID == sessionID {
+				// Log response data
+				c.logSSHCommand(msg.Data, &responseBuffer, sessionID, "incoming")
+				
+				if _, err := conn.Write(msg.Data); err != nil {
+					c.logger.Debug("Local connection write error: %v", err)
+					return
+				}
 			}
 		}
 	}()
 
 	<-done
+	c.logger.Info("SSH session %s closed", sessionID)
 }
 
 func (c *UniversalClient) connectSSHWithRetry() error {
@@ -803,4 +1106,169 @@ func (c *UniversalClient) stop() {
 	c.mutex.Unlock()
 
 	c.logger.Info("Universal client stopped")
+}
+
+// logSSHCommand logs SSH commands and responses for monitoring
+func (c *UniversalClient) startInteractiveSSHSession() error {
+	c.logger.Info("Starting interactive SSH session...")
+	
+	// Connect to local tunnel port
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%s", c.localPort))
+	if err != nil {
+		return fmt.Errorf("failed to connect to tunnel: %v", err)
+	}
+	defer conn.Close()
+
+	c.logger.Info("Connected to tunnel, establishing SSH client...")
+
+	// Create SSH client config
+	config := &ssh.ClientConfig{
+		User: c.sshUser,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(c.sshPassword),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         10 * time.Second,
+	}
+
+	// Create SSH connection through tunnel
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, c.sshHost, config)
+	if err != nil {
+		return fmt.Errorf("SSH handshake failed: %v", err)
+	}
+	defer sshConn.Close()
+
+	client := ssh.NewClient(sshConn, chans, reqs)
+	defer client.Close()
+
+	c.logger.Info("SSH client connected successfully!")
+
+	// Create interactive session
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create SSH session: %v", err)
+	}
+	defer session.Close()
+
+	// Setup terminal modes
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+
+	// Request PTY
+	if err := session.RequestPty("xterm-256color", 40, 80, modes); err != nil {
+		return fmt.Errorf("failed to request PTY: %v", err)
+	}
+
+	// Set up input/output with logging
+	session.Stdout = NewLoggingWriter(os.Stdout, c.logger, "OUTPUT", c)
+	session.Stderr = NewLoggingWriter(os.Stderr, c.logger, "ERROR", c)
+	
+	// Use command logging reader for stdin
+	commandReader := NewCommandLoggingReader(c.logger, c)
+	session.Stdin = commandReader
+
+	// c.logger.Info("Starting interactive shell...")
+	fmt.Println("╔════════════════════════════════════════════════════════════════════╗")
+	fmt.Printf("║       🎯 Connected to %s@%s via agent %s                    ║\n", c.sshUser, c.sshHost, c.agentID)
+	fmt.Println("║       Type 'exit' to disconnect                                    ║")
+	fmt.Println("╚════════════════════════════════════════════════════════════════════╝")
+
+	// Start shell
+	if err := session.Shell(); err != nil {
+		return fmt.Errorf("failed to start shell: %v", err)
+	}
+
+	// Wait for session to end
+	if err := session.Wait(); err != nil {
+		c.logger.Info("SSH session ended: %v", err)
+	}
+
+	c.logger.Info("Interactive SSH session completed")
+	return nil
+}
+
+func (c *UniversalClient) logSSHCommand(data []byte, buffer *[]byte, sessionID, direction string) {
+	// Append data to buffer
+	*buffer = append(*buffer, data...)
+	
+	// Convert to string for analysis
+	str := string(*buffer)
+	
+	// Detect commands (look for command patterns)
+	if direction == "outgoing" {
+		// Look for SSH commands being sent
+		if strings.Contains(str, "\r") || strings.Contains(str, "\n") {
+			// Clean the command
+			command := strings.TrimSpace(str)
+			command = strings.ReplaceAll(command, "\r", "")
+			command = strings.ReplaceAll(command, "\n", "")
+			
+			// Filter out non-printable characters and SSH protocol data
+			if len(command) > 0 && isPrintableCommand(command) {
+				c.logger.Info("SSH Command [%s]: %s", sessionID, command)
+				
+				// Log to database through relay server
+				c.logCommandToDatabase(sessionID, command, "command")
+			}
+			
+			// Clear buffer after processing
+			*buffer = (*buffer)[:0]
+		}
+	} else if direction == "incoming" {
+		// Log response data (optional, can be large)
+		if len(*buffer) > 10240 { // Limit buffer size to 10KB
+			responseSize := len(*buffer)
+			c.logger.Debug("SSH Response [%s]: %d bytes received", sessionID, responseSize)
+			*buffer = (*buffer)[:0] // Clear large buffer
+		}
+	}
+}
+
+// isPrintableCommand checks if the command contains mostly printable characters
+func isPrintableCommand(command string) bool {
+	if len(command) < 2 {
+		return false
+	}
+	
+	// Skip SSH protocol data and binary data
+	if strings.HasPrefix(command, "SSH-") || 
+	   strings.Contains(command, "\x00") ||
+	   strings.Contains(command, "\x01") ||
+	   strings.Contains(command, "\x02") {
+		return false
+	}
+	
+	// Count printable characters
+	printableCount := 0
+	for _, r := range command {
+		if r >= 32 && r <= 126 { // Printable ASCII range
+			printableCount++
+		}
+	}
+	
+	// Command should be mostly printable
+	return float64(printableCount)/float64(len(command)) > 0.7
+}
+
+// logCommandToDatabase sends command log to relay server for database storage
+func (c *UniversalClient) logCommandToDatabase(sessionID, command, operation string) {
+	// Create a log message to send to relay server
+	logMsg := common.NewMessage(common.MsgTypeDBQuery)
+	logMsg.SessionID = sessionID
+	logMsg.ClientID = c.id
+	logMsg.AgentID = c.agentID
+	logMsg.DBOperation = operation
+	logMsg.DBQuery = command
+	logMsg.DBProtocol = "ssh"
+	logMsg.DBTable = "ssh_commands"
+	
+	// Send via main connection if available
+	if c.conn != nil {
+		if err := c.sendMessage(logMsg); err != nil {
+			c.logger.Debug("Failed to log command to database: %v", err)
+		}
+	}
 }

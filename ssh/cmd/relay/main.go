@@ -1037,6 +1037,8 @@ func (rs *RelayServer) handleMessage(conn *websocket.Conn, msg *common.Message) 
 		rs.handleHeartbeat(conn, msg)
 	case common.MsgTypeDBQuery:
 		rs.handleDBQuery(conn, msg)
+	case common.MsgTypeSSHLog:
+		rs.handleSSHLog(conn, msg)
 	case "shell_command":
 		rs.handleShellCommand(conn, msg)
 	case "shell_response":
@@ -1388,6 +1390,55 @@ func (rs *RelayServer) handleShellCommand(conn *websocket.Conn, msg *common.Mess
 
 	// Log the shell command
 	rs.logSSHCommand(msg.SessionID, msg.AgentID, msg.ClientID, "outbound", "root", "remote", "22", msg.DBQuery, len(msg.DBQuery))
+}
+
+// handleSSHLog processes SSH log messages from universal client
+func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
+	rs.logger.Debug("Received SSH log message from client: %s", msg.ClientID)
+
+	// Parse the SSH log request from Data field
+	var logRequest map[string]interface{}
+	if err := json.Unmarshal(msg.Data, &logRequest); err != nil {
+		rs.logger.Error("Failed to parse SSH log data: %v", err)
+		return
+	}
+
+	// Extract fields from the log request
+	sessionID := getString(logRequest, "session_id")
+	agentID := getString(logRequest, "agent_id")
+	clientID := getString(logRequest, "client_id")
+	direction := getString(logRequest, "direction")
+	user := getString(logRequest, "user")
+	host := getString(logRequest, "host")
+	port := getString(logRequest, "port")
+	command := getString(logRequest, "command")
+	data := getString(logRequest, "data")
+
+	// Create SSH log entry
+	rs.batchLogSSH(SSHLogEntry{
+		SessionID: sessionID,
+		AgentID:   agentID,
+		ClientID:  clientID,
+		Direction: direction,
+		Command:   command,
+		User:      user,
+		Host:      host,
+		Port:      port,
+		DataSize:  len(data),
+		Timestamp: time.Now(),
+	})
+
+	rs.logger.Debug("SSH log processed: %s@%s - %s", user, host, direction)
+}
+
+// Helper function to safely get string from map
+func getString(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
 }
 
 // handleShellResponse forwards shell command responses from agent to client

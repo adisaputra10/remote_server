@@ -104,6 +104,13 @@ func (l *Logger) Close() {
 	}
 }
 
+// SetFileOnly configures logger to write only to file, not console
+func (l *Logger) SetFileOnly(file *os.File, prefix string) {
+	l.logFile = file
+	l.prefix = prefix
+	l.logger = log.New(file, "", 0) // Only write to file, not stdout
+}
+
 // Info logs info message
 func (l *Logger) Info(format string, args ...interface{}) {
 	timestamp := time.Now().Format(TimeFormat)

@@ -17,6 +17,7 @@ const (
 	MsgTypeHeartbeat MessageType = "heartbeat"
 	MsgTypeError     MessageType = "error"
 	MsgTypeDBQuery   MessageType = "db_query"
+	MsgTypeSSHLog    MessageType = "ssh_log"
 )
 
 // Message represents a message exchanged between relay, agent, and client
