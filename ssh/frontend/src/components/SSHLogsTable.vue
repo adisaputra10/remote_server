@@ -35,7 +35,6 @@
               <th>TIMESTAMP</th>
               <th>AGENT</th>
               <th>CLIENT</th>
-              <th>USER@HOST:PORT</th>
               <th>DIRECTION</th>
               <th>DATA</th>
             </tr>
@@ -53,7 +52,6 @@
                   {{ log.client }}
                 </span>
               </td>
-              <td>{{ log.userHostPort }}</td>
               <td>
                 <span class="badge badge-warning">
                   {{ log.direction }}
