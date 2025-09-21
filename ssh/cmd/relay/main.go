@@ -1505,6 +1505,8 @@ func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 		rs.handleGetAgents(w, r)
 	case "POST":
 		rs.handleAddAgent(w, r)
+	case "DELETE":
+		rs.handleDeleteAgent(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1621,6 +1623,63 @@ func (rs *RelayServer) handleAddAgent(w http.ResponseWriter, r *http.Request) {
 		"message":  "Agent added successfully",
 		"agent_id": agentID,
 		"status":   status,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	// Extract agent ID from URL path
+	urlPath := r.URL.Path
+	parts := strings.Split(urlPath, "/")
+	if len(parts) < 4 {
+		http.Error(w, "Agent ID is required", http.StatusBadRequest)
+		return
+	}
+	
+	agentID := rs.cleanString(parts[3]) // /api/agents/{agentID}
+	if agentID == "" {
+		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	rs.logger.Info("Deleting agent: %s", agentID)
+
+	// Check if agent exists
+	var existingCount int
+	err := rs.db.QueryRow("SELECT COUNT(*) FROM agents WHERE agent_id = ?", agentID).Scan(&existingCount)
+	if err != nil {
+		rs.logger.Error("Failed to check existing agent: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if existingCount == 0 {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete agent from database
+	_, err = rs.db.Exec("DELETE FROM agents WHERE agent_id = ?", agentID)
+	if err != nil {
+		rs.logger.Error("Failed to delete agent: %v", err)
+		http.Error(w, "Failed to delete agent", http.StatusInternalServerError)
+		return
+	}
+
+	// Also remove from memory if exists
+	rs.mutex.Lock()
+	delete(rs.agents, agentID)
+	rs.mutex.Unlock()
+
+	rs.logger.Info("Agent deleted successfully: %s", agentID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success":  true,
+		"message":  "Agent deleted successfully",
+		"agent_id": agentID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

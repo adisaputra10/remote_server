@@ -358,12 +358,10 @@ export default {
         console.log('=== DELETING AGENT ===')
         console.log('Agent ID:', agentId)
         
-        // TODO: Implement API call to delete agent
-        // await apiService.deleteAgent(agentId)
+        // Call API to delete agent
+        await apiService.deleteAgent(agentId)
         
-        // For now, simulate API call
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        
+        console.log(`Agent "${agentId}" deleted successfully from database`)
         alert(`Agent "${agentId}" has been deleted successfully!`)
         
         // Refresh agents list
@@ -371,7 +369,13 @@ export default {
         
       } catch (error) {
         console.error('Error deleting agent:', error)
-        alert(`Failed to delete agent "${agentId}". Please try again.`)
+        let errorMessage = 'Failed to delete agent'
+        if (error.response?.data?.error) {
+          errorMessage = error.response.data.error
+        } else if (error.message) {
+          errorMessage = error.message
+        }
+        alert(`Failed to delete agent "${agentId}": ${errorMessage}`)
       }
     }
 
