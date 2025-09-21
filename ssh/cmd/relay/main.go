@@ -121,6 +121,7 @@ type SSHTunnelLogRequest struct {
 	Host      string `json:"host"`
 	Port      string `json:"port"`
 	Data      string `json:"data"`
+	IsBase64  bool   `json:"is_base64"`
 }
 
 type QueryLogRequest struct {
@@ -2837,8 +2838,25 @@ func (rs *RelayServer) handleAPILogSSH(w http.ResponseWriter, r *http.Request) {
 	// Calculate data size
 	dataSize := len(req.Data)
 
-	// Log the SSH command
-	rs.logSSHCommand(req.SessionID, req.AgentID, req.ClientID, req.Direction, req.User, req.Host, req.Port, req.Command, dataSize)
+	// Add to batch logging buffer instead of direct logging
+	entry := SSHLogEntry{
+		SessionID: req.SessionID,
+		AgentID:   req.AgentID,
+		ClientID:  req.ClientID,
+		Direction: req.Direction,
+		User:      req.User,
+		Host:      req.Host,
+		Port:      req.Port,
+		Command:   req.Command,
+		Data:      req.Data,
+		IsBase64:  req.IsBase64,
+		DataSize:  dataSize,
+		Timestamp: time.Now(),
+	}
+
+	rs.logBuffer.mutex.Lock()
+	rs.logBuffer.sshLogs = append(rs.logBuffer.sshLogs, entry)
+	rs.logBuffer.mutex.Unlock()
 
 	// Return success response
 	response := map[string]interface{}{
