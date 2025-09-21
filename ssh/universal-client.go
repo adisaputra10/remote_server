@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,14 +53,20 @@ type UniversalClient struct {
 	mutex     sync.RWMutex
 
 	// SSH mode fields
-	localPort   string
-	sshHost     string
-	sshUser     string
-	sshPassword string
-	sshClient   *ssh.Client
-	tunnelConn  *websocket.Conn
-	sessionID   string
-	httpClient  *http.Client
+	localPort    string
+	sshHost      string
+	sshUser      string
+	sshPassword  string
+	sshClient    *ssh.Client
+	tunnelConn   *websocket.Conn
+	sessionID    string
+	httpClient   *http.Client
+	lastCommand  string // Store last command for OUTPUT logging
+	
+	// Output buffering for database logging
+	outputBuffer []string
+	bufferTimer  *time.Timer
+	bufferMutex  sync.Mutex
 }
 
 // SSH log request structure
@@ -73,6 +80,7 @@ type UniversalSSHLogRequest struct {
 	Port      string `json:"port"`
 	Command   string `json:"command"`
 	Data      string `json:"data"`
+	IsBase64  bool   `json:"is_base64"`
 }
 
 // CommandLoggingReader wraps os.Stdin to log commands
@@ -109,18 +117,71 @@ func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
 		if data != "" && !strings.Contains(data, "INFO:") {
 			// Log to file
 			lw.logger.Info("%s: %s", lw.prefix, data)
-			// Send to database via relay
-			go lw.sendToDatabase(data)
+			// Add to buffer for database logging
+			lw.addToBuffer(data)
 		}
 	}
 	// Forward to original writer for clean display
 	return lw.original.Write(p)
 }
 
+func (lw *LoggingWriter) addToBuffer(data string) {
+	if lw.client == nil {
+		return
+	}
+	
+	lw.client.bufferMutex.Lock()
+	defer lw.client.bufferMutex.Unlock()
+	
+	// Add data to buffer
+	lw.client.outputBuffer = append(lw.client.outputBuffer, data)
+	
+	// Reset or create timer
+	if lw.client.bufferTimer != nil {
+		lw.client.bufferTimer.Stop()
+	}
+	
+	// Send buffer to database after 2 seconds of no new output
+	lw.client.bufferTimer = time.AfterFunc(2*time.Second, func() {
+		lw.flushBuffer()
+	})
+}
+
+func (lw *LoggingWriter) flushBuffer() {
+	if lw.client == nil {
+		return
+	}
+	
+	lw.client.bufferMutex.Lock()
+	defer lw.client.bufferMutex.Unlock()
+	
+	if len(lw.client.outputBuffer) == 0 {
+		return
+	}
+	
+	// Combine all buffered output
+	combinedOutput := strings.Join(lw.client.outputBuffer, "\n")
+	
+	// Send to database
+	go lw.sendToDatabase(combinedOutput)
+	
+	// Clear buffer
+	lw.client.outputBuffer = []string{}
+}
+
 func (lw *LoggingWriter) sendToDatabase(data string) {
 	if lw.client == nil || lw.client.tunnelConn == nil {
 		return
 	}
+	
+	// For OUTPUT, use the last command executed; for other directions, leave empty
+	command := ""
+	if lw.prefix == "OUTPUT" && lw.client != nil {
+		command = lw.client.lastCommand
+	}
+	
+	// Encode data to base64 for multi-line support
+	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
 	
 	logRequest := UniversalSSHLogRequest{
 		SessionID: lw.client.sessionID,
@@ -130,8 +191,9 @@ func (lw *LoggingWriter) sendToDatabase(data string) {
 		User:      lw.client.sshUser,
 		Host:      lw.client.sshHost,
 		Port:      lw.client.localPort,
-		Command:   "",
-		Data:      data,
+		Command:   command,
+		Data:      encodedData,
+		IsBase64:  true,
 	}
 
 	logMsg := common.NewMessage(common.MsgTypeSSHLog)
@@ -163,6 +225,10 @@ func (clr *CommandLoggingReader) Read(p []byte) (n int, err error) {
 		cleanData := strings.TrimSpace(strings.ReplaceAll(data, "\r", ""))
 		if cleanData != "" && cleanData != "\n" {
 			clr.logger.Info("INPUT: %s", cleanData)
+			// Store last command in client
+			if clr.client != nil {
+				clr.client.lastCommand = cleanData
+			}
 			// Send to database
 			go clr.sendToDatabase(cleanData)
 		}
@@ -175,6 +241,9 @@ func (clr *CommandLoggingReader) sendToDatabase(data string) {
 		return
 	}
 	
+	// Encode data to base64 for consistency
+	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
+	
 	logRequest := UniversalSSHLogRequest{
 		SessionID: clr.client.sessionID,
 		ClientID:  clr.client.id,
@@ -184,7 +253,8 @@ func (clr *CommandLoggingReader) sendToDatabase(data string) {
 		Host:      clr.client.sshHost,
 		Port:      clr.client.localPort,
 		Command:   data,
-		Data:      data,
+		Data:      encodedData,
+		IsBase64:  true,
 	}
 
 	logMsg := common.NewMessage(common.MsgTypeSSHLog)
@@ -323,7 +393,7 @@ func main() {
 				relayURL:    relayURL,
 				agentID:     agentID,
 				token:       token,
-				logger:      createFileOnlyLogger(fmt.Sprintf("UNIVERSAL-%s", clientID)),
+				logger:      createFileOnlyLogger("client"),
 				sessions:    make(map[string]net.Conn),
 				targets:     make(map[string]string),
 				agentIDs:    make(map[string]string),
@@ -332,6 +402,7 @@ func main() {
 				sshUser:     sshUser,
 				sshPassword: sshPassword,
 				httpClient:  &http.Client{Timeout: 5 * time.Second},
+				outputBuffer: make([]string, 0),
 			}
 
 			// Debug: Log token status

@@ -58,6 +58,8 @@ type SSHLogEntry struct {
 	User      string
 	Host      string
 	Port      string
+	Data      string
+	IsBase64  bool
 	DataSize  int
 	Timestamp time.Time
 }
@@ -316,6 +318,21 @@ func (rs *RelayServer) initDatabase() {
             operation VARCHAR(100),
             table_name VARCHAR(100),
             query_text LONGTEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+		`CREATE TABLE IF NOT EXISTS ssh_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            session_id VARCHAR(100),
+            agent_id VARCHAR(100),
+            client_id VARCHAR(100),
+            direction VARCHAR(20),
+            ssh_user VARCHAR(100),
+            ssh_host VARCHAR(100),
+            ssh_port VARCHAR(10),
+            command TEXT,
+            data LONGTEXT,
+            is_base64 BOOLEAN DEFAULT FALSE,
+            data_size INT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
 		`CREATE TABLE IF NOT EXISTS server_settings (
@@ -1415,6 +1432,17 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 	port := getString(logRequest, "port")
 	command := getString(logRequest, "command")
 	data := getString(logRequest, "data")
+	isBase64 := getBool(logRequest, "is_base64")
+
+	// Decode base64 data if needed
+	actualData := data
+	if isBase64 {
+		if decodedBytes, err := base64.StdEncoding.DecodeString(data); err == nil {
+			actualData = string(decodedBytes)
+		} else {
+			rs.logger.Error("Failed to decode base64 data: %v", err)
+		}
+	}
 
 	// Create SSH log entry
 	rs.batchLogSSH(SSHLogEntry{
@@ -1426,7 +1454,9 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 		User:      user,
 		Host:      host,
 		Port:      port,
-		DataSize:  len(data),
+		Data:      actualData,
+		IsBase64:  isBase64,
+		DataSize:  len(actualData),
 		Timestamp: time.Now(),
 	})
 
@@ -1441,6 +1471,16 @@ func getString(m map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// Helper function to safely get bool from map
+func getBool(m map[string]interface{}, key string) bool {
+	if val, ok := m[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return false
 }
 
 // handleShellResponse forwards shell command responses from agent to client
@@ -2725,7 +2765,7 @@ func (rs *RelayServer) handleAPILogQuery(w http.ResponseWriter, r *http.Request)
 
 // Handle API for SSH logs retrieval
 func (rs *RelayServer) handleAPISSHLogs(w http.ResponseWriter, r *http.Request) {
-	rows, err := rs.db.Query("SELECT session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data_size, timestamp FROM ssh_logs ORDER BY timestamp DESC LIMIT 100")
+	rows, err := rs.db.Query("SELECT session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data, is_base64, data_size, timestamp FROM ssh_logs ORDER BY timestamp DESC LIMIT 100")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2734,17 +2774,26 @@ func (rs *RelayServer) handleAPISSHLogs(w http.ResponseWriter, r *http.Request) 
 
 	var logs []map[string]interface{}
 	for rows.Next() {
-		var sessionID, agentID, clientID, direction, sshUser, sshHost, sshPort, command sql.NullString
+		var sessionID, agentID, clientID, direction, sshUser, sshHost, sshPort, command, data sql.NullString
+		var isBase64 sql.NullBool
 		var dataSize sql.NullInt64
 		var timestamp time.Time
 
-		err := rows.Scan(&sessionID, &agentID, &clientID, &direction, &sshUser, &sshHost, &sshPort, &command, &dataSize, &timestamp)
+		err := rows.Scan(&sessionID, &agentID, &clientID, &direction, &sshUser, &sshHost, &sshPort, &command, &data, &isBase64, &dataSize, &timestamp)
 		if err != nil {
 			continue
 		}
 
 		// Clean and format SSH command
 		cleanedCommand := rs.cleanString(cleanHTMLEntities(command.String))
+		
+		// Handle data decoding if needed for display
+		actualData := data.String
+		if isBase64.Bool && actualData != "" {
+			if decodedBytes, err := base64.StdEncoding.DecodeString(actualData); err == nil {
+				actualData = string(decodedBytes)
+			}
+		}
 
 		log := map[string]interface{}{
 			"session_id": rs.cleanString(sessionID.String),
@@ -2755,6 +2804,7 @@ func (rs *RelayServer) handleAPISSHLogs(w http.ResponseWriter, r *http.Request) 
 			"ssh_host":   rs.cleanString(sshHost.String),
 			"ssh_port":   rs.cleanString(sshPort.String),
 			"command":    cleanedCommand,
+			"data":       actualData,
 			"data_size":  dataSize.Int64,
 			"timestamp":  timestamp,
 		}
@@ -2898,7 +2948,7 @@ func (rs *RelayServer) flushSSHLogs() {
 			return
 		}
 
-		stmt, err := tx.Prepare("INSERT INTO ssh_logs (session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data_size, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		stmt, err := tx.Prepare("INSERT INTO ssh_logs (session_id, agent_id, client_id, direction, ssh_user, ssh_host, ssh_port, command, data, is_base64, data_size, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		if err != nil {
 			tx.Rollback()
 			rs.logger.Error("Failed to prepare SSH log statement: %v", err)
@@ -2908,7 +2958,7 @@ func (rs *RelayServer) flushSSHLogs() {
 		for _, log := range logs {
 			_, err := stmt.Exec(log.SessionID, log.AgentID, log.ClientID,
 				log.Direction, log.User, log.Host, log.Port,
-				log.Command, log.DataSize, log.Timestamp)
+				log.Command, log.Data, log.IsBase64, log.DataSize, log.Timestamp)
 			if err != nil {
 				rs.logger.Error("Failed to insert SSH log: %v", err)
 			}

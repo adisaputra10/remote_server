@@ -206,7 +206,7 @@ export default {
             client: extractedFields.client || 'API-Unknown-Client',
             userHostPort: userHostPort,
             direction: extractedFields.direction || 'API-Unknown-Direction',
-            command: extractedFields.command || 'API-No-Command'
+            command: extractedFields.command || (extractedFields.direction === 'INPUT' ? '(no command)' : '(output)')
           }
           
           console.log(`✅ FINAL TRANSFORMED RECORD ${index + 1}:`, transformedLog)
