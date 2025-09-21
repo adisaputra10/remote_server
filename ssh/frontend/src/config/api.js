@@ -16,9 +16,21 @@ api.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Basic ${token}`
     }
+    
+    // Debug logging for DELETE requests
+    if (config.method === 'delete') {
+      console.log('=== DELETE REQUEST DEBUG ===')
+      console.log('URL:', config.url)
+      console.log('Full URL:', config.baseURL + config.url)
+      console.log('Method:', config.method)
+      console.log('Headers:', config.headers)
+      console.log('Auth token present:', !!token)
+    }
+    
     return config
   },
   (error) => {
+    console.error('Request interceptor error:', error)
     return Promise.reject(error)
   }
 )
@@ -99,7 +111,25 @@ export const apiService = {
   // Health Check
   getHealth() {
     return api.get('/health')
+  },
+
+  // Server Settings
+  getServerSettings() {
+    return api.get('/api/settings')
+  },
+
+  updateServerSettings(settings) {
+    return api.put('/api/settings', settings)
+  },
+
+  // Settings (new format for table-based settings)
+  getSettings() {
+    return api.get('/api/settings')
+  },
+
+  saveSettings(settings) {
+    return api.put('/api/settings', settings)
   }
 }
 
-export default api
+export default apiService

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -182,6 +183,14 @@ func NewRelayServer() *RelayServer {
 		dbName = "logs"
 	}
 
+	// Debug: Log environment variables values
+	rs.logger.Info("=== DATABASE CONFIG DEBUG ===")
+	rs.logger.Info("DB_HOST env value: '%s' (using: %s)", os.Getenv("DB_HOST"), dbHost)
+	rs.logger.Info("DB_PORT env value: '%s' (using: %s)", os.Getenv("DB_PORT"), dbPort) 
+	rs.logger.Info("DB_USER env value: '%s' (using: %s)", os.Getenv("DB_USER"), dbUser)
+	rs.logger.Info("DB_NAME env value: '%s' (using: %s)", os.Getenv("DB_NAME"), dbName)
+	rs.logger.Info("DB_PASSWORD env set: %t", os.Getenv("DB_PASSWORD") != "")
+
 	// Construct DSN
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
 		dbUser, dbPassword, dbHost, dbPort, dbName)
@@ -262,6 +271,12 @@ func (rs *RelayServer) initDatabase() {
             query_text LONGTEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS server_settings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            setting_key VARCHAR(100) UNIQUE NOT NULL,
+            setting_value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`,
 	}
 
 	for _, query := range queries {
@@ -327,6 +342,29 @@ func (rs *RelayServer) initDatabase() {
 			rs.logger.Error("Failed to create default regular user: %v", err)
 		} else {
 			rs.logger.Info("Created default regular user (%s/***)", userUsername)
+		}
+	}
+
+	// Initialize default server settings if not exists
+	var settingsCount int
+	rs.db.QueryRow("SELECT COUNT(*) FROM server_settings").Scan(&settingsCount)
+	if settingsCount == 0 {
+		// Detect server IP automatically
+		defaultIP := rs.detectServerIP()
+		
+		// Insert default settings
+		defaultSettings := map[string]string{
+			"server_ip":   defaultIP,
+			"server_port": "8080",
+		}
+		
+		for key, value := range defaultSettings {
+			_, err := rs.db.Exec("INSERT INTO server_settings (setting_key, setting_value) VALUES (?, ?)", key, value)
+			if err != nil {
+				rs.logger.Error("Failed to create default setting %s: %v", key, err)
+			} else {
+				rs.logger.Info("Created default setting: %s = %s", key, value)
+			}
 		}
 	}
 }
@@ -1237,10 +1275,12 @@ func (rs *RelayServer) setupRoutes() {
 
 	// API endpoints
 	http.HandleFunc("/api/agents", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIAgents)))
+	http.HandleFunc("/api/agents/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIAgents))) // Handle /api/agents/{id}
 	http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
 	http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
 	http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
 	http.HandleFunc("/api/ssh-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHLogs)))
+	http.HandleFunc("/api/settings", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISettings)))
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
 
@@ -1261,6 +1301,10 @@ func (rs *RelayServer) setupRoutes() {
 // API Authentication Middleware (supports Basic Auth)
 func (rs *RelayServer) requireAPIAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		rs.logger.Info("=== API AUTH CHECK ===")
+		rs.logger.Info("Method: %s, URL: %s", r.Method, r.URL.Path)
+		rs.logger.Info("Authorization header present: %t", r.Header.Get("Authorization") != "")
+		
 		// Check for Basic Auth header
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Basic ") {
@@ -1671,11 +1715,22 @@ func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Delete agent from database
-	_, err = rs.db.Exec("DELETE FROM agents WHERE agent_id = ?", agentID)
+	result, err := rs.db.Exec("DELETE FROM agents WHERE agent_id = ?", agentID)
 	if err != nil {
 		rs.logger.Error("Failed to delete agent: %v", err)
 		http.Error(w, "Failed to delete agent", http.StatusInternalServerError)
 		return
+	}
+
+	// Check how many rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		rs.logger.Error("Failed to get rows affected: %v", err)
+	} else {
+		rs.logger.Info("Rows affected by delete: %d", rowsAffected)
+		if rowsAffected == 0 {
+			rs.logger.Info("WARNING: No rows were deleted for agent: %s", agentID)
+		}
 	}
 
 	// Also remove from memory if exists
@@ -2112,6 +2167,148 @@ func (rs *RelayServer) extractSSHCommand(data []byte) string {
 		return string(data[:512]) // Truncate long commands
 	}
 	return string(data)
+}
+
+// detectServerIP tries to detect the server IP address
+func (rs *RelayServer) detectServerIP() string {
+	// Try to get IP from environment variable first
+	if serverIP := os.Getenv("SERVER_IP"); serverIP != "" {
+		return serverIP
+	}
+	
+	// Try to get from DB_HOST if it's not localhost
+	dbHost := os.Getenv("DB_HOST")
+	if dbHost != "" && dbHost != "localhost" && dbHost != "127.0.0.1" {
+		return dbHost
+	}
+	
+	// Fallback to a reasonable default
+	return "168.231.119.242"
+}
+
+// handleAPISettings handles GET and PUT requests for server settings
+func (rs *RelayServer) handleAPISettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetSettings(w, r)
+	case "PUT":
+		rs.handleUpdateSettings(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGetSettings returns current server settings
+func (rs *RelayServer) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== GET SETTINGS REQUEST ===")
+	
+	settings := make(map[string]interface{})
+	
+	// Get all settings from database
+	rows, err := rs.db.Query("SELECT setting_key, setting_value FROM server_settings")
+	if err != nil {
+		rs.logger.Error("Failed to query settings: %v", err)
+		http.Error(w, "Failed to retrieve settings", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	
+	settingsCount := 0
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			continue
+		}
+		
+		settingsCount++
+		rs.logger.Info("Found setting: %s = %s", key, value)
+		
+		// Convert port to number
+		if key == "server_port" {
+			if port, err := strconv.Atoi(value); err == nil {
+				settings[key] = port
+			} else {
+				settings[key] = 8080 // default
+			}
+		} else {
+			settings[key] = value
+		}
+	}
+	
+	rs.logger.Info("Total settings found: %d", settingsCount)
+	
+	// Add some metadata
+	settings["lastUpdated"] = time.Now().Format("2006-01-02 15:04:05")
+	
+	// If no settings found, return defaults
+	if settingsCount == 0 {
+		rs.logger.Info("No settings found in database, using auto-detected defaults")
+		settings["server_ip"] = rs.detectServerIP()
+		settings["server_port"] = 8080
+	}
+	
+	rs.logger.Info("Returning settings: %+v", settings)
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data":    settings,
+	})
+}
+
+// handleUpdateSettings updates server settings
+func (rs *RelayServer) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var updateData struct {
+		ServerIP   string `json:"serverIP"`
+		ServerPort int    `json:"serverPort"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate data
+	if updateData.ServerIP == "" {
+		http.Error(w, "Server IP is required", http.StatusBadRequest)
+		return
+	}
+	
+	if updateData.ServerPort < 1 || updateData.ServerPort > 65535 {
+		updateData.ServerPort = 8080 // default
+	}
+	
+	// Update settings in database
+	settings := map[string]string{
+		"server_ip":   updateData.ServerIP,
+		"server_port": strconv.Itoa(updateData.ServerPort),
+	}
+	
+	for key, value := range settings {
+		_, err := rs.db.Exec(`
+			INSERT INTO server_settings (setting_key, setting_value) 
+			VALUES (?, ?) 
+			ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+		`, key, value)
+		
+		if err != nil {
+			rs.logger.Error("Failed to update setting %s: %v", key, err)
+			http.Error(w, "Failed to update settings", http.StatusInternalServerError)
+			return
+		}
+	}
+	
+	rs.logger.Info("Server settings updated: IP=%s, Port=%d", updateData.ServerIP, updateData.ServerPort)
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Settings updated successfully",
+		"data": map[string]interface{}{
+			"serverIP":   updateData.ServerIP,
+			"serverPort": updateData.ServerPort,
+		},
+	})
 }
 
 func main() {

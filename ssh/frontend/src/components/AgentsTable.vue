@@ -98,7 +98,7 @@
           <div class="tab-content">
             <!-- Linux Tab -->
             <div class="setup-section">
-              <h4><i class="fab fa-linux"></i> Linux Agent Installation</h4>
+              <h4><i class="fab fa-linux"></i> Agent Command Setup</h4>
               
               <div class="step">
                 <h5>1. Download Agent Binary</h5>
@@ -112,25 +112,21 @@ chmod +x agent-linux</code></pre>
               </div>
 
               <div class="step">
-                <h5>2. Create Configuration</h5>
+                <h5>2. Setup Binary Location</h5>
                 <div class="code-block">
-                  <pre><code>cat > agent-config.json << EOF
-{
-  "relay_server": "http://168.231.119.242:8080",
-  "agent_id": "{{ currentSetupAgentId }}",
-  "token": "your-auth-token"
-}
-EOF</code></pre>
-                  <button class="copy-btn" @click="copyCommand('config-linux')">
+                  <pre><code>mkdir -p bin
+mv agent-linux bin/agent
+chmod +x bin/agent</code></pre>
+                  <button class="copy-btn" @click="copyCommand('setup-binary')">
                     <i class="fas fa-copy"></i>
                   </button>
                 </div>
               </div>
 
               <div class="step">
-                <h5>3. Run Agent</h5>
+                <h5>3. Run Agent Command</h5>
                 <div class="code-block">
-                  <pre><code>./agent-linux -config agent-config.json</code></pre>
+                  <pre><code>bin/agent -a {{ currentSetupAgentId }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></pre>
                   <button class="copy-btn" @click="copyCommand('run-linux')">
                     <i class="fas fa-copy"></i>
                   </button>
@@ -142,11 +138,12 @@ EOF</code></pre>
           <div class="setup-notes">
             <h4><i class="fas fa-info-circle"></i> Important Notes</h4>
             <ul>
-              <li>Replace <code>your-auth-token</code> with your actual authentication token</li>
-              <li>Ensure the agent can reach the relay server at <code>http://168.231.119.242:8080</code></li>
+              <li>Use command: <code>bin/agent -a {{ currentSetupAgentId }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></li>
+              <li>Agent ID <code>{{ currentSetupAgentId }}</code> is automatically set from database</li>
+              <li>Ensure the agent binary is located in <code>bin/</code> directory</li>
+              <li>Make sure the agent can reach the WebSocket server at <code>ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></li>
               <li>Check firewall settings if connection fails</li>
-              <li>Agent ID should be unique for each installation</li>
-              <li>Agent will appear in this dashboard once connected</li>
+              <li>Agent will appear as "connected" in this dashboard once running</li>
             </ul>
           </div>
         </div>
@@ -182,6 +179,12 @@ export default {
     // Setup Modal Data
     const showSetupModal = ref(false)
     const currentSetupAgentId = ref('')
+    
+    // Server Settings Data  
+    const serverSettings = ref({
+      serverIP: '192.168.1.115',
+      serverPort: 8080
+    })
 
     const paginatedAgents = computed(() => {
       const start = (currentPage.value - 1) * itemsPerPage.value
@@ -338,8 +341,8 @@ export default {
     const copyCommand = (commandType) => {
       const commands = {
         'download-linux': 'wget http://your-server:8080/downloads/agent-linux\nchmod +x agent-linux',
-        'config-linux': 'cat > agent-config.json << EOF\n{\n  "relay_server": "http://168.231.119.242:8080",\n  "agent_id": "agent-linux-$(hostname)",\n  "token": "your-auth-token"\n}\nEOF',
-        'run-linux': './agent-linux -config agent-config.json'
+        'setup-binary': 'mkdir -p bin\nmv agent-linux bin/agent\nchmod +x bin/agent',
+        'run-linux': `bin/agent -a ${currentSetupAgentId.value} -r ws://${serverSettings.value.serverIP}:${serverSettings.value.serverPort}/ws/agent`
       }
       
       const command = commands[commandType]
@@ -366,8 +369,12 @@ export default {
         console.log(`Agent "${agentId}" deleted successfully from database`)
         alert(`Agent "${agentId}" has been deleted successfully!`)
         
-        // Refresh agents list
-        fetchAgents()
+        // Wait a moment then refresh agents list to ensure database sync
+        console.log('Refreshing agents list after delete...')
+        setTimeout(async () => {
+          await fetchAgents()
+          console.log('Agents list refreshed after delete')
+        }, 500)
         
       } catch (error) {
         console.error('=== DELETE AGENT ERROR ===')
@@ -389,8 +396,46 @@ export default {
       }
     }
 
+    // Load server settings for dynamic IP
+    const loadServerSettings = async () => {
+      try {
+        console.log('=== LOADING SERVER SETTINGS ===')
+        const response = await apiService.getSettings()
+        console.log('Settings response:', response)
+        
+        if (response && response.success && response.data) {
+          const settingsData = response.data
+          console.log('Settings data:', settingsData)
+          
+          const newSettings = {
+            serverIP: settingsData.server_ip || '192.168.1.115',
+            serverPort: parseInt(settingsData.server_port) || 8080
+          }
+          
+          console.log('New server settings:', newSettings)
+          serverSettings.value = newSettings
+          console.log('Updated serverSettings.value:', serverSettings.value)
+        } else {
+          console.warn('No settings data found, using defaults')
+          // Use default values if no data returned
+          serverSettings.value = {
+            serverIP: '192.168.1.115',
+            serverPort: 8080
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load server settings:', error)
+        // Keep default values
+        serverSettings.value = {
+          serverIP: '192.168.1.115',
+          serverPort: 8080
+        }
+      }
+    }
+
     onMounted(() => {
       fetchAgents()
+      loadServerSettings()
       
       // Auto-refresh every 30 seconds
       setInterval(fetchAgents, 30000)
@@ -405,6 +450,7 @@ export default {
       itemsPerPage,
       showSetupModal,
       currentSetupAgentId,
+      serverSettings,
       refreshData,
       viewDetails,
       handlePageChange,
@@ -413,7 +459,8 @@ export default {
       closeSetupModal,
       copyToClipboard,
       copyCommand,
-      deleteAgent
+      deleteAgent,
+      loadServerSettings
     }
   }
 }

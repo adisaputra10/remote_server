@@ -1,0 +1,29 @@
+# SSH Tunnel System Configuration Template
+# Copy this file to .env and modify as needed
+
+# Database Configuration
+DB_CONNECTION_STRING=root:root@tcp(localhost:3306)/logs?parseTime=true
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=root
+DB_NAME=tunnel
+
+# Admin User for Dashboard (full access)
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123
+
+# Regular User for Dashboard (read-only access)
+USER_USERNAME=user
+USER_PASSWORD=user123
+
+# Optional: Debug Mode
+# DEBUG=true
+
+# Optional: Custom Ports
+# RELAY_PORT=8080
+# DASHBOARD_PORT=8080
+
+# Docker Compose Overrides
+# DB_CONTAINER_PORT=3306
+# RELAY_CONTAINER_PORT=8080

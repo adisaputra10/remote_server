@@ -74,6 +74,12 @@
               <span>SSH Commands</span>
             </a>
           </li>
+          <li class="sidebar-item">
+            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'settings' }" @click="switchTab('settings')">
+              <i class="fas fa-cog"></i>
+              <span>Settings</span>
+            </a>
+          </li>
         </ul>
       </nav>
 
@@ -128,6 +134,7 @@
           <LogsTable v-if="activeTab === 'logs'" />
           <QueriesTable v-if="activeTab === 'database'" />
           <SSHLogsTable v-if="activeTab === 'ssh'" />
+          <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
     </div>
@@ -203,6 +210,7 @@ import ClientsTable from '../components/ClientsTable.vue'
 import LogsTable from '../components/LogsTable.vue'
 import QueriesTable from '../components/QueriesTable.vue'
 import SSHLogsTable from '../components/SSHLogsTable.vue'
+import Settings from '../components/Settings.vue'
 import { apiService } from '../config/api.js'
 
 export default {
@@ -212,7 +220,8 @@ export default {
     ClientsTable,
     LogsTable,
     QueriesTable,
-    SSHLogsTable
+    SSHLogsTable,
+    Settings
   },
   setup() {
     const router = useRouter()
