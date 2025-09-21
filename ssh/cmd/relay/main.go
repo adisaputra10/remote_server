@@ -1630,16 +1630,26 @@ func (rs *RelayServer) handleAddAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== DELETE AGENT REQUEST ===")
+	rs.logger.Info("Method: %s", r.Method)
+	rs.logger.Info("URL Path: %s", r.URL.Path)
+	
 	// Extract agent ID from URL path
 	urlPath := r.URL.Path
 	parts := strings.Split(urlPath, "/")
+	rs.logger.Info("URL parts: %v", parts)
+	
 	if len(parts) < 4 {
+		rs.logger.Error("Not enough URL parts. Expected: /api/agents/{agentID}")
 		http.Error(w, "Agent ID is required", http.StatusBadRequest)
 		return
 	}
 	
 	agentID := rs.cleanString(parts[3]) // /api/agents/{agentID}
+	rs.logger.Info("Extracted Agent ID: '%s'", agentID)
+	
 	if agentID == "" {
+		rs.logger.Error("Empty agent ID after cleaning")
 		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
 		return
 	}

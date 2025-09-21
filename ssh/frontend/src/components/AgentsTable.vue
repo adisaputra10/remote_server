@@ -357,9 +357,11 @@ export default {
       try {
         console.log('=== DELETING AGENT ===')
         console.log('Agent ID:', agentId)
+        console.log('API URL:', `${import.meta.env.VITE_API_BASE_URL}/api/agents/${agentId}`)
         
         // Call API to delete agent
-        await apiService.deleteAgent(agentId)
+        const response = await apiService.deleteAgent(agentId)
+        console.log('Delete response:', response)
         
         console.log(`Agent "${agentId}" deleted successfully from database`)
         alert(`Agent "${agentId}" has been deleted successfully!`)
@@ -368,10 +370,18 @@ export default {
         fetchAgents()
         
       } catch (error) {
-        console.error('Error deleting agent:', error)
+        console.error('=== DELETE AGENT ERROR ===')
+        console.error('Full error object:', error)
+        console.error('Error response:', error.response)
+        console.error('Error message:', error.message)
+        console.error('Error status:', error.response?.status)
+        console.error('Error data:', error.response?.data)
+        
         let errorMessage = 'Failed to delete agent'
         if (error.response?.data?.error) {
           errorMessage = error.response.data.error
+        } else if (error.response?.data?.message) {
+          errorMessage = error.response.data.message
         } else if (error.message) {
           errorMessage = error.message
         }
