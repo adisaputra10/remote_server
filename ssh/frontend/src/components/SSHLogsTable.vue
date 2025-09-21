@@ -38,6 +38,7 @@
               <th>USER@HOST:PORT</th>
               <th>DIRECTION</th>
               <th>COMMAND</th>
+              <th>DATA</th>
             </tr>
           </thead>
           <tbody>
@@ -60,6 +61,11 @@
                 </span>
               </td>
               <td class="command-cell">{{ log.command }}</td>
+              <td class="data-cell">
+                <div class="data-content" :title="log.data">
+                  {{ truncateData(log.data, 100) }}
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -183,7 +189,8 @@ export default {
             ssh_port: parsedData.ssh_port || parsedData.port || log.ssh_port || log.port,
             
             direction: parsedData.direction || parsedData.type || parsedData.action || log.direction || log.type || log.action,
-            command: parsedData.command || parsedData.cmd || parsedData.ssh_command || log.command || log.cmd || log.ssh_command
+            command: parsedData.command || parsedData.cmd || parsedData.ssh_command || log.command || log.cmd || log.ssh_command,
+            data: parsedData.data || parsedData.content || parsedData.output || log.data || log.content || log.output || ''
           }
           
           // Build USER@HOST:PORT format
@@ -206,7 +213,8 @@ export default {
             client: extractedFields.client || 'API-Unknown-Client',
             userHostPort: userHostPort,
             direction: extractedFields.direction || 'API-Unknown-Direction',
-            command: extractedFields.command || (extractedFields.direction === 'INPUT' ? '(no command)' : '(output)')
+            command: extractedFields.command || (extractedFields.direction === 'INPUT' ? '(no command)' : '(output)'),
+            data: extractedFields.data || 'No data available'
           }
           
           console.log(`✅ FINAL TRANSFORMED RECORD ${index + 1}:`, transformedLog)
@@ -289,7 +297,12 @@ export default {
       itemsPerPage,
       apiBaseUrl,
       refreshData,
-      handlePageChange
+      handlePageChange,
+      truncateData: (text, maxLength) => {
+        if (!text) return ''
+        if (text.length <= maxLength) return text
+        return text.substring(0, maxLength) + '...'
+      }
     }
   }
 }
@@ -381,7 +394,13 @@ export default {
 
 .table th:nth-child(6), /* COMMAND */
 .table td:nth-child(6) {
-  width: 48%;
+  width: 30%;
+  min-width: 150px;
+}
+
+.table th:nth-child(7), /* DATA */
+.table td:nth-child(7) {
+  width: 25%;
   min-width: 200px;
 }
 
@@ -392,9 +411,28 @@ export default {
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   max-width: none; /* Remove max-width limit */
-  overflow: visible; /* Allow text to be fully visible */
-  text-overflow: clip;
-  white-space: normal; /* Allow wrapping if needed */
+}
+
+.data-cell {
+  font-family: 'Courier New', monospace;
+  background: var(--surface-light);
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  max-width: none;
+}
+
+.data-content {
+  max-height: 60px;
+  overflow-y: auto;
+  white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.3;
+  cursor: help;
+}
+
+.data-content:hover {
+  background: var(--surface-alt);
+  color: var(--text-primary);
 }
 </style>

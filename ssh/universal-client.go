@@ -78,6 +78,16 @@ type UniversalSSHLogRequest struct {
 	IsBase64  bool   `json:"is_base64"`
 }
 
+// LogFileReader reads and processes client.log file to send to server
+type LogFileReader struct {
+	client       *UniversalClient
+	logFilePath  string
+	lastPosition int64
+	ticker       *time.Ticker
+	running      bool
+	traceLogger  *common.Logger // Logger for tracing requests sent to server
+}
+
 // CommandLoggingReader wraps os.Stdin to log commands
 type CommandLoggingReader struct {
 	reader *bufio.Reader
@@ -158,8 +168,8 @@ func (lw *LoggingWriter) flushBuffer() {
 		// Get accumulated data
 		data := strings.TrimSpace(lw.buffer.String())
 		if data != "" && !strings.Contains(data, "INFO:") {
-			// Send accumulated data as one unit to database
-			go lw.sendToDatabase(data)
+			// Log to file only - no direct sending to server
+			// go lw.sendToDatabase(data) // Disabled - using LogFileReader instead
 		}
 		
 		// Clear buffer
@@ -231,8 +241,8 @@ func (clr *CommandLoggingReader) Read(p []byte) (n int, err error) {
 			if clr.client != nil {
 				clr.client.lastCommand = cleanData
 			}
-			// Send to database
-			go clr.sendToDatabase(cleanData)
+			// Server sending will be handled by LogFileReader
+			// go clr.sendToDatabase(cleanData) // Disabled - using LogFileReader instead
 		}
 	}
 	return n, err
@@ -305,6 +315,199 @@ func loadConfig() Config {
 	}
 
 	return config
+}
+
+// LogFileReader methods
+func NewLogFileReader(client *UniversalClient, logFilePath string) *LogFileReader {
+	// Create trace logger for logging requests sent to server
+	traceLogPath := filepath.Join("logs", "trace-requests.log")
+	
+	// Create trace log file
+	traceFile, err := os.OpenFile(traceLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Printf("Failed to create trace log file: %v", err)
+		return nil
+	}
+	
+	// Create logger that writes only to file (not console)
+	traceLogger := common.NewLogger("trace")
+	traceLogger.SetFileOnly(traceFile, "trace")
+	
+	return &LogFileReader{
+		client:      client,
+		logFilePath: logFilePath,
+		ticker:      time.NewTicker(500 * time.Millisecond), // Check every 500ms for faster responsiveness
+		running:     true,
+		traceLogger: traceLogger,
+	}
+}
+
+func (lfr *LogFileReader) Start() {
+	lfr.traceLogger.Info("LOG FILE READER STARTED: Monitoring file=%s, Interval=500ms", lfr.logFilePath)
+	go func() {
+		for lfr.running {
+			select {
+			case <-lfr.ticker.C:
+				lfr.processLogFile()
+			}
+		}
+		lfr.traceLogger.Info("LOG FILE READER STOPPED: Background process terminated")
+	}()
+}
+
+func (lfr *LogFileReader) Stop() {
+	lfr.traceLogger.Info("LOG FILE READER STOPPING: Cleanup initiated")
+	lfr.running = false
+	if lfr.ticker != nil {
+		lfr.ticker.Stop()
+	}
+}
+
+func (lfr *LogFileReader) processLogFile() {
+	// Open log file for reading
+	file, err := os.Open(lfr.logFilePath)
+	if err != nil {
+		return // File might not exist yet
+	}
+	defer file.Close()
+
+	// Get current file size
+	stat, err := file.Stat()
+	if err != nil {
+		return
+	}
+
+	// If file is smaller than last position, reset (file was recreated)
+	if stat.Size() < lfr.lastPosition {
+		lfr.lastPosition = 0
+		lfr.traceLogger.Info("FILE RESET: Log file was recreated, resetting position to 0")
+	}
+
+	// Seek to last read position
+	file.Seek(lfr.lastPosition, 0)
+	
+	scanner := bufio.NewScanner(file)
+	var currentInput string
+	var outputBuffer []string
+	var standaloneOutputBuffer []string // For outputs without associated command
+	linesProcessed := 0
+	
+	for scanner.Scan() {
+		line := scanner.Text()
+		linesProcessed++
+		
+		// Check for INPUT pattern
+		if strings.Contains(line, "INPUT:") {
+			// Send any accumulated standalone output first
+			if len(standaloneOutputBuffer) > 0 {
+				lfr.traceLogger.Info("PROCESSING STANDALONE OUTPUT: Lines=%d", len(standaloneOutputBuffer))
+				lfr.sendToServer("OUTPUT", "system", strings.Join(standaloneOutputBuffer, "\n"))
+				standaloneOutputBuffer = []string{} // Reset standalone buffer
+			}
+			
+			// Send any accumulated output from previous command
+			if currentInput != "" && len(outputBuffer) > 0 {
+				lfr.traceLogger.Info("PROCESSING OUTPUT: Command=%s, Lines=%d", currentInput, len(outputBuffer))
+				lfr.sendToServer("OUTPUT", currentInput, strings.Join(outputBuffer, "\n"))
+				outputBuffer = []string{} // Reset output buffer
+			}
+			
+			// Extract and send INPUT
+			if parts := strings.Split(line, "INPUT: "); len(parts) > 1 {
+				inputCommand := strings.TrimSpace(parts[1])
+				currentInput = inputCommand
+				
+				// Send INPUT immediately to server
+				lfr.traceLogger.Info("PROCESSING INPUT: Command=%s", inputCommand)
+				lfr.sendToServer("INPUT", inputCommand, inputCommand)
+			}
+		} else if strings.Contains(line, "OUTPUT:") {
+			// Collect OUTPUT lines
+			if parts := strings.Split(line, "OUTPUT: "); len(parts) > 1 {
+				outputLine := parts[1]
+				
+				if currentInput != "" {
+					// Associate with current command
+					outputBuffer = append(outputBuffer, outputLine)
+				} else {
+					// Standalone output (like welcome message)
+					standaloneOutputBuffer = append(standaloneOutputBuffer, outputLine)
+				}
+			}
+		}
+	}
+	
+	// Send any remaining standalone output
+	if len(standaloneOutputBuffer) > 0 {
+		lfr.traceLogger.Info("PROCESSING FINAL STANDALONE OUTPUT: Lines=%d", len(standaloneOutputBuffer))
+		lfr.sendToServer("OUTPUT", "system", strings.Join(standaloneOutputBuffer, "\n"))
+	}
+	
+	// Send any remaining output for current command
+	if currentInput != "" && len(outputBuffer) > 0 {
+		lfr.traceLogger.Info("PROCESSING FINAL OUTPUT: Command=%s, Lines=%d", currentInput, len(outputBuffer))
+		lfr.sendToServer("OUTPUT", currentInput, strings.Join(outputBuffer, "\n"))
+	}
+	
+	// Update last position to current file position
+	pos, _ := file.Seek(0, 1)
+	if linesProcessed > 0 {
+		lfr.traceLogger.Info("FILE PROCESSED: LinesRead=%d, OldPos=%d, NewPos=%d", 
+			linesProcessed, lfr.lastPosition, pos)
+	}
+	lfr.lastPosition = pos
+}
+
+func (lfr *LogFileReader) sendToServer(direction, command, data string) {
+	if lfr.client == nil || lfr.client.tunnelConn == nil {
+		return
+	}
+	
+	// Encode data to base64 for multi-line support
+	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
+	
+	logRequest := UniversalSSHLogRequest{
+		SessionID: lfr.client.sessionID,
+		ClientID:  lfr.client.id,
+		AgentID:   lfr.client.agentID,
+		Direction: direction,
+		User:      lfr.client.sshUser,
+		Host:      lfr.client.sshHost,
+		Port:      lfr.client.localPort,
+		Command:   command,
+		Data:      encodedData,
+		IsBase64:  true,
+	}
+
+	logMsg := common.NewMessage(common.MsgTypeSSHLog)
+	logMsg.SessionID = lfr.client.sessionID
+	logMsg.ClientID = lfr.client.id
+	logMsg.AgentID = lfr.client.agentID
+	
+	// Log trace information before sending
+	lfr.traceLogger.Info("SENDING TO SERVER: Direction=%s, Command=%s, DataSize=%d, SessionID=%s", 
+		direction, command, len(data), lfr.client.sessionID)
+	
+	// Convert to JSON and send with mutex protection
+	if logData, err := json.Marshal(logRequest); err == nil {
+		logMsg.Data = logData
+		
+		// Use mutex to prevent concurrent writes to websocket
+		lfr.client.mutex.Lock()
+		err := lfr.client.tunnelConn.WriteJSON(logMsg)
+		lfr.client.mutex.Unlock()
+		
+		if err != nil {
+			lfr.traceLogger.Error("FAILED TO SEND: Direction=%s, Command=%s, Error=%v", 
+				direction, command, err)
+		} else {
+			lfr.traceLogger.Info("SENT SUCCESSFULLY: Direction=%s, Command=%s, MessageType=%s", 
+				direction, command, logMsg.Type)
+		}
+	} else {
+		lfr.traceLogger.Error("FAILED TO MARSHAL: Direction=%s, Command=%s, Error=%v", 
+			direction, command, err)
+	}
 }
 
 // Get display name for relay URL (show ENV if from environment)
@@ -1218,6 +1421,12 @@ func (c *UniversalClient) startInteractiveSSHSession() error {
 	defer client.Close()
 
 	c.logger.Info("SSH client connected successfully!")
+
+	// Start log file reader to monitor and send logs to server
+	logFilePath := filepath.Join("logs", "client.log")
+	logReader := NewLogFileReader(c, logFilePath)
+	logReader.Start()
+	defer logReader.Stop()
 
 	// Create interactive session
 	session, err := client.NewSession()
