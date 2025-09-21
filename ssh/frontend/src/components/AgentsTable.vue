@@ -125,11 +125,35 @@ chmod +x bin/agent</code></pre>
 
               <div class="step">
                 <h5>3. Run Agent Command</h5>
-                <div class="code-block">
-                  <pre><code>bin/agent -a {{ currentSetupAgentId }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></pre>
+                <div v-if="isServerConfigured" class="code-block">
+                  <pre><code>bin/agent -a {{ currentSetupAgentId }} -t {{ currentSetupAgentToken }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></pre>
                   <button class="copy-btn" @click="copyCommand('run-linux')">
                     <i class="fas fa-copy"></i>
                   </button>
+                </div>
+                <div v-else class="config-warning">
+                  <i class="fas fa-exclamation-triangle"></i>
+                  <span>Please configure server IP in Settings first before running agent command</span>
+                </div>
+              </div>
+              
+              <div class="step">
+                <h5>4. Agent Authentication</h5>
+                <div class="token-info">
+                  <div class="token-row">
+                    <span class="token-label">Agent ID:</span>
+                    <code class="token-value">{{ currentSetupAgentId }}</code>
+                    <button class="copy-small-btn" @click="copyToClipboard(currentSetupAgentId)">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </div>
+                  <div class="token-row">
+                    <span class="token-label">Token:</span>
+                    <code class="token-value">{{ currentSetupAgentToken || 'No token available' }}</code>
+                    <button class="copy-small-btn" @click="copyToClipboard(currentSetupAgentToken)" v-if="currentSetupAgentToken">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -137,13 +161,23 @@ chmod +x bin/agent</code></pre>
 
           <div class="setup-notes">
             <h4><i class="fas fa-info-circle"></i> Important Notes</h4>
-            <ul>
-              <li>Use command: <code>bin/agent -a {{ currentSetupAgentId }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></li>
-              <li>Agent ID <code>{{ currentSetupAgentId }}</code> is automatically set from database</li>
+            <div v-if="!isServerConfigured" class="config-warning">
+              <i class="fas fa-exclamation-triangle"></i>
+              <span><strong>Server not configured:</strong> Please go to Settings to configure server IP address before using agent commands.</span>
+            </div>
+            <ul v-if="isServerConfigured">
+              <li>Agent ID <code>{{ currentSetupAgentId }}</code> and Token <code>{{ currentSetupAgentToken }}</code> are required for authentication</li>
+              <li>Full command: <code>bin/agent -a {{ currentSetupAgentId }} -t {{ currentSetupAgentToken }} -r ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></li>
+              <li>Token validates agent identity against server database</li>
               <li>Ensure the agent binary is located in <code>bin/</code> directory</li>
               <li>Make sure the agent can reach the WebSocket server at <code>ws://{{ serverSettings.serverIP }}:{{ serverSettings.serverPort }}/ws/agent</code></li>
+              <li>Agent will be rejected if token is invalid or missing</li>
               <li>Check firewall settings if connection fails</li>
-              <li>Agent will appear as "connected" in this dashboard once running</li>
+            </ul>
+            <ul v-else>
+              <li>Go to <strong>Settings</strong> page to configure server IP address</li>
+              <li>Server IP is required for agent connection commands</li>
+              <li>Agent commands will be available after server configuration</li>
             </ul>
           </div>
         </div>
@@ -179,10 +213,11 @@ export default {
     // Setup Modal Data
     const showSetupModal = ref(false)
     const currentSetupAgentId = ref('')
+    const currentSetupAgentToken = ref('')
     
-    // Server Settings Data  
+    // Server Settings Data (loaded from database via API)
     const serverSettings = ref({
-      serverIP: '192.168.1.115',
+      serverIP: '',
       serverPort: 8080
     })
 
@@ -190,6 +225,10 @@ export default {
       const start = (currentPage.value - 1) * itemsPerPage.value
       const end = start + itemsPerPage.value
       return allAgents.value.slice(start, end)
+    })
+
+    const isServerConfigured = computed(() => {
+      return serverSettings.value.serverIP && serverSettings.value.serverIP.trim() !== ''
     })
 
     const fetchAgents = async () => {
@@ -239,13 +278,17 @@ export default {
           
           const transformedAgent = {
             id: agent.id || agent.agent_id || agent.name || `agent-${index + 1}`,
+            token: agent.token || '',
             status: statusClass,
             statusText: statusText,
             connectedAt: agent.connected_at || agent.connected_since || agent.last_seen || agent.created_at || 'Unknown',
             lastPing: agent.last_ping || agent.last_seen || agent.updated_at || agent.last_activity || 'Unknown'
           }
           
+          console.log('Raw agent data:', agent)
+          console.log('Agent token from raw:', agent.token)
           console.log('Transformed agent:', transformedAgent)
+          console.log('Transformed agent token:', transformedAgent.token)
           return transformedAgent
         })
         
@@ -298,8 +341,22 @@ export default {
     // Setup Modal Functions
     const openSetupModal = (agentId) => {
       console.log('Opening Setup Modal for agent:', agentId)
+      console.log('All agents in allAgents.value:', allAgents.value)
+      
+      // Find agent data to get token
+      const agent = allAgents.value.find(a => a.id === agentId)
+      console.log('Found agent data:', agent)
+      console.log('Agent ID match check:', allAgents.value.map(a => ({id: a.id, matches: a.id === agentId})))
+      
       currentSetupAgentId.value = agentId
+      currentSetupAgentToken.value = agent ? agent.token : ''
       showSetupModal.value = true
+      
+      console.log('Setup modal data:', {
+        agentId: currentSetupAgentId.value,
+        token: currentSetupAgentToken.value,
+        agentFound: !!agent
+      })
     }
 
     const closeSetupModal = () => {
@@ -342,7 +399,7 @@ export default {
       const commands = {
         'download-linux': 'wget http://your-server:8080/downloads/agent-linux\nchmod +x agent-linux',
         'setup-binary': 'mkdir -p bin\nmv agent-linux bin/agent\nchmod +x bin/agent',
-        'run-linux': `bin/agent -a ${currentSetupAgentId.value} -r ws://${serverSettings.value.serverIP}:${serverSettings.value.serverPort}/ws/agent`
+        'run-linux': `bin/agent -a ${currentSetupAgentId.value} -t ${currentSetupAgentToken.value} -r ws://${serverSettings.value.serverIP}:${serverSettings.value.serverPort}/ws/agent`
       }
       
       const command = commands[commandType]
@@ -401,14 +458,16 @@ export default {
       try {
         console.log('=== LOADING SERVER SETTINGS ===')
         const response = await apiService.getSettings()
-        console.log('Settings response:', response)
+        console.log('Settings API response:', response)
+        console.log('Response data:', response.data)
         
-        if (response && response.success && response.data) {
-          const settingsData = response.data
-          console.log('Settings data:', settingsData)
+        // Backend returns { success: true, data: {...} }, axios wraps it in response.data
+        if (response.data && response.data.success && response.data.data) {
+          const settingsData = response.data.data
+          console.log('Settings data from database:', settingsData)
           
           const newSettings = {
-            serverIP: settingsData.server_ip || '192.168.1.115',
+            serverIP: settingsData.server_ip || '',
             serverPort: parseInt(settingsData.server_port) || 8080
           }
           
@@ -416,18 +475,15 @@ export default {
           serverSettings.value = newSettings
           console.log('Updated serverSettings.value:', serverSettings.value)
         } else {
-          console.warn('No settings data found, using defaults')
-          // Use default values if no data returned
-          serverSettings.value = {
-            serverIP: '192.168.1.115',
-            serverPort: 8080
-          }
+          console.warn('No settings data found from API')
+          throw new Error('No settings data returned from server')
         }
       } catch (error) {
         console.error('Failed to load server settings:', error)
-        // Keep default values
+        // Don't use hardcoded fallback, let user know they need to configure
+        console.warn('Using empty server settings - user needs to configure in Settings')
         serverSettings.value = {
-          serverIP: '192.168.1.115',
+          serverIP: '',
           serverPort: 8080
         }
       }
@@ -450,7 +506,9 @@ export default {
       itemsPerPage,
       showSetupModal,
       currentSetupAgentId,
+      currentSetupAgentToken,
       serverSettings,
+      isServerConfigured,
       refreshData,
       viewDetails,
       handlePageChange,
@@ -809,5 +867,22 @@ export default {
 .modal-footer .btn-secondary:hover {
   background: var(--border-color);
   color: var(--text-primary);
+}
+
+.config-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-danger);
+  font-style: italic;
+  padding: 0.75rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+}
+
+.config-warning strong {
+  font-weight: 600;
 }
 </style>

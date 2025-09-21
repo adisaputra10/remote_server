@@ -404,16 +404,41 @@ func (rs *RelayServer) saveAgentToDatabase(agentID, status string) {
 	agentID = rs.cleanString(agentID)
 	status = rs.cleanString(status)
 
-	// Use REPLACE INTO to insert or update agent data
-	_, err := rs.db.Exec(`
-		REPLACE INTO agents (agent_id, status, connected_at, last_ping) 
-		VALUES (?, ?, NOW(), NOW())`,
-		agentID, status,
+	// Use UPDATE to preserve existing token, or INSERT if agent doesn't exist
+	// First try to update existing agent (preserving token)
+	result, err := rs.db.Exec(`
+		UPDATE agents 
+		SET status = ?, last_ping = NOW(), updated_at = NOW() 
+		WHERE agent_id = ?`,
+		status, agentID,
 	)
+	
 	if err != nil {
-		rs.logger.Error("Failed to save agent to database: %v", err)
+		rs.logger.Error("Failed to update agent in database: %v", err)
+		return
+	}
+	
+	// Check if any rows were affected (agent exists)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		rs.logger.Error("Failed to check affected rows: %v", err)
+		return
+	}
+	
+	// If no rows affected, agent doesn't exist - insert new agent (without token for now)
+	if rowsAffected == 0 {
+		_, err = rs.db.Exec(`
+			INSERT INTO agents (agent_id, status, connected_at, last_ping) 
+			VALUES (?, ?, NOW(), NOW())`,
+			agentID, status,
+		)
+		if err != nil {
+			rs.logger.Error("Failed to insert agent to database: %v", err)
+		} else {
+			rs.logger.Debug("New agent inserted to database: %s (status: %s)", agentID, status)
+		}
 	} else {
-		rs.logger.Debug("Agent saved to database: %s (status: %s)", agentID, status)
+		rs.logger.Debug("Agent updated in database: %s (status: %s)", agentID, status)
 	}
 }
 
@@ -733,6 +758,39 @@ func (rs *RelayServer) handleBinarySSHData(conn *websocket.Conn, messageData []b
 	rs.handleData(conn, msg)
 }
 
+// validateAgentToken validates agent token against database
+func (rs *RelayServer) validateAgentToken(agentID, token string) bool {
+	if agentID == "" || token == "" {
+		rs.logger.Error("Agent ID or token is empty")
+		return false
+	}
+
+	// Clean inputs
+	agentID = rs.cleanString(agentID)
+	token = rs.cleanString(token)
+
+	// Check token in database
+	var dbToken sql.NullString
+	err := rs.db.QueryRow("SELECT token FROM agents WHERE agent_id = ?", agentID).Scan(&dbToken)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			rs.logger.Error("Agent not found in database: %s", agentID)
+		} else {
+			rs.logger.Error("Database error validating token for agent %s: %v", agentID, err)
+		}
+		return false
+	}
+
+	// Compare tokens
+	if !dbToken.Valid || dbToken.String != token {
+		rs.logger.Error("Token mismatch for agent %s", agentID)
+		return false
+	}
+
+	rs.logger.Info("Token validation successful for agent: %s", agentID)
+	return true
+}
+
 func (rs *RelayServer) handleMessage(conn *websocket.Conn, msg *common.Message) {
 	rs.logger.Debug("Received message: %s", msg.String())
 
@@ -767,6 +825,21 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 	defer rs.connMutex.Unlock()
 
 	if msg.AgentID != "" {
+		// Validate agent token
+		if !rs.validateAgentToken(msg.AgentID, msg.Token) {
+			rs.logger.Error("Agent registration failed: invalid token for agent %s", msg.AgentID)
+			
+			// Send error response
+			errorResponse := common.NewMessage(common.MsgTypeError)
+			errorResponse.AgentID = msg.AgentID
+			errorResponse.Error = "Invalid agent token"
+			rs.sendMessage(conn, errorResponse)
+			
+			// Close connection
+			conn.Close()
+			return
+		}
+
 		agent := &Agent{
 			ID:          msg.AgentID,
 			Connection:  conn,
@@ -779,11 +852,11 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 		// Add to fast lookup map
 		rs.connToAgent[conn] = msg.AgentID
 
-		rs.logger.Info("Agent registered: %s", msg.AgentID)
+		rs.logger.Info("Agent registered successfully: %s", msg.AgentID)
 
 		// Log to database asynchronously
 		go rs.logConnection("agent", msg.AgentID, "", "connected", "")
-		// Save agent to database with "connected" status
+		// Save agent to database with "connected" status and ensure token is preserved
 		go rs.saveAgentToDatabase(msg.AgentID, "connected")
 	} else if msg.ClientID != "" {
 		client := &Client{
@@ -1559,7 +1632,7 @@ func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 	// Get agents from database instead of memory
 	rows, err := rs.db.Query(`
-		SELECT agent_id, status, connected_at, last_ping 
+		SELECT agent_id, token, status, connected_at, last_ping 
 		FROM agents 
 		ORDER BY connected_at DESC
 	`)
@@ -1572,10 +1645,10 @@ func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []map[string]interface{}
 	for rows.Next() {
-		var agentID, status sql.NullString
+		var agentID, token, status sql.NullString
 		var connectedAt, lastPing sql.NullTime
 
-		err := rows.Scan(&agentID, &status, &connectedAt, &lastPing)
+		err := rows.Scan(&agentID, &token, &status, &connectedAt, &lastPing)
 		if err != nil {
 			rs.logger.Error("Failed to scan agent row: %v", err)
 			continue
@@ -1584,6 +1657,7 @@ func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		agent := map[string]interface{}{
 			"id":           agentID.String,
 			"agent_id":     agentID.String,
+			"token":        token.String,
 			"status":       status.String,
 			"connected_at": connectedAt.Time,
 			"last_ping":    lastPing.Time,

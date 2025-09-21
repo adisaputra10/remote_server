@@ -27,6 +27,7 @@ type Message struct {
 	ClientName string      `json:"client_name,omitempty"`
 	SessionID  string      `json:"session_id,omitempty"`
 	Target     string      `json:"target,omitempty"`
+	Token      string      `json:"token,omitempty"`
 	Data       []byte      `json:"data,omitempty"`
 	Error      string      `json:"error,omitempty"`
 	Timestamp  int64       `json:"timestamp"`

@@ -45,7 +45,7 @@
                     type="text" 
                     v-model="localSettings.server_ip" 
                     class="form-input"
-                    placeholder="192.168.1.115"
+                    placeholder="Enter server IP address"
                     @input="markAsChanged">
                 </td>
                 <td class="setting-description">
@@ -75,7 +75,13 @@
                   <strong>WebSocket URL</strong>
                 </td>
                 <td class="setting-value">
-                  <code class="websocket-url">ws://{{ localSettings.server_ip }}:{{ localSettings.server_port }}/ws/agent</code>
+                  <div v-if="isConfigurationComplete" class="websocket-url-container">
+                    <code class="websocket-url">ws://{{ localSettings.server_ip }}:{{ localSettings.server_port }}/ws/agent</code>
+                  </div>
+                  <div v-else class="config-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span>Please configure server IP address first</span>
+                  </div>
                 </td>
                 <td class="setting-description">
                   Generated WebSocket URL for agent connections. Auto-updated based on IP/Port.
@@ -86,11 +92,15 @@
                   <strong>Agent Command</strong>
                 </td>
                 <td class="setting-value" colspan="2">
-                  <div class="command-example">
+                  <div v-if="isConfigurationComplete" class="command-example">
                     <code>bin/agent -a &lt;agent-id&gt; -r ws://{{ localSettings.server_ip }}:{{ localSettings.server_port }}/ws/agent</code>
                     <button class="copy-btn" @click="copyCommand" title="Copy command">
                       <i class="fas fa-copy"></i>
                     </button>
+                  </div>
+                  <div v-else class="config-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span>Agent command will be available after configuring server IP</span>
                   </div>
                 </td>
               </tr>
@@ -125,14 +135,21 @@ const successMessage = ref('')
 const errorMessage = ref('')
 const hasChanges = ref(false)
 
+// Local settings data (loaded from database)
 const localSettings = ref({
-  server_ip: '192.168.1.115',
+  server_ip: '',
   server_port: 8080
 })
+
+
 
 // Computed properties
 const websocketUrl = computed(() => {
   return `ws://${localSettings.value.server_ip}:${localSettings.value.server_port}/ws/agent`
+})
+
+const isConfigurationComplete = computed(() => {
+  return localSettings.value.server_ip && localSettings.value.server_ip.trim() !== ''
 })
 
 // Methods
@@ -141,29 +158,32 @@ const loadSettings = async () => {
     loading.value = true
     error.value = ''
     
+    console.log('Loading settings from database...')
     const response = await apiService.getSettings()
-    console.log('Settings loaded:', response)
+    console.log('Settings API response:', response)
+    console.log('Response data:', response.data)
     
-    if (response && response.success && response.data) {
-      const settingsData = response.data
+    // Backend returns { success: true, data: {...} }, axios wraps it in response.data
+    if (response.data && response.data.success && response.data.data) {
+      const settingsData = response.data.data
       
       localSettings.value = {
-        server_ip: settingsData.server_ip || '192.168.1.115',
+        server_ip: settingsData.server_ip || '',
         server_port: parseInt(settingsData.server_port) || 8080
       }
+      
+      console.log('Settings loaded from database:', localSettings.value)
+      console.log('Raw database data:', settingsData)
     } else {
-      // Use default values if no data returned
-      localSettings.value = {
-        server_ip: '192.168.1.115',
-        server_port: 8080
-      }
+      // No data returned - this should trigger error
+      throw new Error('No settings data returned from server')
     }
   } catch (err) {
     console.error('Failed to load settings:', err)
-    error.value = 'Failed to load settings. Using default values.'
-    // Use default values
+    error.value = 'Failed to load settings from database. Please check server connection.'
+    // Don't use hardcoded fallback, let user configure
     localSettings.value = {
-      server_ip: '192.168.1.115',
+      server_ip: '',
       server_port: 8080
     }
   } finally {
@@ -446,6 +466,22 @@ onMounted(() => {
   background: var(--color-primary);
   color: white;
   border-color: var(--color-primary);
+}
+
+.config-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-error);
+  font-style: italic;
+  padding: 0.5rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+}
+
+.websocket-url-container {
+  width: 100%;
 }
 
 .alert {

@@ -39,6 +39,7 @@ type SSHLogRequest struct {
 
 type Agent struct {
 	id        string
+	token     string
 	relayURL  string
 	conn      *websocket.Conn
 	sessions  map[string]net.Conn
@@ -51,9 +52,10 @@ type Agent struct {
 	heartbeat *time.Ticker
 }
 
-func NewAgent(id, relayURL string) *Agent {
+func NewAgent(id, token, relayURL string) *Agent {
 	return &Agent{
 		id:        id,
+		token:     token,
 		relayURL:  relayURL,
 		sessions:  make(map[string]net.Conn),
 		dbLoggers: make(map[string]*common.DatabaseQueryLogger),
@@ -82,6 +84,7 @@ func (a *Agent) connect() error {
 	// Register with relay
 	registerMsg := common.NewMessage(common.MsgTypeRegister)
 	registerMsg.AgentID = a.id
+	registerMsg.Token = a.token
 	if err := a.sendMessage(registerMsg); err != nil {
 		return fmt.Errorf("failed to register: %v", err)
 	}
@@ -986,6 +989,7 @@ func main() {
 	var (
 		agentID  string
 		relayURL string
+		token    string
 	)
 
 	var rootCmd = &cobra.Command{
@@ -997,7 +1001,11 @@ func main() {
 				agentID = common.GenerateID()
 			}
 
-			agent := NewAgent(agentID, relayURL)
+			if token == "" {
+				log.Fatal("Token is required. Use -t or --token flag to provide agent authentication token.")
+			}
+
+			agent := NewAgent(agentID, token, relayURL)
 
 			// Setup signal handling for graceful shutdown
 			sigChan := make(chan os.Signal, 1)
@@ -1022,6 +1030,7 @@ func main() {
 
 	rootCmd.Flags().StringVarP(&agentID, "agent-id", "a", "", "Agent ID (auto-generated if not provided)")
 	rootCmd.Flags().StringVarP(&relayURL, "relay-url", "r", "ws://localhost:8080/ws/agent", "Relay server WebSocket URL")
+	rootCmd.Flags().StringVarP(&token, "token", "t", "", "Agent authentication token (required for agent verification)")
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
