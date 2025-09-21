@@ -93,6 +93,9 @@ type LoggingWriter struct {
 	prefix   string
 	client   *UniversalClient // Reference to client for sending to database
 	original io.Writer        // Keep original writer for clean output
+	buffer   *bytes.Buffer    // Buffer to accumulate data
+	timer    *time.Timer      // Timer to send accumulated data
+	mutex    sync.Mutex       // Mutex to protect buffer access
 }
 
 func NewLoggingWriter(writer io.Writer, logger *common.Logger, prefix string, client *UniversalClient) *LoggingWriter {
@@ -102,27 +105,70 @@ func NewLoggingWriter(writer io.Writer, logger *common.Logger, prefix string, cl
 		prefix:   prefix,
 		client:   client,
 		original: writer,
+		buffer:   &bytes.Buffer{},
 	}
 }
 
 func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
-	// Log the data to file only (not to stdout)
+	// Process the data and accumulate in buffer
 	if len(p) > 0 {
-		data := strings.TrimSpace(string(p))
-		if data != "" && !strings.Contains(data, "INFO:") {
-			// Log to file
-			lw.logger.Info("%s: %s", lw.prefix, data)
-			// Send to database immediately (parallel)
-			go lw.sendToDatabase(data)
+		rawData := string(p)
+		
+		// Protect buffer access with mutex
+		lw.mutex.Lock()
+		
+		// Add data to buffer
+		lw.buffer.Write(p)
+		
+		// Reset or start timer to send accumulated data after 100ms of inactivity
+		if lw.timer != nil {
+			lw.timer.Stop()
 		}
+		
+		lw.timer = time.AfterFunc(100*time.Millisecond, func() {
+			lw.flushBuffer()
+		})
+		
+		// Log each line immediately to file for real-time monitoring
+		lines := strings.Split(rawData, "\n")
+		for i, line := range lines {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine != "" && !strings.Contains(trimmedLine, "INFO:") {
+				lw.logger.Info("%s: %s", lw.prefix, trimmedLine)
+			} else if line != "" && i < len(lines)-1 {
+				cleanLine := strings.TrimRight(line, "\r\n")
+				if cleanLine != "" && !strings.Contains(cleanLine, "INFO:") {
+					lw.logger.Info("%s: %s", lw.prefix, cleanLine)
+				}
+			}
+		}
+		
+		lw.mutex.Unlock()
 	}
 	// Forward to original writer for clean display
 	return lw.original.Write(p)
 }
 
+// flushBuffer sends accumulated buffer data to database as one unit
+func (lw *LoggingWriter) flushBuffer() {
+	lw.mutex.Lock()
+	defer lw.mutex.Unlock()
+	
+	if lw.buffer.Len() > 0 {
+		// Get accumulated data
+		data := strings.TrimSpace(lw.buffer.String())
+		if data != "" && !strings.Contains(data, "INFO:") {
+			// Send accumulated data as one unit to database
+			go lw.sendToDatabase(data)
+		}
+		
+		// Clear buffer
+		lw.buffer.Reset()
+	}
+}
+
 func (lw *LoggingWriter) sendToDatabase(data string) {
 	if lw.client == nil || lw.client.tunnelConn == nil {
-		lw.logger.Debug("Cannot send to database: client or connection is nil")
 		return
 	}
 	
@@ -153,16 +199,14 @@ func (lw *LoggingWriter) sendToDatabase(data string) {
 	logMsg.ClientID = lw.client.id
 	logMsg.AgentID = lw.client.agentID
 	
-	// Convert to JSON and send
+	// Convert to JSON and send with mutex protection
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
-		if err := lw.client.tunnelConn.WriteJSON(logMsg); err != nil {
-			lw.logger.Debug("Failed to send SSH log to server: %v", err)
-		} else {
-			lw.logger.Debug("SSH log sent to server: %s (%d bytes)", lw.prefix, len(data))
-		}
-	} else {
-		lw.logger.Debug("Failed to marshal SSH log: %v", err)
+		
+		// Use mutex to prevent concurrent writes to websocket
+		lw.client.mutex.Lock()
+		lw.client.tunnelConn.WriteJSON(logMsg)
+		lw.client.mutex.Unlock()
 	}
 }
 
@@ -220,10 +264,14 @@ func (clr *CommandLoggingReader) sendToDatabase(data string) {
 	logMsg.ClientID = clr.client.id
 	logMsg.AgentID = clr.client.agentID
 	
-	// Convert to JSON and send
+	// Convert to JSON and send with mutex protection
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
+		
+		// Use mutex to prevent concurrent writes to websocket
+		clr.client.mutex.Lock()
 		clr.client.tunnelConn.WriteJSON(logMsg)
+		clr.client.mutex.Unlock()
 	}
 }
 
