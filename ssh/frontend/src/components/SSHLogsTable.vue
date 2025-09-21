@@ -59,7 +59,7 @@
               </td>
               <td class="data-cell">
                 <div class="data-content" :title="log.data">
-                  {{ truncateData(log.data, 100) }}
+                  {{ log.data }}
                 </div>
               </td>
             </tr>
@@ -359,63 +359,52 @@ export default {
 /* SSH Commands Table Column Width Optimization */
 .table th:nth-child(1), /* TIMESTAMP */
 .table td:nth-child(1) {
-  width: 12%;
-  min-width: 120px;
+  width: 15%;
+  min-width: 140px;
 }
 
 .table th:nth-child(2), /* AGENT */
 .table td:nth-child(2) {
-  width: 10%;
+  width: 8%;
   min-width: 80px;
 }
 
 .table th:nth-child(3), /* CLIENT */
 .table td:nth-child(3) {
-  width: 10%;
+  width: 8%;
   min-width: 80px;
 }
 
-.table th:nth-child(4), /* USER@HOST:PORT */
+.table th:nth-child(4), /* DIRECTION */
 .table td:nth-child(4) {
-  width: 12%;
-  min-width: 100px;
-  font-size: 0.8rem;
-}
-
-.table th:nth-child(5), /* DIRECTION */
-.table td:nth-child(5) {
   width: 8%;
   min-width: 70px;
 }
 
-.table th:nth-child(6), /* COMMAND */
-.table td:nth-child(6) {
-  width: 30%;
-  min-width: 150px;
-}
-
-.table th:nth-child(7), /* DATA */
-.table td:nth-child(6) {
-  width: 30%;
-  min-width: 200px;
+.table th:nth-child(5), /* DATA */
+.table td:nth-child(5) {
+  width: 61%;
+  min-width: 400px;
 }
 
 .data-cell {
   font-family: 'Courier New', monospace;
   background: var(--surface-light);
-  padding: 0.5rem;
+  padding: 0.75rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   max-width: none;
+  width: 100%;
 }
 
 .data-content {
-  max-height: 60px;
-  overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.3;
-  cursor: help;
+  line-height: 1.4;
+  cursor: text;
+  overflow: visible;
+  max-height: none;
+  min-height: 40px;
 }
 
 .data-content:hover {

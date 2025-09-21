@@ -53,15 +53,15 @@ type UniversalClient struct {
 	mutex     sync.RWMutex
 
 	// SSH mode fields
-	localPort    string
-	sshHost      string
-	sshUser      string
-	sshPassword  string
-	sshClient    *ssh.Client
-	tunnelConn   *websocket.Conn
-	sessionID    string
-	httpClient   *http.Client
-	lastCommand  string // Store last command for OUTPUT logging
+	localPort   string
+	sshHost     string
+	sshUser     string
+	sshPassword string
+	sshClient   *ssh.Client
+	tunnelConn  *websocket.Conn
+	sessionID   string
+	httpClient  *http.Client
+	lastCommand string // Store last command for OUTPUT logging
 }
 
 // SSH log request structure
@@ -123,22 +123,22 @@ func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
 	// Process the data and accumulate in buffer
 	if len(p) > 0 {
 		rawData := string(p)
-		
+
 		// Protect buffer access with mutex
 		lw.mutex.Lock()
-		
+
 		// Add data to buffer
 		lw.buffer.Write(p)
-		
+
 		// Reset or start timer to send accumulated data after 100ms of inactivity
 		if lw.timer != nil {
 			lw.timer.Stop()
 		}
-		
+
 		lw.timer = time.AfterFunc(100*time.Millisecond, func() {
 			lw.flushBuffer()
 		})
-		
+
 		// Log each line immediately to file for real-time monitoring
 		lines := strings.Split(rawData, "\n")
 		for i, line := range lines {
@@ -152,7 +152,7 @@ func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
 				}
 			}
 		}
-		
+
 		lw.mutex.Unlock()
 	}
 	// Forward to original writer for clean display
@@ -163,7 +163,7 @@ func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
 func (lw *LoggingWriter) flushBuffer() {
 	lw.mutex.Lock()
 	defer lw.mutex.Unlock()
-	
+
 	if lw.buffer.Len() > 0 {
 		// Get accumulated data
 		data := strings.TrimSpace(lw.buffer.String())
@@ -171,7 +171,7 @@ func (lw *LoggingWriter) flushBuffer() {
 			// Log to file only - no direct sending to server
 			// go lw.sendToDatabase(data) // Disabled - using LogFileReader instead
 		}
-		
+
 		// Clear buffer
 		lw.buffer.Reset()
 	}
@@ -181,16 +181,16 @@ func (lw *LoggingWriter) sendToDatabase(data string) {
 	if lw.client == nil || lw.client.tunnelConn == nil {
 		return
 	}
-	
+
 	// For OUTPUT, use the last command executed; for other directions, leave empty
 	command := ""
 	if lw.prefix == "OUTPUT" && lw.client != nil {
 		command = lw.client.lastCommand
 	}
-	
+
 	// Encode data to base64 for multi-line support
 	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
-	
+
 	logRequest := UniversalSSHLogRequest{
 		SessionID: lw.client.sessionID,
 		ClientID:  lw.client.id,
@@ -208,11 +208,11 @@ func (lw *LoggingWriter) sendToDatabase(data string) {
 	logMsg.SessionID = lw.client.sessionID
 	logMsg.ClientID = lw.client.id
 	logMsg.AgentID = lw.client.agentID
-	
+
 	// Convert to JSON and send with mutex protection
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
-		
+
 		// Use mutex to prevent concurrent writes to websocket
 		lw.client.mutex.Lock()
 		lw.client.tunnelConn.WriteJSON(logMsg)
@@ -252,10 +252,10 @@ func (clr *CommandLoggingReader) sendToDatabase(data string) {
 	if clr.client == nil || clr.client.tunnelConn == nil {
 		return
 	}
-	
+
 	// Encode data to base64 for consistency
 	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
-	
+
 	logRequest := UniversalSSHLogRequest{
 		SessionID: clr.client.sessionID,
 		ClientID:  clr.client.id,
@@ -273,11 +273,11 @@ func (clr *CommandLoggingReader) sendToDatabase(data string) {
 	logMsg.SessionID = clr.client.sessionID
 	logMsg.ClientID = clr.client.id
 	logMsg.AgentID = clr.client.agentID
-	
+
 	// Convert to JSON and send with mutex protection
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
-		
+
 		// Use mutex to prevent concurrent writes to websocket
 		clr.client.mutex.Lock()
 		clr.client.tunnelConn.WriteJSON(logMsg)
@@ -321,18 +321,18 @@ func loadConfig() Config {
 func NewLogFileReader(client *UniversalClient, logFilePath string) *LogFileReader {
 	// Create trace logger for logging requests sent to server
 	traceLogPath := filepath.Join("logs", "trace-requests.log")
-	
+
 	// Create trace log file
 	traceFile, err := os.OpenFile(traceLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		log.Printf("Failed to create trace log file: %v", err)
 		return nil
 	}
-	
+
 	// Create logger that writes only to file (not console)
 	traceLogger := common.NewLogger("trace")
 	traceLogger.SetFileOnly(traceFile, "trace")
-	
+
 	return &LogFileReader{
 		client:      client,
 		logFilePath: logFilePath,
@@ -385,17 +385,17 @@ func (lfr *LogFileReader) processLogFile() {
 
 	// Seek to last read position
 	file.Seek(lfr.lastPosition, 0)
-	
+
 	scanner := bufio.NewScanner(file)
 	var currentInput string
 	var outputBuffer []string
 	var standaloneOutputBuffer []string // For outputs without associated command
 	linesProcessed := 0
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		linesProcessed++
-		
+
 		// Check for INPUT pattern
 		if strings.Contains(line, "INPUT:") {
 			// Send any accumulated standalone output first
@@ -404,19 +404,19 @@ func (lfr *LogFileReader) processLogFile() {
 				lfr.sendToServer("OUTPUT", "system", strings.Join(standaloneOutputBuffer, "\n"))
 				standaloneOutputBuffer = []string{} // Reset standalone buffer
 			}
-			
+
 			// Send any accumulated output from previous command
 			if currentInput != "" && len(outputBuffer) > 0 {
 				lfr.traceLogger.Info("PROCESSING OUTPUT: Command=%s, Lines=%d", currentInput, len(outputBuffer))
 				lfr.sendToServer("OUTPUT", currentInput, strings.Join(outputBuffer, "\n"))
 				outputBuffer = []string{} // Reset output buffer
 			}
-			
+
 			// Extract and send INPUT
 			if parts := strings.Split(line, "INPUT: "); len(parts) > 1 {
 				inputCommand := strings.TrimSpace(parts[1])
 				currentInput = inputCommand
-				
+
 				// Send INPUT immediately to server
 				lfr.traceLogger.Info("PROCESSING INPUT: Command=%s", inputCommand)
 				lfr.sendToServer("INPUT", inputCommand, inputCommand)
@@ -425,7 +425,7 @@ func (lfr *LogFileReader) processLogFile() {
 			// Collect OUTPUT lines
 			if parts := strings.Split(line, "OUTPUT: "); len(parts) > 1 {
 				outputLine := parts[1]
-				
+
 				if currentInput != "" {
 					// Associate with current command
 					outputBuffer = append(outputBuffer, outputLine)
@@ -436,23 +436,23 @@ func (lfr *LogFileReader) processLogFile() {
 			}
 		}
 	}
-	
+
 	// Send any remaining standalone output
 	if len(standaloneOutputBuffer) > 0 {
 		lfr.traceLogger.Info("PROCESSING FINAL STANDALONE OUTPUT: Lines=%d", len(standaloneOutputBuffer))
 		lfr.sendToServer("OUTPUT", "system", strings.Join(standaloneOutputBuffer, "\n"))
 	}
-	
+
 	// Send any remaining output for current command
 	if currentInput != "" && len(outputBuffer) > 0 {
 		lfr.traceLogger.Info("PROCESSING FINAL OUTPUT: Command=%s, Lines=%d", currentInput, len(outputBuffer))
 		lfr.sendToServer("OUTPUT", currentInput, strings.Join(outputBuffer, "\n"))
 	}
-	
+
 	// Update last position to current file position
 	pos, _ := file.Seek(0, 1)
 	if linesProcessed > 0 {
-		lfr.traceLogger.Info("FILE PROCESSED: LinesRead=%d, OldPos=%d, NewPos=%d", 
+		lfr.traceLogger.Info("FILE PROCESSED: LinesRead=%d, OldPos=%d, NewPos=%d",
 			linesProcessed, lfr.lastPosition, pos)
 	}
 	lfr.lastPosition = pos
@@ -462,10 +462,10 @@ func (lfr *LogFileReader) sendToServer(direction, command, data string) {
 	if lfr.client == nil || lfr.client.tunnelConn == nil {
 		return
 	}
-	
+
 	// Encode data to base64 for multi-line support
 	encodedData := base64.StdEncoding.EncodeToString([]byte(data))
-	
+
 	logRequest := UniversalSSHLogRequest{
 		SessionID: lfr.client.sessionID,
 		ClientID:  lfr.client.id,
@@ -483,29 +483,29 @@ func (lfr *LogFileReader) sendToServer(direction, command, data string) {
 	logMsg.SessionID = lfr.client.sessionID
 	logMsg.ClientID = lfr.client.id
 	logMsg.AgentID = lfr.client.agentID
-	
+
 	// Log trace information before sending
-	lfr.traceLogger.Info("SENDING TO SERVER: Direction=%s, Command=%s, DataSize=%d, SessionID=%s", 
+	lfr.traceLogger.Info("SENDING TO SERVER: Direction=%s, Command=%s, DataSize=%d, SessionID=%s",
 		direction, command, len(data), lfr.client.sessionID)
-	
+
 	// Convert to JSON and send with mutex protection
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
-		
+
 		// Use mutex to prevent concurrent writes to websocket
 		lfr.client.mutex.Lock()
 		err := lfr.client.tunnelConn.WriteJSON(logMsg)
 		lfr.client.mutex.Unlock()
-		
+
 		if err != nil {
-			lfr.traceLogger.Error("FAILED TO SEND: Direction=%s, Command=%s, Error=%v", 
+			lfr.traceLogger.Error("FAILED TO SEND: Direction=%s, Command=%s, Error=%v",
 				direction, command, err)
 		} else {
-			lfr.traceLogger.Info("SENT SUCCESSFULLY: Direction=%s, Command=%s, MessageType=%s", 
+			lfr.traceLogger.Info("SENT SUCCESSFULLY: Direction=%s, Command=%s, MessageType=%s",
 				direction, command, logMsg.Type)
 		}
 	} else {
-		lfr.traceLogger.Error("FAILED TO MARSHAL: Direction=%s, Command=%s, Error=%v", 
+		lfr.traceLogger.Error("FAILED TO MARSHAL: Direction=%s, Command=%s, Error=%v",
 			direction, command, err)
 	}
 }
@@ -528,27 +528,27 @@ func getRelayDisplayName(relayURL string) string {
 // createFileOnlyLogger creates a logger that only writes to file, not console
 func createFileOnlyLogger(prefix string) *common.Logger {
 	logger := &common.Logger{}
-	
+
 	// Create logs directory if it doesn't exist
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.Printf("Failed to create log directory: %v", err)
 		return common.NewLogger(prefix) // fallback to default
 	}
-	
+
 	// Create log file
 	logFileName := fmt.Sprintf("%s.log", prefix)
 	logPath := filepath.Join(logDir, logFileName)
-	
+
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		log.Printf("Failed to open log file %s: %v", logPath, err)
 		return common.NewLogger(prefix) // fallback to default
 	}
-	
+
 	// Setup logger with file only (no stdout)
 	logger.SetFileOnly(file, prefix)
-	
+
 	log.Printf("Logging to file: %s", logPath)
 	return logger
 }
@@ -710,14 +710,14 @@ func (c *UniversalClient) runTunnelMode(localAddr, target string, interactive bo
 
 func (c *UniversalClient) connectToRelay() error {
 	c.logger.Info("Attempting to connect to relay server: %s", c.relayURL)
-	
+
 	// Add headers for debugging
 	headers := http.Header{}
 	headers.Set("User-Agent", "UniversalClient/1.0")
-	
+
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 30 * time.Second
-	
+
 	conn, resp, err := dialer.Dial(c.relayURL, headers)
 	if err != nil {
 		c.logger.Error("WebSocket connection failed: %v", err)
@@ -727,7 +727,7 @@ func (c *UniversalClient) connectToRelay() error {
 		}
 		return fmt.Errorf("failed to connect to relay: %v", err)
 	}
-	
+
 	c.logger.Info("Successfully connected to relay server")
 	c.conn = conn
 	c.running = true
@@ -970,14 +970,14 @@ func (c *UniversalClient) runIntegratedMode(tunnelOnly bool) error {
 
 func (c *UniversalClient) createSSHTunnel() error {
 	// c.logger.Info("Creating SSH tunnel, connecting to relay: %s", c.relayURL)
-	
+
 	// Add headers for debugging
 	headers := http.Header{}
 	headers.Set("User-Agent", "UniversalClient-SSH/1.0")
-	
+
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 30 * time.Second
-	
+
 	// Connect to relay
 	conn, resp, err := dialer.Dial(c.relayURL, headers)
 	if err != nil {
@@ -988,7 +988,7 @@ func (c *UniversalClient) createSSHTunnel() error {
 		}
 		return fmt.Errorf("failed to create tunnel: %v", err)
 	}
-	
+
 	// c.logger.Info("SSH Tunnel successfully connected to relay server")
 	c.tunnelConn = conn
 
@@ -996,23 +996,23 @@ func (c *UniversalClient) createSSHTunnel() error {
 	registerMsg := common.NewMessage(common.MsgTypeRegister)
 	registerMsg.ClientID = c.id
 	registerMsg.ClientName = c.name
-	registerMsg.Token = c.token  // Add token to register message
+	registerMsg.Token = c.token // Add token to register message
 	if err := c.tunnelConn.WriteJSON(registerMsg); err != nil {
 		return err
 	}
-	
+
 	// c.logger.Info("Waiting for registration response...")
-	
+
 	// Wait for registration response
 	var response common.Message
 	if err := c.tunnelConn.ReadJSON(&response); err != nil {
 		return fmt.Errorf("failed to read registration response: %v", err)
 	}
-	
+
 	if response.Type == common.MsgTypeError {
 		return fmt.Errorf("registration failed: %s", response.Error)
 	}
-	
+
 	// c.logger.Info("Registration successful")
 
 	// Request tunnel
@@ -1034,21 +1034,21 @@ func (c *UniversalClient) createSSHTunnel() error {
 	// c.logger.Info("Starting SSH tunnel listener on port: %s", c.localPort)
 	listenerReady := make(chan bool)
 	go c.startSSHTunnelListener(listenerReady)
-	
+
 	// Wait for listener to be ready
 	<-listenerReady
-	
+
 	// c.logger.Info("SSH tunnel setup completed - ready for connections")
-	
+
 	// Create direct interactive SSH session instead of waiting
 	// c.logger.Info("Creating direct SSH connection to %s@%s through tunnel", c.sshUser, c.sshHost)
-	
+
 	// Start interactive SSH session immediately
 	if err := c.startInteractiveSSHSession(); err != nil {
 		c.logger.Error("Failed to start interactive SSH session: %v", err)
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -1061,7 +1061,7 @@ func (c *UniversalClient) startSSHTunnelListener(ready chan bool) {
 		return
 	}
 	defer listener.Close()
-	
+
 	// c.logger.Info("SSH tunnel listener started successfully on port: %s", c.localPort)
 	// c.logger.Info("Ready to accept SSH connections on 127.0.0.1:%s", c.localPort)
 
@@ -1095,7 +1095,7 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 
 	// Register this session
 	sessionID := fmt.Sprintf("ssh_%d", time.Now().UnixNano())
-	
+
 	registerMsg := common.NewMessage(common.MsgTypeRegister)
 	registerMsg.ClientID = c.id
 	registerMsg.ClientName = c.name
@@ -1111,7 +1111,7 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 		c.logger.Error("Failed to read session registration response: %v", err)
 		return
 	}
-	
+
 	if regResponse.Type == common.MsgTypeError {
 		c.logger.Error("Session registration failed: %s", regResponse.Error)
 		return
@@ -1139,7 +1139,7 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 		defer func() { done <- true }()
 		buffer := make([]byte, 4096)
 		commandBuffer := make([]byte, 0)
-		
+
 		for {
 			n, err := conn.Read(buffer)
 			if err != nil {
@@ -1165,7 +1165,7 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 	go func() {
 		defer func() { done <- true }()
 		responseBuffer := make([]byte, 0)
-		
+
 		for {
 			var msg common.Message
 			if err := sessionConn.ReadJSON(&msg); err != nil {
@@ -1175,7 +1175,7 @@ func (c *UniversalClient) handleSSHTunnelConnection(conn net.Conn) {
 			if msg.Type == common.MsgTypeData && msg.SessionID == sessionID {
 				// Log response data
 				c.logSSHCommand(msg.Data, &responseBuffer, sessionID, "incoming")
-				
+
 				if _, err := conn.Write(msg.Data); err != nil {
 					c.logger.Debug("Local connection write error: %v", err)
 					return
@@ -1390,7 +1390,7 @@ func (c *UniversalClient) stop() {
 // logSSHCommand logs SSH commands and responses for monitoring
 func (c *UniversalClient) startInteractiveSSHSession() error {
 	c.logger.Info("Starting interactive SSH session...")
-	
+
 	// Connect to local tunnel port
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%s", c.localPort))
 	if err != nil {
@@ -1450,7 +1450,7 @@ func (c *UniversalClient) startInteractiveSSHSession() error {
 	// Set up input/output with logging
 	session.Stdout = NewLoggingWriter(os.Stdout, c.logger, "OUTPUT", c)
 	session.Stderr = NewLoggingWriter(os.Stderr, c.logger, "ERROR", c)
-	
+
 	// Use command logging reader for stdin
 	commandReader := NewCommandLoggingReader(c.logger, c)
 	session.Stdin = commandReader
@@ -1478,10 +1478,10 @@ func (c *UniversalClient) startInteractiveSSHSession() error {
 func (c *UniversalClient) logSSHCommand(data []byte, buffer *[]byte, sessionID, direction string) {
 	// Append data to buffer
 	*buffer = append(*buffer, data...)
-	
+
 	// Convert to string for analysis
 	str := string(*buffer)
-	
+
 	// Detect commands (look for command patterns)
 	if direction == "outgoing" {
 		// Look for SSH commands being sent
@@ -1490,15 +1490,15 @@ func (c *UniversalClient) logSSHCommand(data []byte, buffer *[]byte, sessionID, 
 			command := strings.TrimSpace(str)
 			command = strings.ReplaceAll(command, "\r", "")
 			command = strings.ReplaceAll(command, "\n", "")
-			
+
 			// Filter out non-printable characters and SSH protocol data
 			if len(command) > 0 && isPrintableCommand(command) {
 				c.logger.Info("SSH Command [%s]: %s", sessionID, command)
-				
+
 				// Log to database through relay server
 				c.logCommandToDatabase(sessionID, command, "command")
 			}
-			
+
 			// Clear buffer after processing
 			*buffer = (*buffer)[:0]
 		}
@@ -1517,15 +1517,15 @@ func isPrintableCommand(command string) bool {
 	if len(command) < 2 {
 		return false
 	}
-	
+
 	// Skip SSH protocol data and binary data
-	if strings.HasPrefix(command, "SSH-") || 
-	   strings.Contains(command, "\x00") ||
-	   strings.Contains(command, "\x01") ||
-	   strings.Contains(command, "\x02") {
+	if strings.HasPrefix(command, "SSH-") ||
+		strings.Contains(command, "\x00") ||
+		strings.Contains(command, "\x01") ||
+		strings.Contains(command, "\x02") {
 		return false
 	}
-	
+
 	// Count printable characters
 	printableCount := 0
 	for _, r := range command {
@@ -1533,7 +1533,7 @@ func isPrintableCommand(command string) bool {
 			printableCount++
 		}
 	}
-	
+
 	// Command should be mostly printable
 	return float64(printableCount)/float64(len(command)) > 0.7
 }
@@ -1549,7 +1549,7 @@ func (c *UniversalClient) logCommandToDatabase(sessionID, command, operation str
 	logMsg.DBQuery = command
 	logMsg.DBProtocol = "ssh"
 	logMsg.DBTable = "ssh_commands"
-	
+
 	// Send via main connection if available
 	if c.conn != nil {
 		if err := c.sendMessage(logMsg); err != nil {

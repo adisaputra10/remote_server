@@ -53,6 +53,7 @@ type SSHLogEntry struct {
 	SessionID string
 	AgentID   string
 	ClientID  string
+	Username  string // Username extracted from token
 	Direction string
 	Command   string
 	User      string
@@ -100,6 +101,7 @@ type Client struct {
 	LocalPort   string          `json:"local_port"`
 	TargetAddr  string          `json:"target_addr"`
 	Status      string          `json:"status"`
+	Token       string          `json:"token"` // Store client token for username lookup
 }
 
 type Session struct {
@@ -1435,6 +1437,14 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 	data := getString(logRequest, "data")
 	isBase64 := getBool(logRequest, "is_base64")
 
+	// Get username from client token
+	username := "unknown"
+	rs.clientsMutex.RLock()
+	if client, exists := rs.clients[clientID]; exists {
+		username = getUsernameFromToken(client.Token)
+	}
+	rs.clientsMutex.RUnlock()
+
 	// Decode base64 data if needed
 	actualData := data
 	if isBase64 {
@@ -1450,6 +1460,7 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 		SessionID: sessionID,
 		AgentID:   agentID,
 		ClientID:  clientID,
+		Username:  username,
 		Direction: direction,
 		Command:   command,
 		User:      user,
@@ -1461,7 +1472,7 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 		Timestamp: time.Now(),
 	})
 
-	rs.logger.Debug("SSH log processed: %s@%s - %s", user, host, direction)
+	rs.logger.Debug("SSH log processed: %s@%s - %s (user: %s)", user, host, direction, username)
 }
 
 // Helper function to safely get string from map
@@ -1482,6 +1493,24 @@ func getBool(m map[string]interface{}, key string) bool {
 		}
 	}
 	return false
+}
+
+// Helper function to extract username from token
+func getUsernameFromToken(token string) string {
+	// Query database to get username based on token
+	db, err := sql.Open("mysql", "tunnel_user:secure_password_2024@tcp(192.168.56.101:3306)/tunnel")
+	if err != nil {
+		return "unknown"
+	}
+	defer db.Close()
+
+	var username string
+	err = db.QueryRow("SELECT username FROM users WHERE token = ?", token).Scan(&username)
+	if err != nil {
+		return "unknown"
+	}
+
+	return username
 }
 
 // handleShellResponse forwards shell command responses from agent to client
@@ -2787,7 +2816,7 @@ func (rs *RelayServer) handleAPISSHLogs(w http.ResponseWriter, r *http.Request) 
 
 		// Clean and format SSH command
 		cleanedCommand := rs.cleanString(cleanHTMLEntities(command.String))
-		
+
 		// Handle data decoding if needed for display
 		actualData := data.String
 		if isBase64.Bool && actualData != "" {
