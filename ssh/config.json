@@ -1,4 +1,4 @@
 {
-  "relay_url": "ws://168.231.119.242:8080/ws/client",
+  "relay_url": "ws://192.168.1.115:8080/ws/client",
   "local_port": "2222"
 }

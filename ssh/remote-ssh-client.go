@@ -27,9 +27,9 @@ type RemoteSSHClient struct {
 	retryDelay     time.Duration
 	connectionPool map[string]*ssh.Client
 	poolMutex      sync.RWMutex
-	
+
 	// Added for agent logging
-	agentID        string
+	agentID string
 }
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 	rootCmd.Flags().StringP("ssh-key", "k", "", "SSH private key file path (optional)")
 	rootCmd.Flags().IntP("retry-attempts", "r", 3, "Number of retry attempts")
 	rootCmd.Flags().IntP("retry-delay", "d", 2, "Delay between retries (seconds)")
-	
+
 	// Added agent parameter for logging
 	rootCmd.Flags().StringP("agent", "a", "", "Target agent ID (will be logged to commands.log)")
 

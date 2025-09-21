@@ -79,6 +79,10 @@ export const apiService = {
     return api.get('/api/clients')
   },
 
+  addClient(clientData) {
+    return api.post('/api/clients', clientData)
+  },
+
   deleteClient(clientId) {
     return api.delete(`/api/clients/${clientId}`)
   },

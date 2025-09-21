@@ -51,9 +51,21 @@
             </a>
           </li>
           <li class="sidebar-item">
+            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'project' }" @click="switchTab('project')">
+              <i class="fas fa-project-diagram"></i>
+              <span>Project</span>
+            </a>
+          </li>
+          <li class="sidebar-item">
+            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'remoteSSH' }" @click="switchTab('remoteSSH')">
+              <i class="fas fa-server"></i>
+              <span>Remote SSH Management</span>
+            </a>
+          </li>
+          <li class="sidebar-item">
             <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'clients' }" @click="switchTab('clients')">
               <i class="fas fa-users"></i>
-              <span>Clients</span>
+              <span>History Client</span>
             </a>
           </li>
           <li class="sidebar-item">
@@ -72,6 +84,12 @@
             <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'ssh' }" @click="switchTab('ssh')">
               <i class="fas fa-terminal"></i>
               <span>SSH Commands</span>
+            </a>
+          </li>
+          <li class="sidebar-item">
+            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'userManagement' }" @click="switchTab('userManagement')">
+              <i class="fas fa-user-cog"></i>
+              <span>User Management</span>
             </a>
           </li>
           <li class="sidebar-item">
@@ -102,7 +120,7 @@
           
           <div class="stat-card">
             <div class="stat-header">
-              <span class="stat-title">Active Clients</span>
+              <span class="stat-title">History Client</span>
               <div class="stat-icon green">
                 <i class="fas fa-users"></i>
               </div>
@@ -134,6 +152,9 @@
           <LogsTable v-if="activeTab === 'logs'" />
           <QueriesTable v-if="activeTab === 'database'" />
           <SSHLogsTable v-if="activeTab === 'ssh'" />
+          <RemoteSSHManagement v-if="activeTab === 'remoteSSH'" />
+          <UserManagement v-if="activeTab === 'userManagement'" />
+          <ProjectManagement v-if="activeTab === 'project'" />
           <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
@@ -211,17 +232,23 @@ import LogsTable from '../components/LogsTable.vue'
 import QueriesTable from '../components/QueriesTable.vue'
 import SSHLogsTable from '../components/SSHLogsTable.vue'
 import Settings from '../components/Settings.vue'
+import RemoteSSHManagement from '../components/RemoteSSHManagement.vue'
+import UserManagement from '../components/UserManagement.vue'
+import ProjectManagement from '../components/ProjectManagement.vue'
 import { apiService } from '../config/api.js'
 
 export default {
   name: 'Dashboard',
   components: {
-    AgentsTable,
-    ClientsTable,
-    LogsTable,
-    QueriesTable,
-    SSHLogsTable,
-    Settings
+  AgentsTable,
+  ClientsTable,
+  LogsTable,
+  QueriesTable,
+  SSHLogsTable,
+  Settings,
+  RemoteSSHManagement,
+  UserManagement,
+  ProjectManagement
   },
   setup() {
     const router = useRouter()

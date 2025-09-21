@@ -180,13 +180,13 @@ func NewRelayServer() *RelayServer {
 
 	dbName := os.Getenv("DB_NAME")
 	if dbName == "" {
-		dbName = "logs"
+		dbName = "tunnel"
 	}
 
 	// Debug: Log environment variables values
 	rs.logger.Info("=== DATABASE CONFIG DEBUG ===")
 	rs.logger.Info("DB_HOST env value: '%s' (using: %s)", os.Getenv("DB_HOST"), dbHost)
-	rs.logger.Info("DB_PORT env value: '%s' (using: %s)", os.Getenv("DB_PORT"), dbPort) 
+	rs.logger.Info("DB_PORT env value: '%s' (using: %s)", os.Getenv("DB_PORT"), dbPort)
 	rs.logger.Info("DB_USER env value: '%s' (using: %s)", os.Getenv("DB_USER"), dbUser)
 	rs.logger.Info("DB_NAME env value: '%s' (using: %s)", os.Getenv("DB_NAME"), dbName)
 	rs.logger.Info("DB_PASSWORD env set: %t", os.Getenv("DB_PASSWORD") != "")
@@ -235,11 +235,58 @@ func (rs *RelayServer) initDatabase() {
             id INT AUTO_INCREMENT PRIMARY KEY,
             client_id VARCHAR(100) UNIQUE NOT NULL,
             client_name VARCHAR(255),
-            agent_id VARCHAR(100),
+            token VARCHAR(255),
             status VARCHAR(20) DEFAULT 'connected',
             connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`,
+		`CREATE TABLE IF NOT EXISTS client_groups (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            group_name VARCHAR(100) UNIQUE NOT NULL,
+            description TEXT,
+            created_by VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`,
+		`CREATE TABLE IF NOT EXISTS projects (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            project_name VARCHAR(100) UNIQUE NOT NULL,
+            description TEXT,
+            created_by VARCHAR(100),
+            status ENUM('active', 'inactive') DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )`,
+		`CREATE TABLE IF NOT EXISTS user_project_assignments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            project_id INT NOT NULL,
+            role ENUM('viewer', 'operator', 'admin') DEFAULT 'viewer',
+            assigned_by VARCHAR(100),
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status ENUM('active', 'inactive') DEFAULT 'active',
+            INDEX idx_user_id (user_id),
+            INDEX idx_project_id (project_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            UNIQUE KEY unique_user_project (user_id, project_id)
+        )`,
+		`CREATE TABLE IF NOT EXISTS client_assignments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            client_id VARCHAR(100) NOT NULL,
+            agent_id VARCHAR(100),
+            group_id INT,
+            assignment_type ENUM('individual', 'group') DEFAULT 'individual',
+            assigned_by VARCHAR(100),
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status VARCHAR(20) DEFAULT 'active',
+            INDEX idx_client_id (client_id),
+            INDEX idx_agent_id (agent_id),
+            INDEX idx_group_id (group_id),
+            FOREIGN KEY (group_id) REFERENCES client_groups(id) ON DELETE CASCADE,
+            UNIQUE KEY unique_individual_assignment (client_id, agent_id),
+            UNIQUE KEY unique_group_assignment (client_id, group_id)
         )`,
 		`CREATE TABLE IF NOT EXISTS agents (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -286,12 +333,16 @@ func (rs *RelayServer) initDatabase() {
 		}
 	}
 
-	// Add new columns to tunnel_logs if they don't exist
+	// Add new columns to existing tables if they don't exist
 	alterQueries := []string{
 		`ALTER TABLE tunnel_logs ADD COLUMN agent_id VARCHAR(100) AFTER session_id`,
 		`ALTER TABLE tunnel_logs ADD COLUMN client_id VARCHAR(100) AFTER agent_id`,
 		`ALTER TABLE tunnel_logs ADD COLUMN database_name VARCHAR(100) AFTER table_name`,
 		`ALTER TABLE agents ADD COLUMN token VARCHAR(255) AFTER agent_id`,
+		`ALTER TABLE agents ADD COLUMN agent_name VARCHAR(255) AFTER agent_id`,
+		`ALTER TABLE agents ADD COLUMN project_id INT AFTER agent_name`,
+		`ALTER TABLE clients ADD COLUMN token VARCHAR(255) AFTER agent_id`,
+		`ALTER TABLE users ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY FIRST`,
 	}
 
 	for _, query := range alterQueries {
@@ -345,19 +396,81 @@ func (rs *RelayServer) initDatabase() {
 		}
 	}
 
+	// Insert default projects if not exists
+	var projectCount int
+	rs.db.QueryRow("SELECT COUNT(*) FROM projects").Scan(&projectCount)
+	if projectCount == 0 {
+		// Create default project
+		_, err := rs.db.Exec("INSERT INTO projects (project_name, description, created_by, status) VALUES (?, ?, ?, ?)",
+			"Default Project", "Default project for all agents", "admin", "active")
+		if err != nil {
+			rs.logger.Error("Failed to create default project: %v", err)
+		} else {
+			rs.logger.Info("Created default project")
+		}
+
+		// Create development project
+		_, err = rs.db.Exec("INSERT INTO projects (project_name, description, created_by, status) VALUES (?, ?, ?, ?)",
+			"Development", "Development environment agents", "admin", "active")
+		if err != nil {
+			rs.logger.Error("Failed to create development project: %v", err)
+		} else {
+			rs.logger.Info("Created development project")
+		}
+
+		// Create production project
+		_, err = rs.db.Exec("INSERT INTO projects (project_name, description, created_by, status) VALUES (?, ?, ?, ?)",
+			"Production", "Production environment agents", "admin", "active")
+		if err != nil {
+			rs.logger.Error("Failed to create production project: %v", err)
+		} else {
+			rs.logger.Info("Created production project")
+		}
+	}
+
+	// Assign admin user to all projects
+	var adminUserId int
+	err := rs.db.QueryRow("SELECT id FROM users WHERE username = 'admin' LIMIT 1").Scan(&adminUserId)
+	if err == nil {
+		// Get all projects and assign admin to them
+		rows, err := rs.db.Query("SELECT id FROM projects")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var projectId int
+				if rows.Scan(&projectId) == nil {
+					// Check if assignment already exists
+					var assignmentCount int
+					rs.db.QueryRow("SELECT COUNT(*) FROM user_project_assignments WHERE user_id = ? AND project_id = ?",
+						adminUserId, projectId).Scan(&assignmentCount)
+
+					if assignmentCount == 0 {
+						_, err = rs.db.Exec("INSERT INTO user_project_assignments (user_id, project_id, role, assigned_by, status) VALUES (?, ?, ?, ?, ?)",
+							adminUserId, projectId, "admin", "system", "active")
+						if err != nil {
+							rs.logger.Error("Failed to assign admin to project %d: %v", projectId, err)
+						} else {
+							rs.logger.Info("Assigned admin user to project %d", projectId)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Initialize default server settings if not exists
 	var settingsCount int
 	rs.db.QueryRow("SELECT COUNT(*) FROM server_settings").Scan(&settingsCount)
 	if settingsCount == 0 {
 		// Detect server IP automatically
 		defaultIP := rs.detectServerIP()
-		
+
 		// Insert default settings
 		defaultSettings := map[string]string{
 			"server_ip":   defaultIP,
 			"server_port": "8080",
 		}
-		
+
 		for key, value := range defaultSettings {
 			_, err := rs.db.Exec("INSERT INTO server_settings (setting_key, setting_value) VALUES (?, ?)", key, value)
 			if err != nil {
@@ -370,7 +483,7 @@ func (rs *RelayServer) initDatabase() {
 }
 
 // saveClientToDatabase saves or updates client information in the database
-func (rs *RelayServer) saveClientToDatabase(clientID, clientName, agentID, status string) {
+func (rs *RelayServer) saveClientToDatabase(clientID, clientName, agentID, status, token string) {
 	if rs.db == nil {
 		return
 	}
@@ -380,17 +493,74 @@ func (rs *RelayServer) saveClientToDatabase(clientID, clientName, agentID, statu
 	clientName = rs.cleanString(clientName)
 	agentID = rs.cleanString(agentID)
 	status = rs.cleanString(status)
+	token = rs.cleanString(token)
 
-	// Use REPLACE INTO to insert or update client data
-	_, err := rs.db.Exec(`
-		REPLACE INTO clients (client_id, client_name, agent_id, status, connected_at, last_ping) 
-		VALUES (?, ?, ?, ?, NOW(), NOW())`,
-		clientID, clientName, agentID, status,
-	)
-	if err != nil {
-		rs.logger.Error("Failed to save client to database: %v", err)
+	// Get username from token
+	var username string
+	if token != "" {
+		err := rs.db.QueryRow("SELECT username FROM users WHERE token = ?", token).Scan(&username)
+		if err != nil {
+			username = "unknown"
+		}
+	}
+
+	// Check if client exists
+	var existingID sql.NullString
+	err := rs.db.QueryRow("SELECT client_id FROM clients WHERE client_id = ?", clientID).Scan(&existingID)
+
+	if err == sql.ErrNoRows {
+		// Client doesn't exist, insert new client
+		_, err = rs.db.Exec(`
+			INSERT INTO clients (client_id, client_name, agent_id, token, status, username, connected_at, last_ping) 
+			VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+			clientID, clientName, agentID, token, status, username,
+		)
+		if err != nil {
+			rs.logger.Error("Failed to insert new client: %v", err)
+		} else {
+			rs.logger.Info("New client inserted: %s (name: %s, user: %s, agent: %s)", clientID, clientName, username, agentID)
+		}
+	} else if err != nil {
+		rs.logger.Error("Failed to check existing client: %v", err)
 	} else {
-		rs.logger.Debug("Client saved to database: %s (name: %s)", clientID, clientName)
+		// Client exists, update information
+		_, err = rs.db.Exec(`
+			UPDATE clients 
+			SET client_name = ?, agent_id = ?, token = ?, status = ?, username = ?, last_ping = NOW() 
+			WHERE client_id = ?`,
+			clientName, agentID, token, status, username, clientID,
+		)
+
+		if err != nil {
+			rs.logger.Error("Failed to update client: %v", err)
+		} else {
+			rs.logger.Info("Client updated: %s (name: %s, user: %s, agent: %s)", clientID, clientName, username, agentID)
+		}
+	}
+}
+
+// updateClientStatus updates only the client status without changing other data
+func (rs *RelayServer) updateClientStatus(clientID, status string) {
+	if rs.db == nil {
+		return
+	}
+
+	// Clean parameters
+	clientID = rs.cleanString(clientID)
+	status = rs.cleanString(status)
+
+	// Update only status and last_ping, preserve other data including username
+	_, err := rs.db.Exec(`
+		UPDATE clients 
+		SET status = ?, last_ping = NOW() 
+		WHERE client_id = ?`,
+		status, clientID,
+	)
+
+	if err != nil {
+		rs.logger.Error("Failed to update client status: %v", err)
+	} else {
+		rs.logger.Info("Client status updated: %s -> %s", clientID, status)
 	}
 }
 
@@ -412,19 +582,19 @@ func (rs *RelayServer) saveAgentToDatabase(agentID, status string) {
 		WHERE agent_id = ?`,
 		status, agentID,
 	)
-	
+
 	if err != nil {
 		rs.logger.Error("Failed to update agent in database: %v", err)
 		return
 	}
-	
+
 	// Check if any rows were affected (agent exists)
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		rs.logger.Error("Failed to check affected rows: %v", err)
 		return
 	}
-	
+
 	// If no rows affected, agent doesn't exist - insert new agent (without token for now)
 	if rowsAffected == 0 {
 		_, err = rs.db.Exec(`
@@ -791,6 +961,66 @@ func (rs *RelayServer) validateAgentToken(agentID, token string) bool {
 	return true
 }
 
+// validateClientToken validates client token against database
+func (rs *RelayServer) validateClientToken(clientID, token string) bool {
+	if clientID == "" || token == "" {
+		rs.logger.Error("Client ID or token is empty")
+		return false
+	}
+
+	// Clean inputs
+	clientID = rs.cleanString(clientID)
+	token = rs.cleanString(token)
+
+	// Check token in database
+	var dbToken sql.NullString
+	err := rs.db.QueryRow("SELECT token FROM clients WHERE client_id = ?", clientID).Scan(&dbToken)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			rs.logger.Error("Client not found in database: %s", clientID)
+		} else {
+			rs.logger.Error("Database error validating token for client %s: %v", clientID, err)
+		}
+		return false
+	}
+
+	// Compare tokens
+	if !dbToken.Valid || dbToken.String != token {
+		rs.logger.Error("Token mismatch for client %s", clientID)
+		return false
+	}
+
+	rs.logger.Info("Token validation successful for client: %s", clientID)
+	return true
+}
+
+// validateUserToken validates user token against database users table
+func (rs *RelayServer) validateUserToken(token string) (string, bool) {
+	if token == "" {
+		rs.logger.Error("User token is empty")
+		return "", false
+	}
+
+	// Clean inputs
+	token = rs.cleanString(token)
+
+	// Check token in users database
+	var username string
+	var role string
+	err := rs.db.QueryRow("SELECT username, role FROM users WHERE token = ?", token).Scan(&username, &role)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			rs.logger.Error("User token not found in database: %s", token)
+		} else {
+			rs.logger.Error("Database error validating user token: %v", err)
+		}
+		return "", false
+	}
+
+	rs.logger.Info("Token validation successful for user: %s (role: %s)", username, role)
+	return username, true
+}
+
 func (rs *RelayServer) handleMessage(conn *websocket.Conn, msg *common.Message) {
 	rs.logger.Debug("Received message: %s", msg.String())
 
@@ -824,17 +1054,57 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 	defer rs.mutex.Unlock()
 	defer rs.connMutex.Unlock()
 
-	if msg.AgentID != "" {
-		// Validate agent token
+	if msg.ClientID != "" {
+		// CLIENT REGISTRATION - validate user token
+		username, valid := rs.validateUserToken(msg.Token)
+		if !valid {
+			rs.logger.Error("Client registration failed: invalid user token for client %s", msg.ClientID)
+
+			// Send error response
+			errorResponse := common.NewMessage(common.MsgTypeError)
+			errorResponse.ClientID = msg.ClientID
+			errorResponse.Error = "Invalid user token"
+			rs.sendMessage(conn, errorResponse)
+
+			// Close connection
+			conn.Close()
+			return
+		}
+
+		rs.logger.Info("Client %s authenticated as user: %s", msg.ClientID, username)
+
+		client := &Client{
+			ID:          msg.ClientID,
+			Name:        msg.ClientName,
+			Connection:  conn,
+			ConnectedAt: time.Now(),
+			LastPing:    time.Now(),
+			AgentID:     msg.AgentID, // Target agent ID from -a parameter
+			Status:      "connected",
+		}
+		rs.clients[msg.ClientID] = client
+
+		// Add to fast lookup map
+		rs.connToClient[conn] = msg.ClientID
+
+		rs.logger.Info("Client registered: %s (name: %s, target agent: %s)", msg.ClientID, msg.ClientName, msg.AgentID)
+
+		// Save client to database (permanent storage)
+		go rs.saveClientToDatabase(msg.ClientID, msg.ClientName, msg.AgentID, "connected", msg.Token)
+
+		// Log to database asynchronously
+		go rs.logConnection("client", "", msg.ClientID, "connected", fmt.Sprintf("target_agent: %s, user: %s", msg.AgentID, username))
+	} else if msg.AgentID != "" {
+		// AGENT REGISTRATION - validate agent token
 		if !rs.validateAgentToken(msg.AgentID, msg.Token) {
 			rs.logger.Error("Agent registration failed: invalid token for agent %s", msg.AgentID)
-			
+
 			// Send error response
 			errorResponse := common.NewMessage(common.MsgTypeError)
 			errorResponse.AgentID = msg.AgentID
 			errorResponse.Error = "Invalid agent token"
 			rs.sendMessage(conn, errorResponse)
-			
+
 			// Close connection
 			conn.Close()
 			return
@@ -858,28 +1128,6 @@ func (rs *RelayServer) handleRegister(conn *websocket.Conn, msg *common.Message)
 		go rs.logConnection("agent", msg.AgentID, "", "connected", "")
 		// Save agent to database with "connected" status and ensure token is preserved
 		go rs.saveAgentToDatabase(msg.AgentID, "connected")
-	} else if msg.ClientID != "" {
-		client := &Client{
-			ID:          msg.ClientID,
-			Name:        msg.ClientName,
-			Connection:  conn,
-			ConnectedAt: time.Now(),
-			LastPing:    time.Now(),
-			AgentID:     msg.AgentID,
-			Status:      "connected",
-		}
-		rs.clients[msg.ClientID] = client
-
-		// Add to fast lookup map
-		rs.connToClient[conn] = msg.ClientID
-
-		rs.logger.Info("Client registered: %s (name: %s)", msg.ClientID, msg.ClientName)
-
-		// Save client to database (permanent storage)
-		go rs.saveClientToDatabase(msg.ClientID, msg.ClientName, msg.AgentID, "connected")
-
-		// Log to database asynchronously
-		go rs.logConnection("client", "", msg.ClientID, "connected", fmt.Sprintf("target_agent: %s", msg.AgentID))
 	}
 
 	// Send confirmation
@@ -1287,15 +1535,15 @@ func (rs *RelayServer) cleanupConnection(conn *websocket.Conn) {
 
 	// Remove from clients using fast lookup
 	if clientID, exists := rs.connToClient[conn]; exists {
-		if client, clientExists := rs.clients[clientID]; clientExists {
+		if _, clientExists := rs.clients[clientID]; clientExists {
 			delete(rs.clients, clientID)
 			delete(rs.connToClient, conn)
 			disconnectedClientID = clientID
 			rs.logger.Info("Client disconnected: %s", clientID)
 			// Log asynchronously for performance
 			go rs.logConnection("client", "", clientID, "disconnected", "")
-			// Update client status in database to "disconnected"
-			go rs.saveClientToDatabase(clientID, client.Name, client.AgentID, "disconnected")
+			// Update only client status in database to "disconnected", preserve username
+			go rs.updateClientStatus(clientID, "disconnected")
 		}
 	}
 
@@ -1350,6 +1598,9 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/agents", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIAgents)))
 	http.HandleFunc("/api/agents/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIAgents))) // Handle /api/agents/{id}
 	http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
+	http.HandleFunc("/api/clients/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients))) // Handle /api/clients/{id}
+	http.HandleFunc("/api/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjects)))
+	http.HandleFunc("/api/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjects))) // Handle /api/projects/{id}
 	http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
 	http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
 	http.HandleFunc("/api/ssh-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHLogs)))
@@ -1377,7 +1628,7 @@ func (rs *RelayServer) requireAPIAuth(handler http.HandlerFunc) http.HandlerFunc
 		rs.logger.Info("=== API AUTH CHECK ===")
 		rs.logger.Info("Method: %s, URL: %s", r.Method, r.URL.Path)
 		rs.logger.Info("Authorization header present: %t", r.Header.Get("Authorization") != "")
-		
+
 		// Check for Basic Auth header
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Basic ") {
@@ -1473,6 +1724,93 @@ func (rs *RelayServer) requireAdmin(handler http.HandlerFunc) http.HandlerFunc {
 		}
 		handler(w, r)
 	})
+}
+
+// Check if user has access to a project
+func (rs *RelayServer) hasProjectAccess(username string, projectId int) bool {
+	// Admin users have access to all projects
+	var userRole string
+	err := rs.db.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&userRole)
+	if err == nil && userRole == "admin" {
+		return true
+	}
+
+	// Check user project assignments
+	var count int
+	err = rs.db.QueryRow(`
+		SELECT COUNT(*) FROM user_project_assignments upa 
+		JOIN users u ON upa.user_id = u.id 
+		WHERE u.username = ? AND upa.project_id = ? AND upa.status = 'active'`,
+		username, projectId).Scan(&count)
+
+	return err == nil && count > 0
+}
+
+// Get user's accessible projects
+func (rs *RelayServer) getUserProjects(username string) ([]int, error) {
+	// Admin users can access all projects
+	var userRole string
+	err := rs.db.QueryRow("SELECT role FROM users WHERE username = ?", username).Scan(&userRole)
+	if err == nil && userRole == "admin" {
+		var projects []int
+		rows, err := rs.db.Query("SELECT id FROM projects WHERE status = 'active'")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var projectId int
+			if rows.Scan(&projectId) == nil {
+				projects = append(projects, projectId)
+			}
+		}
+		return projects, nil
+	}
+
+	// Regular users - get assigned projects only
+	var projects []int
+	rows, err := rs.db.Query(`
+		SELECT DISTINCT upa.project_id FROM user_project_assignments upa 
+		JOIN users u ON upa.user_id = u.id 
+		WHERE u.username = ? AND upa.status = 'active'`, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var projectId int
+		if rows.Scan(&projectId) == nil {
+			projects = append(projects, projectId)
+		}
+	}
+	return projects, nil
+}
+
+// Filter agents based on user's project access
+func (rs *RelayServer) filterAgentsByProject(username string, agents []map[string]interface{}) []map[string]interface{} {
+	userProjects, err := rs.getUserProjects(username)
+	if err != nil {
+		rs.logger.Error("Failed to get user projects: %v", err)
+		return []map[string]interface{}{}
+	}
+
+	// Convert to map for quick lookup
+	projectMap := make(map[int]bool)
+	for _, pid := range userProjects {
+		projectMap[pid] = true
+	}
+
+	var filteredAgents []map[string]interface{}
+	for _, agent := range agents {
+		// If agent has no project_id or user has access to the project
+		if projectId, ok := agent["project_id"]; !ok || projectId == nil || projectMap[projectId.(int)] {
+			filteredAgents = append(filteredAgents, agent)
+		}
+	}
+
+	return filteredAgents
 }
 
 // Login Handler
@@ -1630,11 +1968,16 @@ func (rs *RelayServer) handleAPIAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
-	// Get agents from database instead of memory
+	// Get username from request headers (set by auth middleware)
+	username := r.Header.Get("X-Username")
+
+	// Get agents from database with project info
 	rows, err := rs.db.Query(`
-		SELECT agent_id, token, status, connected_at, last_ping 
-		FROM agents 
-		ORDER BY connected_at DESC
+		SELECT a.agent_id, a.agent_name, a.project_id, a.token, a.status, a.connected_at, a.last_ping,
+		       p.project_name
+		FROM agents a 
+		LEFT JOIN projects p ON a.project_id = p.id
+		ORDER BY a.connected_at DESC
 	`)
 	if err != nil {
 		rs.logger.Error("Failed to query agents: %v", err)
@@ -1645,10 +1988,12 @@ func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []map[string]interface{}
 	for rows.Next() {
-		var agentID, token, status sql.NullString
+		var agentID, agentName, token, status sql.NullString
+		var projectID sql.NullInt64
+		var projectName sql.NullString
 		var connectedAt, lastPing sql.NullTime
 
-		err := rows.Scan(&agentID, &token, &status, &connectedAt, &lastPing)
+		err := rows.Scan(&agentID, &agentName, &projectID, &token, &status, &connectedAt, &lastPing, &projectName)
 		if err != nil {
 			rs.logger.Error("Failed to scan agent row: %v", err)
 			continue
@@ -1657,17 +2002,27 @@ func (rs *RelayServer) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 		agent := map[string]interface{}{
 			"id":           agentID.String,
 			"agent_id":     agentID.String,
+			"agent_name":   agentName.String,
 			"token":        token.String,
 			"status":       status.String,
 			"connected_at": connectedAt.Time,
 			"last_ping":    lastPing.Time,
 		}
 
+		// Add project info if exists
+		if projectID.Valid {
+			agent["project_id"] = int(projectID.Int64)
+			agent["project_name"] = projectName.String
+		}
+
 		agents = append(agents, agent)
 	}
 
+	// Filter agents based on user's project access
+	filteredAgents := rs.filterAgentsByProject(username, agents)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	json.NewEncoder(w).Encode(filteredAgents)
 }
 
 func (rs *RelayServer) handleAddAgent(w http.ResponseWriter, r *http.Request) {
@@ -1751,21 +2106,21 @@ func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request)
 	rs.logger.Info("=== DELETE AGENT REQUEST ===")
 	rs.logger.Info("Method: %s", r.Method)
 	rs.logger.Info("URL Path: %s", r.URL.Path)
-	
+
 	// Extract agent ID from URL path
 	urlPath := r.URL.Path
 	parts := strings.Split(urlPath, "/")
 	rs.logger.Info("URL parts: %v", parts)
-	
+
 	if len(parts) < 4 {
 		rs.logger.Error("Not enough URL parts. Expected: /api/agents/{agentID}")
 		http.Error(w, "Agent ID is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	agentID := rs.cleanString(parts[3]) // /api/agents/{agentID}
 	rs.logger.Info("Extracted Agent ID: '%s'", agentID)
-	
+
 	if agentID == "" {
 		rs.logger.Error("Empty agent ID after cleaning")
 		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
@@ -1826,9 +2181,22 @@ func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request)
 }
 
 func (rs *RelayServer) handleAPIClients(w http.ResponseWriter, r *http.Request) {
-	// Get clients from database instead of memory
+	switch r.Method {
+	case "GET":
+		rs.handleGetClients(w, r)
+	case "POST":
+		rs.handleAddClient(w, r)
+	case "DELETE":
+		rs.handleDeleteClient(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (rs *RelayServer) handleGetClients(w http.ResponseWriter, r *http.Request) {
+	// Get clients from database including agent_id
 	rows, err := rs.db.Query(`
-		SELECT client_id, client_name, agent_id, status, connected_at, last_ping 
+		SELECT client_id, client_name, agent_id, username, token, status, connected_at, last_ping 
 		FROM clients 
 		ORDER BY connected_at DESC
 	`)
@@ -1841,19 +2209,27 @@ func (rs *RelayServer) handleAPIClients(w http.ResponseWriter, r *http.Request) 
 
 	var clients []map[string]interface{}
 	for rows.Next() {
-		var clientID, clientName, agentID, status sql.NullString
+		var clientID, clientName, agentID, username, token, status sql.NullString
 		var connectedAt, lastPing sql.NullTime
 
-		err := rows.Scan(&clientID, &clientName, &agentID, &status, &connectedAt, &lastPing)
+		err := rows.Scan(&clientID, &clientName, &agentID, &username, &token, &status, &connectedAt, &lastPing)
 		if err != nil {
 			rs.logger.Error("Failed to scan client row: %v", err)
 			continue
 		}
 
+		// Use username as name if available, otherwise fallback to client_name
+		displayName := username.String
+		if displayName == "" {
+			displayName = clientName.String
+		}
+
 		client := map[string]interface{}{
 			"id":           clientID.String,
-			"name":         clientName.String,
+			"name":         displayName,
 			"agent_id":     agentID.String,
+			"username":     username.String,
+			"token":        token.String,
 			"status":       status.String,
 			"connected_at": connectedAt.Time,
 			"last_ping":    lastPing.Time,
@@ -1863,6 +2239,325 @@ func (rs *RelayServer) handleAPIClients(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
+}
+
+func (rs *RelayServer) handleAddClient(w http.ResponseWriter, r *http.Request) {
+	var clientData struct {
+		ClientID   string `json:"client_id"`
+		ClientName string `json:"client_name"`
+		Token      string `json:"token"`
+		Status     string `json:"status"`
+	}
+
+	// Parse JSON body
+	err := json.NewDecoder(r.Body).Decode(&clientData)
+	if err != nil {
+		rs.logger.Error("Failed to parse client data: %v", err)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if clientData.ClientID == "" {
+		http.Error(w, "client_id is required", http.StatusBadRequest)
+		return
+	}
+	if clientData.ClientName == "" {
+		http.Error(w, "client_name is required", http.StatusBadRequest)
+		return
+	}
+	if clientData.Token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set default status if not provided
+	if clientData.Status == "" {
+		clientData.Status = "disconnected"
+	}
+
+	// Clean data
+	clientID := rs.cleanString(clientData.ClientID)
+	clientName := rs.cleanString(clientData.ClientName)
+	token := rs.cleanString(clientData.Token)
+	status := rs.cleanString(clientData.Status)
+
+	rs.logger.Info("Adding new client: %s", clientID)
+
+	// Check if client already exists
+	var existingCount int
+	err = rs.db.QueryRow("SELECT COUNT(*) FROM clients WHERE client_id = ?", clientID).Scan(&existingCount)
+	if err != nil {
+		rs.logger.Error("Failed to check existing client: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if existingCount > 0 {
+		http.Error(w, "Client already exists", http.StatusConflict)
+		return
+	}
+
+	// Insert new client (without agent_id - will be handled by assignments)
+	_, err = rs.db.Exec(`
+		INSERT INTO clients (client_id, client_name, token, status, connected_at, last_ping) 
+		VALUES (?, ?, ?, ?, NOW(), NOW())`,
+		clientID, clientName, token, status,
+	)
+	if err != nil {
+		rs.logger.Error("Failed to insert client: %v", err)
+		http.Error(w, "Failed to add client", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Successfully added client: %s", clientID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Client added successfully",
+		"client": map[string]string{
+			"client_id":   clientID,
+			"client_name": clientName,
+			"status":      status,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== DELETE CLIENT REQUEST ===")
+	rs.logger.Info("Method: %s", r.Method)
+	rs.logger.Info("URL Path: %s", r.URL.Path)
+
+	// Extract client ID from URL path
+	urlPath := r.URL.Path
+	parts := strings.Split(urlPath, "/")
+	rs.logger.Info("URL parts: %v", parts)
+
+	if len(parts) < 4 {
+		rs.logger.Error("Not enough URL parts. Expected: /api/clients/{clientID}")
+		http.Error(w, "Client ID is required", http.StatusBadRequest)
+		return
+	}
+
+	clientID := rs.cleanString(parts[3]) // /api/clients/{clientID}
+	rs.logger.Info("Extracted Client ID: '%s'", clientID)
+
+	if clientID == "" {
+		rs.logger.Error("Empty client ID after cleaning")
+		http.Error(w, "Invalid client ID", http.StatusBadRequest)
+		return
+	}
+
+	rs.logger.Info("Deleting client: %s", clientID)
+
+	// Delete from database
+	result, err := rs.db.Exec("DELETE FROM clients WHERE client_id = ?", clientID)
+	if err != nil {
+		rs.logger.Error("Failed to delete client: %v", err)
+		http.Error(w, "Failed to delete client", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		rs.logger.Error("Failed to get rows affected: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Client not found", http.StatusNotFound)
+		return
+	}
+
+	rs.logger.Info("Successfully deleted client: %s", clientID)
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Client deleted successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Project Management Handlers
+func (rs *RelayServer) handleAPIProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetProjects(w, r)
+	case "POST":
+		rs.handleAddProject(w, r)
+	case "PUT":
+		rs.handleUpdateProject(w, r)
+	case "DELETE":
+		rs.handleDeleteProject(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (rs *RelayServer) handleGetProjects(w http.ResponseWriter, r *http.Request) {
+	// Get username from request headers (set by auth middleware)
+	username := r.Header.Get("X-Username")
+
+	// Get user's accessible projects
+	userProjects, err := rs.getUserProjects(username)
+	if err != nil {
+		rs.logger.Error("Failed to get user projects: %v", err)
+		http.Error(w, "Failed to get projects", http.StatusInternalServerError)
+		return
+	}
+
+	if len(userProjects) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+		return
+	}
+
+	// Convert project IDs to comma-separated string for SQL IN clause
+	projectIDStrs := make([]string, len(userProjects))
+	for i, id := range userProjects {
+		projectIDStrs[i] = fmt.Sprintf("%d", id)
+	}
+	projectIDsStr := strings.Join(projectIDStrs, ",")
+
+	// Get project details
+	query := fmt.Sprintf(`
+		SELECT id, project_name, description, created_by, status, created_at, updated_at
+		FROM projects 
+		WHERE id IN (%s)
+		ORDER BY created_at DESC
+	`, projectIDsStr)
+
+	rows, err := rs.db.Query(query)
+	if err != nil {
+		rs.logger.Error("Failed to query projects: %v", err)
+		http.Error(w, "Failed to get projects", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var projects []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var projectName, description, createdBy, status sql.NullString
+		var createdAt, updatedAt sql.NullTime
+
+		err := rows.Scan(&id, &projectName, &description, &createdBy, &status, &createdAt, &updatedAt)
+		if err != nil {
+			rs.logger.Error("Failed to scan project row: %v", err)
+			continue
+		}
+
+		project := map[string]interface{}{
+			"id":           id,
+			"project_name": projectName.String,
+			"description":  description.String,
+			"created_by":   createdBy.String,
+			"status":       status.String,
+			"created_at":   createdAt.Time,
+			"updated_at":   updatedAt.Time,
+		}
+
+		projects = append(projects, project)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(projects)
+}
+
+func (rs *RelayServer) handleAddProject(w http.ResponseWriter, r *http.Request) {
+	// Only admin can create projects
+	userRole := r.Header.Get("X-User-Role")
+	if userRole != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	var projectData struct {
+		ProjectName string `json:"project_name"`
+		Description string `json:"description"`
+		Status      string `json:"status"`
+	}
+
+	// Parse JSON body
+	err := json.NewDecoder(r.Body).Decode(&projectData)
+	if err != nil {
+		rs.logger.Error("Failed to parse project data: %v", err)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if projectData.ProjectName == "" {
+		http.Error(w, "project_name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set default status if not provided
+	if projectData.Status == "" {
+		projectData.Status = "active"
+	}
+
+	// Get username
+	username := r.Header.Get("X-Username")
+
+	// Insert new project
+	_, err = rs.db.Exec(`
+		INSERT INTO projects (project_name, description, created_by, status) 
+		VALUES (?, ?, ?, ?)`,
+		projectData.ProjectName, projectData.Description, username, projectData.Status,
+	)
+	if err != nil {
+		rs.logger.Error("Failed to insert project: %v", err)
+		http.Error(w, "Failed to add project", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Successfully added project: %s", projectData.ProjectName)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Project added successfully",
+		"project": map[string]string{
+			"project_name": projectData.ProjectName,
+			"description":  projectData.Description,
+			"status":       projectData.Status,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	// Only admin can update projects
+	userRole := r.Header.Get("X-User-Role")
+	if userRole != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	// TODO: Implementation for updating projects
+	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+}
+
+func (rs *RelayServer) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	// Only admin can delete projects
+	userRole := r.Header.Get("X-User-Role")
+	if userRole != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	// TODO: Implementation for deleting projects
+	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
 }
 
 func (rs *RelayServer) handleAPILogs(w http.ResponseWriter, r *http.Request) {
@@ -2249,13 +2944,13 @@ func (rs *RelayServer) detectServerIP() string {
 	if serverIP := os.Getenv("SERVER_IP"); serverIP != "" {
 		return serverIP
 	}
-	
+
 	// Try to get from DB_HOST if it's not localhost
 	dbHost := os.Getenv("DB_HOST")
 	if dbHost != "" && dbHost != "localhost" && dbHost != "127.0.0.1" {
 		return dbHost
 	}
-	
+
 	// Fallback to a reasonable default
 	return "168.231.119.242"
 }
@@ -2275,9 +2970,9 @@ func (rs *RelayServer) handleAPISettings(w http.ResponseWriter, r *http.Request)
 // handleGetSettings returns current server settings
 func (rs *RelayServer) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	rs.logger.Info("=== GET SETTINGS REQUEST ===")
-	
+
 	settings := make(map[string]interface{})
-	
+
 	// Get all settings from database
 	rows, err := rs.db.Query("SELECT setting_key, setting_value FROM server_settings")
 	if err != nil {
@@ -2286,17 +2981,17 @@ func (rs *RelayServer) handleGetSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer rows.Close()
-	
+
 	settingsCount := 0
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
 			continue
 		}
-		
+
 		settingsCount++
 		rs.logger.Info("Found setting: %s = %s", key, value)
-		
+
 		// Convert port to number
 		if key == "server_port" {
 			if port, err := strconv.Atoi(value); err == nil {
@@ -2308,21 +3003,21 @@ func (rs *RelayServer) handleGetSettings(w http.ResponseWriter, r *http.Request)
 			settings[key] = value
 		}
 	}
-	
+
 	rs.logger.Info("Total settings found: %d", settingsCount)
-	
+
 	// Add some metadata
 	settings["lastUpdated"] = time.Now().Format("2006-01-02 15:04:05")
-	
+
 	// If no settings found, return defaults
 	if settingsCount == 0 {
 		rs.logger.Info("No settings found in database, using auto-detected defaults")
 		settings["server_ip"] = rs.detectServerIP()
 		settings["server_port"] = 8080
 	}
-	
+
 	rs.logger.Info("Returning settings: %+v", settings)
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -2336,44 +3031,44 @@ func (rs *RelayServer) handleUpdateSettings(w http.ResponseWriter, r *http.Reque
 		ServerIP   string `json:"serverIP"`
 		ServerPort int    `json:"serverPort"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate data
 	if updateData.ServerIP == "" {
 		http.Error(w, "Server IP is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	if updateData.ServerPort < 1 || updateData.ServerPort > 65535 {
 		updateData.ServerPort = 8080 // default
 	}
-	
+
 	// Update settings in database
 	settings := map[string]string{
 		"server_ip":   updateData.ServerIP,
 		"server_port": strconv.Itoa(updateData.ServerPort),
 	}
-	
+
 	for key, value := range settings {
 		_, err := rs.db.Exec(`
 			INSERT INTO server_settings (setting_key, setting_value) 
 			VALUES (?, ?) 
 			ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
 		`, key, value)
-		
+
 		if err != nil {
 			rs.logger.Error("Failed to update setting %s: %v", key, err)
 			http.Error(w, "Failed to update settings", http.StatusInternalServerError)
 			return
 		}
 	}
-	
+
 	rs.logger.Info("Server settings updated: IP=%s, Port=%d", updateData.ServerIP, updateData.ServerPort)
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,

@@ -38,6 +38,7 @@ type UniversalClient struct {
 	name     string
 	relayURL string
 	agentID  string
+	token    string
 	logger   *common.Logger
 	running  bool
 
@@ -129,6 +130,7 @@ func main() {
 		clientName string
 		relayURL   string
 		agentID    string
+		token      string
 
 		// Tunnel mode parameters
 		localAddr   string
@@ -167,6 +169,7 @@ func main() {
 				name:        clientName,
 				relayURL:    relayURL,
 				agentID:     agentID,
+				token:       token,
 				logger:      common.NewLogger(fmt.Sprintf("UNIVERSAL-%s", clientID)),
 				sessions:    make(map[string]net.Conn),
 				targets:     make(map[string]string),
@@ -226,6 +229,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&clientName, "name", "n", "", "Client name")
 	rootCmd.Flags().StringVarP(&relayURL, "relay-url", "r", config.RelayURL, "Relay server WebSocket URL (default from config.json, RELAY_URL env, or built-in)")
 	rootCmd.Flags().StringVarP(&agentID, "agent", "a", "", "Target agent ID")
+	rootCmd.Flags().StringVarP(&token, "token", "T", "", "Client authentication token for relay server connection")
 
 	// Tunnel mode flags
 	rootCmd.Flags().StringVarP(&localAddr, "local", "L", "", "Local address for TUNNEL MODE (e.g., :2222)")
@@ -277,6 +281,8 @@ func (c *UniversalClient) connectToRelay() error {
 	registerMsg := common.NewMessage(common.MsgTypeRegister)
 	registerMsg.ClientID = c.id
 	registerMsg.ClientName = c.name
+	registerMsg.AgentID = c.agentID
+	registerMsg.Token = c.token
 	return c.sendMessage(registerMsg)
 }
 
@@ -395,7 +401,7 @@ func (c *UniversalClient) sendTunnelListeningLog(localAddr, target string) {
 	logMsg.AgentID = c.agentID
 	logMsg.Target = target
 	logMsg.Data = []byte(fmt.Sprintf("tunnel_listening:%s->%s->%s", localAddr, c.agentID, target))
-	
+
 	if err := c.sendMessage(logMsg); err != nil {
 		c.logger.Error("Failed to send tunnel listening log: %v", err)
 	}

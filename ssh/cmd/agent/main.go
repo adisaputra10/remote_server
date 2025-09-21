@@ -342,14 +342,14 @@ func (a *Agent) handleData(msg *common.Message) {
 			clientID := a.clients[msg.SessionID]
 			a.mutex.RUnlock()
 			protocol := a.detectProtocol(target)
-			
+
 			a.logger.Info("=== EXTRACTED SQL INFO ===")
 			a.logger.Info("Operation: %s", operation)
 			a.logger.Info("Table: %s", tableName)
 			a.logger.Info("Database: %s", databaseName)
 			a.logger.Info("Protocol: %s", protocol)
 			a.logger.Info("Client: %s", clientID)
-			
+
 			a.sendDatabaseQuery(msg.SessionID, clientID, queryText, operation, tableName, databaseName, protocol)
 		}
 	}
@@ -551,7 +551,7 @@ func (a *Agent) sendDatabaseQuery(sessionID, clientID, query, operation, tableNa
 	a.logger.Info("Database: %s", databaseName)
 	a.logger.Info("Protocol: %s", protocol)
 	a.logger.Info("Query: %s", query)
-	
+
 	msg := common.NewMessage(common.MsgTypeDBQuery)
 	msg.AgentID = a.id
 	msg.ClientID = clientID
@@ -671,20 +671,20 @@ func (a *Agent) extractSQLInfo(queryText string) (operation, tableName, database
 func (a *Agent) extractCleanSQL(data string) string {
 	// Look for SQL keywords in the data
 	sqlKeywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "SHOW", "DESCRIBE", "EXPLAIN"}
-	
+
 	// Try to find SQL patterns
 	dataUpper := strings.ToUpper(data)
-	
+
 	for _, keyword := range sqlKeywords {
 		if idx := strings.Index(dataUpper, keyword); idx >= 0 {
 			// Found SQL keyword, extract from this position
 			remaining := data[idx:]
-			
+
 			// Clean the SQL by removing non-printable characters but keep SQL-valid chars
 			var cleaned strings.Builder
 			inQuote := false
 			quoteChar := byte(0)
-			
+
 			for i, b := range []byte(remaining) {
 				// Handle quotes
 				if (b == '\'' || b == '"' || b == '`') && (i == 0 || remaining[i-1] != '\\') {
@@ -698,13 +698,13 @@ func (a *Agent) extractCleanSQL(data string) string {
 					cleaned.WriteByte(b)
 					continue
 				}
-				
+
 				// If in quote, keep everything
 				if inQuote {
 					cleaned.WriteByte(b)
 					continue
 				}
-				
+
 				// Keep printable ASCII chars and some special SQL chars
 				if (b >= 32 && b <= 126) || b == '\n' || b == '\r' || b == '\t' {
 					cleaned.WriteByte(b)
@@ -713,18 +713,18 @@ func (a *Agent) extractCleanSQL(data string) string {
 					cleaned.WriteByte(' ')
 				}
 			}
-			
+
 			result := strings.TrimSpace(cleaned.String())
 			// Remove multiple spaces
 			result = regexp.MustCompile(`\s+`).ReplaceAllString(result, " ")
-			
+
 			// Validate that result looks like SQL
 			if len(result) >= 6 && strings.Contains(strings.ToUpper(result), keyword) {
 				return result
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -739,21 +739,21 @@ func (a *Agent) extractDatabaseFromHandshake(data []byte) string {
 	// - Username (null-terminated string)
 	// - Auth response length + auth response
 	// - Database name (null-terminated string) - if CLIENT_CONNECT_WITH_DB flag is set
-	
+
 	if len(data) < 36 { // Minimum packet size
 		return ""
 	}
-	
+
 	// Check if this looks like a MySQL handshake response (client login packet)
 	// Look for capability flags that include CLIENT_CONNECT_WITH_DB (0x00000008)
 	if len(data) >= 8 {
 		capabilityFlags := uint32(data[4]) | uint32(data[5])<<8 | uint32(data[6])<<16 | uint32(data[7])<<24
 		hasConnectWithDB := (capabilityFlags & 0x00000008) != 0
-		
+
 		if hasConnectWithDB {
 			// Skip fixed fields (36 bytes)
 			offset := 36
-			
+
 			// Skip username (null-terminated)
 			for offset < len(data) && data[offset] != 0 {
 				offset++
@@ -762,13 +762,13 @@ func (a *Agent) extractDatabaseFromHandshake(data []byte) string {
 				return ""
 			}
 			offset++ // Skip null terminator
-			
+
 			// Skip auth response length and auth response
 			if offset < len(data) {
 				authLength := int(data[offset])
 				offset += 1 + authLength
 			}
-			
+
 			// Extract database name (null-terminated)
 			if offset < len(data) {
 				dbStart := offset
@@ -781,7 +781,7 @@ func (a *Agent) extractDatabaseFromHandshake(data []byte) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -813,13 +813,13 @@ func (a *Agent) logPotentialDatabaseCommand(sessionID string, data []byte, direc
 	}
 
 	protocol := a.detectProtocol(target)
-	
+
 	// Convert data to string and check if it contains readable SQL
 	dataStr := string(data)
-	
+
 	// Check for common SQL keywords even in binary data
 	sqlKeywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "SHOW", "DESCRIBE", "EXPLAIN", "USE"}
-	
+
 	hasSQL := false
 	for _, keyword := range sqlKeywords {
 		if strings.Contains(strings.ToUpper(dataStr), keyword) {
@@ -827,7 +827,7 @@ func (a *Agent) logPotentialDatabaseCommand(sessionID string, data []byte, direc
 			break
 		}
 	}
-	
+
 	// Log if it contains SQL keywords or if it's a significant data packet
 	if hasSQL || len(data) > 20 {
 		// Try to extract SQL info
@@ -853,14 +853,14 @@ func (a *Agent) cleanDataForLogging(data []byte) string {
 			result += " "
 		}
 	}
-	
+
 	// Clean up multiple spaces and trim
 	result = strings.TrimSpace(result)
 	words := strings.Fields(result)
 	if len(words) > 20 {
 		words = words[:20] // Limit to first 20 words
 	}
-	
+
 	return strings.Join(words, " ")
 }
 

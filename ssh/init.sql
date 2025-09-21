@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role VARCHAR(20) DEFAULT 'user',
+    token VARCHAR(255) UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -54,10 +55,10 @@ CREATE TABLE IF NOT EXISTS ssh_logs (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Insert default users
-INSERT IGNORE INTO users (username, password, role) VALUES 
-    ('admin', 'admin123', 'admin'),
-    ('user', 'user123', 'user');
+-- Insert default users with unique tokens
+INSERT IGNORE INTO users (username, password, role, token) VALUES 
+    ('admin', 'admin123', 'admin', 'admin_token_2025_secure'),
+    ('user', 'user123', 'user', 'user_token_2025_access');
 
 -- Flush privileges
 FLUSH PRIVILEGES;

@@ -56,6 +56,13 @@
               <td>
                 <div class="action-buttons">
                   <button 
+                    class="action-btn access-btn with-text" 
+                    @click="openAccessModal(agent.id)"
+                    title="Access Agent">
+                    <i class="fas fa-terminal"></i>
+                    <span>Access</span>
+                  </button>
+                  <button 
                     class="action-btn setup-btn with-text" 
                     @click="openSetupModal(agent.id)"
                     title="Setup Agent">
@@ -189,6 +196,159 @@ chmod +x bin/agent</code></pre>
         </div>
       </div>
     </div>
+
+    <!-- Access Modal -->
+    <div v-if="showAccessModal" class="modal-overlay" @click="closeAccessModal">
+      <div class="modal access-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Access Options for Agent: {{ currentAccessAgentId }}</h3>
+          <button class="btn-close" @click="closeAccessModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="access-table-container">
+            <table class="access-table">
+              <thead>
+                <tr>
+                  <th>Service Type</th>
+                  <th>Command</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- SSH Access -->
+                <tr>
+                  <td>
+                    <div class="service-info">
+                      <i class="fas fa-terminal"></i>
+                      <span>SSH Access</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="command-container">
+                      <code class="command-text">{{ generateSSHCommand() }}</code>
+                    </div>
+                  </td>
+                  <td>
+                    <button class="btn btn-copy" @click="copyToClipboard(generateSSHCommand())" title="Copy to clipboard">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </td>
+                </tr>
+
+                <!-- MySQL Tunnel -->
+                <tr>
+                  <td>
+                    <div class="service-info">
+                      <i class="fas fa-database"></i>
+                      <span>MySQL Tunnel</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="command-container">
+                      <code class="command-text">{{ generateMySQLCommand() }}</code>
+                    </div>
+                  </td>
+                  <td>
+                    <button class="btn btn-copy" @click="copyToClipboard(generateMySQLCommand())" title="Copy to clipboard">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </td>
+                </tr>
+
+                <!-- PostgreSQL Tunnel -->
+                <tr>
+                  <td>
+                    <div class="service-info">
+                      <i class="fas fa-database"></i>
+                      <span>PostgreSQL Tunnel</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="command-container">
+                      <code class="command-text">{{ generatePostgreSQLCommand() }}</code>
+                    </div>
+                  </td>
+                  <td>
+                    <button class="btn btn-copy" @click="copyToClipboard(generatePostgreSQLCommand())" title="Copy to clipboard">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </td>
+                </tr>
+
+                <!-- MongoDB Tunnel -->
+                <tr>
+                  <td>
+                    <div class="service-info">
+                      <i class="fas fa-leaf"></i>
+                      <span>MongoDB Tunnel</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="command-container">
+                      <code class="command-text">{{ generateMongoDBCommand() }}</code>
+                    </div>
+                  </td>
+                  <td>
+                    <button class="btn btn-copy" @click="copyToClipboard(generateMongoDBCommand())" title="Copy to clipboard">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </td>
+                </tr>
+
+                <!-- Custom Tunnel -->
+                <tr>
+                  <td>
+                    <div class="service-info">
+                      <i class="fas fa-cogs"></i>
+                      <span>Custom Tunnel</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="command-container">
+                      <div class="custom-inputs">
+                        <input 
+                          type="text" 
+                          v-model="customLocalPort" 
+                          placeholder="Local Port (e.g., 9999)" 
+                          class="form-input"
+                        />
+                        <input 
+                          type="text" 
+                          v-model="customTargetHost" 
+                          placeholder="Target Host:Port (e.g., localhost:80)" 
+                          class="form-input"
+                        />
+                      </div>
+                      <code class="command-text">{{ generateCustomCommand() }}</code>
+                    </div>
+                  </td>
+                  <td>
+                    <button class="btn btn-copy" @click="copyToClipboard(generateCustomCommand())" title="Copy to clipboard">
+                      <i class="fas fa-copy"></i>
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="access-note">
+            <i class="fas fa-info-circle"></i>
+            <p><strong>Note:</strong> Make sure to use your user token (-T parameter) when executing these commands. 
+            Default tokens: <code>admin_token_2025_secure</code> for admin, <code>user_token_2025_access</code> for user.</p>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeAccessModal">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -214,6 +374,12 @@ export default {
     const showSetupModal = ref(false)
     const currentSetupAgentId = ref('')
     const currentSetupAgentToken = ref('')
+    
+    // Access Modal Data
+    const showAccessModal = ref(false)
+    const currentAccessAgentId = ref('')
+    const customLocalPort = ref('9999')
+    const customTargetHost = ref('localhost:80')
     
     // Server Settings Data (loaded from database via API)
     const serverSettings = ref({
@@ -364,6 +530,39 @@ export default {
       showSetupModal.value = false
     }
 
+    // Access Modal Functions
+    const openAccessModal = (agentId) => {
+      console.log('Opening Access Modal for agent:', agentId)
+      currentAccessAgentId.value = agentId
+      showAccessModal.value = true
+    }
+
+    const closeAccessModal = () => {
+      console.log('Closing Access Modal...')
+      showAccessModal.value = false
+    }
+
+    // Command Generation Functions
+    const generateSSHCommand = () => {
+      return `.\\bin\\universal-client.exe -T admin_token_2025_secure -u username -H target-server -a ${currentAccessAgentId.value}`
+    }
+
+    const generateMySQLCommand = () => {
+      return `.\\bin\\universal-client.exe -T admin_token_2025_secure -L :3306 -t localhost:3306 -a ${currentAccessAgentId.value}`
+    }
+
+    const generatePostgreSQLCommand = () => {
+      return `.\\bin\\universal-client.exe -T admin_token_2025_secure -L :5432 -t localhost:5432 -a ${currentAccessAgentId.value}`
+    }
+
+    const generateMongoDBCommand = () => {
+      return `.\\bin\\universal-client.exe -T admin_token_2025_secure -L :27017 -t localhost:27017 -a ${currentAccessAgentId.value}`
+    }
+
+    const generateCustomCommand = () => {
+      return `.\\bin\\universal-client.exe -T admin_token_2025_secure -L :${customLocalPort.value} -t ${customTargetHost.value} -a ${currentAccessAgentId.value}`
+    }
+
     // Copy to clipboard functions
     const copyToClipboard = async (text) => {
       try {
@@ -507,6 +706,10 @@ export default {
       showSetupModal,
       currentSetupAgentId,
       currentSetupAgentToken,
+      showAccessModal,
+      currentAccessAgentId,
+      customLocalPort,
+      customTargetHost,
       serverSettings,
       isServerConfigured,
       refreshData,
@@ -515,6 +718,13 @@ export default {
       openAddAgentModal,
       openSetupModal,
       closeSetupModal,
+      openAccessModal,
+      closeAccessModal,
+      generateSSHCommand,
+      generateMySQLCommand,
+      generatePostgreSQLCommand,
+      generateMongoDBCommand,
+      generateCustomCommand,
       copyToClipboard,
       copyCommand,
       deleteAgent,
@@ -884,5 +1094,162 @@ export default {
 
 .config-warning strong {
   font-weight: 600;
+}
+
+/* Access Modal Styles */
+.access-modal {
+  background: var(--surface-color);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  width: 95%;
+  max-width: 1200px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.access-table-container {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.access-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface-color);
+}
+
+.access-table th,
+.access-table td {
+  padding: 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.access-table th {
+  background: var(--surface-alt);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.service-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 500;
+}
+
+.service-info i {
+  font-size: 1.25rem;
+  width: 1.5rem;
+  text-align: center;
+}
+
+.fa-terminal { color: #10b981; }
+.fa-database { color: #3b82f6; }
+.fa-leaf { color: #059669; }
+.fa-cogs { color: #f59e0b; }
+
+.command-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.command-text {
+  background: var(--color-dark);
+  color: var(--color-light);
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  word-break: break-all;
+  display: block;
+  white-space: pre-wrap;
+}
+
+.custom-inputs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.form-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--surface-color);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.btn-copy {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+}
+
+.btn-copy:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+}
+
+.access-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: var(--radius-sm);
+  margin-top: 1rem;
+}
+
+.access-note i {
+  color: var(--color-primary);
+  margin-top: 0.125rem;
+}
+
+.access-note p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.access-note code {
+  background: rgba(0, 0, 0, 0.1);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.access-btn {
+  background: var(--color-success);
+  color: white;
+}
+
+.access-btn:hover {
+  background: #059669;
 }
 </style>

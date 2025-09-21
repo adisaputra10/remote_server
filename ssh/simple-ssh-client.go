@@ -31,14 +31,14 @@ type SSHClient struct {
 	sshPassword string
 	localPort   string
 	logger      *common.Logger
-	
+
 	// Performance optimizations
-	logBuffer     []SSHLogRequest
-	logMutex      sync.Mutex
-	httpClient    *http.Client
-	perfStats     *PerformanceStats
-	config        *ClientConfig
-	
+	logBuffer  []SSHLogRequest
+	logMutex   sync.Mutex
+	httpClient *http.Client
+	perfStats  *PerformanceStats
+	config     *ClientConfig
+
 	// File logging optimizations
 	fileLogBuffer []string
 	fileLogMutex  sync.Mutex
@@ -47,23 +47,23 @@ type SSHClient struct {
 
 // Performance configuration
 type ClientConfig struct {
-	BufferSize        int
-	LogLevel          string
-	AsyncLogging      bool
-	LogBatchSize      int
-	LogFlushInterval  time.Duration
-	DisableAnalysis   bool
+	BufferSize       int
+	LogLevel         string
+	AsyncLogging     bool
+	LogBatchSize     int
+	LogFlushInterval time.Duration
+	DisableAnalysis  bool
 }
 
 // Performance statistics
 type PerformanceStats struct {
-	BytesSent        int64
-	BytesReceived    int64
-	PacketsSent      int64
-	PacketsReceived  int64
-	LogsBuffered     int64
-	LogsSent         int64
-	LastUpdate       time.Time
+	BytesSent       int64
+	BytesReceived   int64
+	PacketsSent     int64
+	PacketsReceived int64
+	LogsBuffered    int64
+	LogsSent        int64
+	LastUpdate      time.Time
 	mutex           sync.RWMutex
 }
 
@@ -132,7 +132,7 @@ func runSSHClient(cmd *cobra.Command, args []string) {
 		sshPassword: sshPassword,
 		localPort:   localPort,
 		logger:      common.NewLogger(fmt.Sprintf("SSH-CLIENT-%s", clientID)),
-		
+
 		// Performance optimizations
 		logBuffer:     make([]SSHLogRequest, 0, 100),
 		httpClient:    &http.Client{Timeout: 2 * time.Second},
@@ -140,12 +140,12 @@ func runSSHClient(cmd *cobra.Command, args []string) {
 		fileLogBuffer: make([]string, 0, 50),
 		lastFileFlush: time.Now(),
 		config: &ClientConfig{
-			BufferSize:        8192,
-			LogLevel:          "INFO",
-			AsyncLogging:      os.Getenv("ASYNC_LOGGING") == "true",
-			LogBatchSize:      100,
-			LogFlushInterval:  5 * time.Second,
-			DisableAnalysis:   os.Getenv("DISABLE_SSH_ANALYSIS") == "true",
+			BufferSize:       8192,
+			LogLevel:         "INFO",
+			AsyncLogging:     os.Getenv("ASYNC_LOGGING") == "true",
+			LogBatchSize:     100,
+			LogFlushInterval: 5 * time.Second,
+			DisableAnalysis:  os.Getenv("DISABLE_SSH_ANALYSIS") == "true",
 		},
 	}
 
@@ -422,7 +422,7 @@ func (c *SSHClient) quickExtractCommand(data string) string {
 			"mkdir": true, "rm": true, "cp": true, "mv": true, "chmod": true,
 			"sudo": true, "su": true, "exit": true, "whoami": true,
 		}
-		
+
 		if commonCommands[command] {
 			return command
 		}
@@ -453,7 +453,7 @@ func (c *SSHClient) logSSHCommandAsync(command, direction, data string) {
 	c.logMutex.Lock()
 	c.logBuffer = append(c.logBuffer, logReq)
 	c.perfStats.LogsBuffered++
-	
+
 	// Flush if buffer is full
 	if len(c.logBuffer) >= c.config.LogBatchSize {
 		go c.flushLogs()
@@ -536,10 +536,10 @@ func (c *SSHClient) addToFileLogBuffer(command, direction, data string) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logEntry := fmt.Sprintf("[%s] [%s] Client:%s -> %s:%s (User:%s) Command: %s",
 		timestamp, direction, c.clientID, c.sshHost, c.sshPort, c.sshUser, command)
-	
+
 	c.fileLogMutex.Lock()
 	c.fileLogBuffer = append(c.fileLogBuffer, logEntry)
-	
+
 	// Flush if buffer is full or enough time has passed
 	if len(c.fileLogBuffer) >= 50 || time.Since(c.lastFileFlush) > 5*time.Second {
 		go c.flushFileLogBuffer()
@@ -553,14 +553,14 @@ func (c *SSHClient) flushFileLogBuffer() {
 		c.fileLogMutex.Unlock()
 		return
 	}
-	
+
 	// Copy buffer and clear it
 	logs := make([]string, len(c.fileLogBuffer))
 	copy(logs, c.fileLogBuffer)
 	c.fileLogBuffer = c.fileLogBuffer[:0]
 	c.lastFileFlush = time.Now()
 	c.fileLogMutex.Unlock()
-	
+
 	// Write to commands.log file
 	c.writeToCommandsLog(logs)
 }
@@ -569,7 +569,7 @@ func (c *SSHClient) writeToCommandsLog(logs []string) {
 	if len(logs) == 0 {
 		return
 	}
-	
+
 	// Create logs directory if it doesn't exist
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		if c.config.LogLevel == "DEBUG" {
@@ -577,7 +577,7 @@ func (c *SSHClient) writeToCommandsLog(logs []string) {
 		}
 		return
 	}
-	
+
 	// Open commands.log file in append mode
 	file, err := os.OpenFile("logs/commands.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -587,7 +587,7 @@ func (c *SSHClient) writeToCommandsLog(logs []string) {
 		return
 	}
 	defer file.Close()
-	
+
 	// Write all logs at once
 	for _, logEntry := range logs {
 		if _, err := file.WriteString(logEntry + "\n"); err != nil {
@@ -597,7 +597,7 @@ func (c *SSHClient) writeToCommandsLog(logs []string) {
 			return
 		}
 	}
-	
+
 	// Sync to disk
 	file.Sync()
 }

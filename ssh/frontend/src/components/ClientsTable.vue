@@ -1,8 +1,8 @@
 ﻿<template>
   <div class="clients-table-container">
     <div class="table-header">
-      <h2 class="table-title">Active Clients</h2>
-      <div class="header-actions">
+      <h2 class="table-title">History Client</h2>
+      <div class="table-actions">
         <button class="btn btn-success" @click="openAddClientModal">
           <i class="fas fa-plus"></i>
           Add Client
@@ -38,7 +38,7 @@
               <th>NAME</th>
               <th>STATUS</th>
               <th>CONNECTED AT</th>
-              <th>LAST PING</th>
+              <th>AGENT ID</th>
               <th>ACTIONS</th>
             </tr>
           </thead>
@@ -52,16 +52,9 @@
                 </span>
               </td>
               <td>{{ client.connectedAt }}</td>
-              <td>{{ client.lastPing }}</td>
+              <td>{{ client.agentId || '-' }}</td>
               <td>
                 <div class="action-buttons">
-                  <button 
-                    class="action-btn setup-btn with-text" 
-                    @click="showSetup(client.id)"
-                    title="Setup Client">
-                    <i class="fas fa-cog"></i>
-                    <span>Setup</span>
-                  </button>
                   <button 
                     class="action-btn delete-btn with-text" 
                     @click="showDelete(client.id)"
@@ -121,14 +114,25 @@
           
           <div class="form-group">
             <label for="clientToken">Token *</label>
-            <input
-              id="clientToken"
-              v-model="newClient.token"
-              type="text"
-              class="form-input"
-              placeholder="Enter authentication token"
-              required
-            />
+            <div class="token-input-group">
+              <input
+                id="clientToken"
+                v-model="newClient.token"
+                :type="showToken ? 'text' : 'password'"
+                class="form-input"
+                placeholder="Enter authentication token or generate one"
+                required
+              />
+              <button type="button" @click="toggleTokenVisibility" class="btn btn-secondary btn-show">
+                <i class="fas" :class="showToken ? 'fa-eye-slash' : 'fa-eye'"></i>
+                {{ showToken ? 'Hide' : 'Show' }}
+              </button>
+              <button type="button" @click="generateToken" class="btn btn-secondary btn-generate">
+                <i class="fas fa-random"></i>
+                Generate
+              </button>
+            </div>
+            <small class="form-help">Authentication token for client connection (auto-generated or custom)</small>
           </div>
           
           <div class="modal-footer">
@@ -142,167 +146,6 @@
             </button>
           </div>
         </form>
-      </div>
-    </div>
-
-    <!-- Setup Client Modal -->
-    <div v-if="showSetupModal" class="modal-overlay" @click="closeSetupModal">
-      <div class="modal setup-modal" @click.stop>
-        <div class="modal-header">
-          <h3>Setup Client: {{ currentSetupClientId }}</h3>
-          <button class="btn-close" @click="closeSetupModal">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-        
-        <div class="modal-body">
-          <div class="setup-tabs">
-            <button 
-              :class="['tab-btn', { active: activeTab === 'windows' }]"
-              @click="activeTab = 'windows'"
-            >
-              <i class="fab fa-windows"></i>
-              Windows
-            </button>
-            <button 
-              :class="['tab-btn', { active: activeTab === 'linux' }]"
-              @click="activeTab = 'linux'"
-            >
-              <i class="fab fa-linux"></i>
-              Linux
-            </button>
-            <button 
-              :class="['tab-btn', { active: activeTab === 'docker' }]"
-              @click="activeTab = 'docker'"
-            >
-              <i class="fab fa-docker"></i>
-              Docker
-            </button>
-          </div>
-
-          <div class="tab-content">
-            <!-- Windows Tab -->
-            <div v-if="activeTab === 'windows'" class="setup-section">
-              <h4><i class="fab fa-windows"></i> Windows Client Installation</h4>
-              
-              <div class="step">
-                <h5>1. Download Client Binary</h5>
-                <div class="code-block">
-                  <pre><code>Invoke-WebRequest -Uri "http://168.231.119.242:8080/downloads/client.exe" -OutFile "client.exe"</code></pre>
-                  <button class="copy-btn" @click="copyCommand('download-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>2. Create Configuration File</h5>
-                <div class="code-block">
-                  <pre><code>{
-  "relay_server": "http://168.231.119.242:8080",
-  "client_id": "{{ currentSetupClientId }}",
-  "token": "your-auth-token"
-}</code></pre>
-                  <button class="copy-btn" @click="copyCommand('config-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>3. Run Client</h5>
-                <div class="code-block">
-                  <pre><code>.\client.exe -config client-config.json</code></pre>
-                  <button class="copy-btn" @click="copyCommand('run-windows')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Linux Tab -->
-            <div v-if="activeTab === 'linux'" class="setup-section">
-              <h4><i class="fab fa-linux"></i> Linux Client Installation</h4>
-              
-              <div class="step">
-                <h5>1. Download Client Binary</h5>
-                <div class="code-block">
-                  <pre><code>wget http://168.231.119.242:8080/downloads/client-linux
-chmod +x client-linux</code></pre>
-                  <button class="copy-btn" @click="copyCommand('download-linux')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>2. Create Configuration</h5>
-                <div class="code-block">
-                  <pre><code>cat > client-config.json << EOF
-{
-  "relay_server": "http://168.231.119.242:8080",
-  "client_id": "{{ currentSetupClientId }}",
-  "token": "your-auth-token"
-}
-EOF</code></pre>
-                  <button class="copy-btn" @click="copyCommand('config-linux')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>3. Run Client</h5>
-                <div class="code-block">
-                  <pre><code>./client-linux -config client-config.json</code></pre>
-                  <button class="copy-btn" @click="copyCommand('run-linux')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Docker Tab -->
-            <div v-if="activeTab === 'docker'" class="setup-section">
-              <h4><i class="fab fa-docker"></i> Docker Client Installation</h4>
-              
-              <div class="step">
-                <h5>1. Run with Docker</h5>
-                <div class="code-block">
-                  <pre><code>docker run -d \
-  --name relay-client \
-  --restart unless-stopped \
-  -e RELAY_SERVER="http://168.231.119.242:8080" \
-  -e CLIENT_ID="{{ currentSetupClientId }}" \
-  -e TOKEN="your-auth-token" \
-  your-registry/relay-client:latest</code></pre>
-                  <button class="copy-btn" @click="copyCommand('run-docker')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="step">
-                <h5>2. Docker Compose</h5>
-                <div class="code-block">
-                  <pre><code>version: '3.8'
-services:
-  relay-client:
-    image: your-registry/relay-client:latest
-    container_name: relay-client
-    restart: unless-stopped
-    environment:
-      - RELAY_SERVER=http://168.231.119.242:8080
-      - CLIENT_ID={{ currentSetupClientId }}
-      - TOKEN=your-auth-token</code></pre>
-                  <button class="copy-btn" @click="copyCommand('docker-compose')">
-                    <i class="fas fa-copy"></i>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -362,20 +205,22 @@ export default {
     // Add Client Modal Data
     const showAddModal = ref(false)
     const submitting = ref(false)
+    const showToken = ref(false)
     const newClient = ref({
       clientId: '',
       name: '',
       token: ''
     })
 
-    // Setup Modal Data
-    const showSetupModal = ref(false)
-    const currentSetupClientId = ref('')
-    const activeTab = ref('windows')
-
     // Delete Modal Data  
     const showDeleteModal = ref(false)
     const clientToDelete = ref('')
+
+    // Server Settings Data
+    const serverSettings = ref({
+      serverIP: '168.231.119.242',
+      serverPort: '8080'
+    })
 
     const paginatedClients = computed(() => {
       const start = (currentPage.value - 1) * itemsPerPage.value
@@ -415,7 +260,8 @@ export default {
             name: client.name || client.description || client.tunnel_type || 'MySQL Database Tunnel',
             status: statusClass,
             connectedAt: client.connected_at || client.created_at || client.start_time || 'Unknown',
-            lastPing: client.last_ping || client.last_seen || client.updated_at || 'Unknown'
+            lastPing: client.last_ping || client.last_seen || client.updated_at || 'Unknown',
+            agentId: client.agent_id || '-'
           }
           
           console.log(`=== TRANSFORMED CLIENT ${index + 1} ===`, transformedClient)
@@ -443,6 +289,26 @@ export default {
       fetchClients()
     }
 
+    const loadServerSettings = async () => {
+      try {
+        console.log('=== LOADING SERVER SETTINGS ===')
+        const response = await apiService.getSettings()
+        console.log('Settings API response:', response.data)
+        
+        if (response.data && response.data.length > 0) {
+          const settings = response.data[0]
+          serverSettings.value = {
+            serverIP: settings.server_ip || '168.231.119.242',
+            serverPort: settings.server_port || '8080'
+          }
+          console.log('Server settings loaded:', serverSettings.value)
+        }
+      } catch (error) {
+        console.error('Error loading server settings:', error)
+        // Keep default values if API fails
+      }
+    }
+
     const viewDetails = (clientId) => {
       console.log('Viewing details for client:', clientId)
       alert(`Client Details: ${clientId}`)
@@ -464,18 +330,40 @@ export default {
     const openAddClientModal = () => {
       console.log('Opening Add Client modal')
       showAddModal.value = true
-      // Reset form
+      // Reset form with auto-generated token
       newClient.value = {
         clientId: '',
         name: '',
-        token: ''
+        token: generateRandomToken()
       }
+      showToken.value = false
+    }
+
+    const generateRandomToken = () => {
+      // Generate a secure random token (32 characters)
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+      let result = ''
+      for (let i = 0; i < 32; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length))
+      }
+      return result
+    }
+
+    const generateToken = () => {
+      console.log('Generating new token...')
+      newClient.value.token = generateRandomToken()
+    }
+
+    const toggleTokenVisibility = () => {
+      showToken.value = !showToken.value
+      console.log('Token visibility toggled:', showToken.value ? 'visible' : 'hidden')
     }
 
     const closeAddClientModal = () => {
       console.log('Closing Add Client modal')
       showAddModal.value = false
       submitting.value = false
+      showToken.value = false
       // Reset form
       newClient.value = {
         clientId: '',
@@ -496,12 +384,16 @@ export default {
       submitting.value = true
       
       try {
-        // TODO: Create API endpoint for adding clients
-        // For now, we'll simulate the API call
         console.log('Adding client via API:', newClient.value)
         
-        // Simulate API call delay
-        await new Promise(resolve => setTimeout(resolve, 1000))
+        const response = await apiService.addClient({
+          client_id: newClient.value.clientId,
+          client_name: newClient.value.name,
+          token: newClient.value.token,
+          status: 'disconnected'
+        })
+        
+        console.log('Client added successfully:', response.data)
         
         // Show success message
         alert(`Client "${newClient.value.name}" added successfully!\n\nClient ID: ${newClient.value.clientId}\nName: ${newClient.value.name}`)
@@ -512,30 +404,22 @@ export default {
         
       } catch (error) {
         console.error('Error adding client:', error)
-        alert('Failed to add client. Please try again.')
+        if (error.response) {
+          console.error('Response error:', error.response.data)
+          alert(`Failed to add client: ${error.response.data.error || error.message}`)
+        } else {
+          alert('Failed to add client. Please try again.')
+        }
       } finally {
         submitting.value = false
       }
     }
 
-    // Setup and Delete Functions
-    const showSetup = (clientId) => {
-      console.log(`Showing setup for client: ${clientId}`)
-      currentSetupClientId.value = clientId
-      activeTab.value = 'windows'
-      showSetupModal.value = true
-    }
-
+    // Delete Functions
     const showDelete = (clientId) => {
       console.log(`Showing delete confirmation for client: ${clientId}`)
       clientToDelete.value = clientId
       showDeleteModal.value = true
-    }
-
-    const closeSetupModal = () => {
-      showSetupModal.value = false
-      currentSetupClientId.value = ''
-      activeTab.value = 'windows'
     }
 
     const closeDeleteModal = () => {
@@ -562,48 +446,6 @@ export default {
       }
     }
 
-    const copyCommand = (type) => {
-      let command = ''
-      const clientId = currentSetupClientId.value
-      
-      switch(type) {
-        case 'download-windows':
-          command = 'Invoke-WebRequest -Uri "http://168.231.119.242:8080/downloads/client.exe" -OutFile "client.exe"'
-          break
-        case 'config-windows':
-          command = JSON.stringify({
-            relay_server: "http://168.231.119.242:8080",
-            client_id: clientId,
-            token: "your-auth-token"
-          }, null, 2)
-          break
-        case 'run-windows':
-          command = '.\\client.exe -config client-config.json'
-          break
-        case 'download-linux':
-          command = 'wget http://168.231.119.242:8080/downloads/client-linux\nchmod +x client-linux'
-          break
-        case 'config-linux':
-          command = `cat > client-config.json << EOF\n{\n  "relay_server": "http://168.231.119.242:8080",\n  "client_id": "${clientId}",\n  "token": "your-auth-token"\n}\nEOF`
-          break
-        case 'run-linux':
-          command = './client-linux -config client-config.json'
-          break
-        case 'run-docker':
-          command = `docker run -d \\\n  --name relay-client \\\n  --restart unless-stopped \\\n  -e RELAY_SERVER="http://168.231.119.242:8080" \\\n  -e CLIENT_ID="${clientId}" \\\n  -e TOKEN="your-auth-token" \\\n  your-registry/relay-client:latest`
-          break
-        case 'docker-compose':
-          command = `version: '3.8'\nservices:\n  relay-client:\n    image: your-registry/relay-client:latest\n    container_name: relay-client\n    restart: unless-stopped\n    environment:\n      - RELAY_SERVER=http://168.231.119.242:8080\n      - CLIENT_ID=${clientId}\n      - TOKEN=your-auth-token`
-          break
-      }
-      
-      navigator.clipboard.writeText(command).then(() => {
-        console.log('Command copied to clipboard')
-      }).catch(err => {
-        console.error('Failed to copy command:', err)
-      })
-    }
-
     const getStatusText = (status) => {
       switch (status) {
         case 'success':
@@ -619,6 +461,7 @@ export default {
 
     onMounted(() => {
       fetchClients()
+      loadServerSettings()
       
       // Auto-refresh every 10 seconds (same as Connection Logs for consistency)
       setInterval(fetchClients, 10000)
@@ -633,12 +476,11 @@ export default {
       itemsPerPage,
       showAddModal,
       submitting,
+      showToken,
       newClient,
-      showSetupModal,
-      currentSetupClientId,
-      activeTab,
       showDeleteModal,
       clientToDelete,
+      serverSettings,
       refreshData,
       viewDetails,
       disconnectClient,
@@ -647,12 +489,11 @@ export default {
       openAddClientModal,
       closeAddClientModal,
       submitClient,
-      showSetup,
+      generateToken,
+      toggleTokenVisibility,
       showDelete,
-      closeSetupModal,
       closeDeleteModal,
-      deleteClient,
-      copyCommand
+      deleteClient
     }
   }
 }
@@ -833,6 +674,54 @@ export default {
 
 .form-input::placeholder {
   color: var(--text-secondary);
+}
+
+.token-input-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.token-input-group .form-input {
+  flex: 1;
+}
+
+.token-input-group .btn {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+}
+
+.token-input-group .btn:hover {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.token-input-group .btn-show {
+  min-width: 70px;
+}
+
+.token-input-group .btn-generate {
+  min-width: 90px;
+}
+
+.form-help {
+  display: block;
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .modal-footer {
