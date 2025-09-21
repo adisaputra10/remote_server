@@ -184,12 +184,12 @@ func NewRelayServer() *RelayServer {
 	}
 
 	// Debug: Log environment variables values
-	rs.logger.Info("=== DATABASE CONFIG DEBUG ===")
-	rs.logger.Info("DB_HOST env value: '%s' (using: %s)", os.Getenv("DB_HOST"), dbHost)
-	rs.logger.Info("DB_PORT env value: '%s' (using: %s)", os.Getenv("DB_PORT"), dbPort)
-	rs.logger.Info("DB_USER env value: '%s' (using: %s)", os.Getenv("DB_USER"), dbUser)
-	rs.logger.Info("DB_NAME env value: '%s' (using: %s)", os.Getenv("DB_NAME"), dbName)
-	rs.logger.Info("DB_PASSWORD env set: %t", os.Getenv("DB_PASSWORD") != "")
+	// rs.logger.Info("=== DATABASE CONFIG DEBUG ===")
+	// rs.logger.Info("DB_HOST env value: '%s' (using: %s)", os.Getenv("DB_HOST"), dbHost)
+	// rs.logger.Info("DB_PORT env value: '%s' (using: %s)", os.Getenv("DB_PORT"), dbPort)
+	// rs.logger.Info("DB_USER env value: '%s' (using: %s)", os.Getenv("DB_USER"), dbUser)
+	// rs.logger.Info("DB_NAME env value: '%s' (using: %s)", os.Getenv("DB_NAME"), dbName)
+	// rs.logger.Info("DB_PASSWORD env set: %t", os.Getenv("DB_PASSWORD") != "")
 
 	// Construct DSN
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
@@ -1166,12 +1166,12 @@ func (rs *RelayServer) handleConnect(conn *websocket.Conn, msg *common.Message) 
 		session.ID, session.AgentID, session.ClientID, session.Target)
 
 	// Debug: List all available agents
-	rs.logger.Info("=== AVAILABLE AGENTS ===")
+	// rs.logger.Info("=== AVAILABLE AGENTS ===")
 	if len(rs.agents) == 0 {
-		rs.logger.Info("❌ No agents registered!")
+		// rs.logger.Info("❌ No agents registered!")
 	} else {
-		for agentID, agent := range rs.agents {
-			rs.logger.Info("✅ Agent: %s (Status: %s)", agentID, agent.Status)
+		for _, _ = range rs.agents {
+			// rs.logger.Info("✅ Agent: %s (Status: %s)", agentID, agent.Status)
 		}
 	}
 	rs.logger.Info("Looking for agent: %s", msg.AgentID)
@@ -1335,14 +1335,14 @@ func (rs *RelayServer) handleHeartbeat(conn *websocket.Conn, msg *common.Message
 
 func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) {
 	// Debug logging
-	rs.logger.Info("=== RECEIVED DATABASE QUERY ===")
-	rs.logger.Info("SessionID: %s", msg.SessionID)
-	rs.logger.Info("AgentID: %s", msg.AgentID)
-	rs.logger.Info("ClientID: %s", msg.ClientID)
-	rs.logger.Info("Operation: %s", msg.DBOperation)
-	rs.logger.Info("Table: %s", msg.DBTable)
-	rs.logger.Info("Database: %s", msg.DBDatabase)
-	rs.logger.Info("Protocol: %s", msg.DBProtocol)
+	// rs.logger.Info("=== RECEIVED DATABASE QUERY ===")
+	// rs.logger.Info("SessionID: %s", msg.SessionID)
+	// rs.logger.Info("AgentID: %s", msg.AgentID)
+	// rs.logger.Info("ClientID: %s", msg.ClientID)
+	// rs.logger.Info("Operation: %s", msg.DBOperation)
+	// rs.logger.Info("Table: %s", msg.DBTable)
+	// rs.logger.Info("Database: %s", msg.DBDatabase)
+	// rs.logger.Info("Protocol: %s", msg.DBProtocol)
 	rs.logger.Info("Query: %s", msg.DBQuery[:min(100, len(msg.DBQuery))])
 
 	// Log database query to tunnel_logs table only
@@ -1354,17 +1354,19 @@ func (rs *RelayServer) handleDBQuery(conn *websocket.Conn, msg *common.Message) 
 
 // handleShellCommand forwards shell commands from client to agent
 func (rs *RelayServer) handleShellCommand(conn *websocket.Conn, msg *common.Message) {
-	rs.logger.Info("=== SHELL COMMAND ROUTING ===")
-	rs.logger.Info("From Client: %s", msg.ClientID)
-	rs.logger.Info("To Agent: %s", msg.AgentID)
-	rs.logger.Info("Command: %s", msg.DBQuery)
-	rs.logger.Info("Session: %s", msg.SessionID)
+	// rs.logger.Info("=== SHELL COMMAND ROUTING ===")
+	// rs.logger.Info("From Client: %s", msg.ClientID)
+	// rs.logger.Info("To Agent: %s", msg.AgentID)
+	// rs.logger.Info("Command: %s", msg.DBQuery)
+	// rs.logger.Info("Session: %s", msg.SessionID)
 
 	// List all available agents
 	rs.mutex.RLock()
-	rs.logger.Info("Available agents:")
+	// rs.logger.Info("Available agents:")
 	for agentID, agent := range rs.agents {
-		rs.logger.Info("  - Agent ID: %s, Status: %s", agentID, agent.Status)
+		// rs.logger.Info("  - Agent ID: %s, Status: %s", agentID, agent.Status)
+		_ = agentID
+		_ = agent
 	}
 	agent, exists := rs.agents[msg.AgentID]
 	rs.mutex.RUnlock()
@@ -1443,11 +1445,11 @@ func getString(m map[string]interface{}, key string) string {
 
 // handleShellResponse forwards shell command responses from agent to client
 func (rs *RelayServer) handleShellResponse(conn *websocket.Conn, msg *common.Message) {
-	rs.logger.Info("=== SHELL RESPONSE ROUTING ===")
-	rs.logger.Info("From Agent: %s", msg.AgentID)
-	rs.logger.Info("To Client: %s", msg.ClientID)
-	rs.logger.Info("Response Data: %s", string(msg.Data))
-	rs.logger.Info("Session: %s", msg.SessionID)
+	// rs.logger.Info("=== SHELL RESPONSE ROUTING ===")
+	// rs.logger.Info("From Agent: %s", msg.AgentID)
+	// rs.logger.Info("To Client: %s", msg.ClientID)
+	// rs.logger.Info("Response Data: %s", string(msg.Data))
+	// rs.logger.Info("Session: %s", msg.SessionID)
 
 	// Find the target client
 	rs.mutex.RLock()
@@ -1676,9 +1678,9 @@ func (rs *RelayServer) setupRoutes() {
 // API Authentication Middleware (supports Basic Auth)
 func (rs *RelayServer) requireAPIAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rs.logger.Info("=== API AUTH CHECK ===")
-		rs.logger.Info("Method: %s, URL: %s", r.Method, r.URL.Path)
-		rs.logger.Info("Authorization header present: %t", r.Header.Get("Authorization") != "")
+		// rs.logger.Info("=== API AUTH CHECK ===")
+		// rs.logger.Info("Method: %s, URL: %s", r.Method, r.URL.Path)
+		// rs.logger.Info("Authorization header present: %t", r.Header.Get("Authorization") != "")
 
 		// Check for Basic Auth header
 		authHeader := r.Header.Get("Authorization")
@@ -2154,9 +2156,9 @@ func (rs *RelayServer) handleAddAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs *RelayServer) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
-	rs.logger.Info("=== DELETE AGENT REQUEST ===")
-	rs.logger.Info("Method: %s", r.Method)
-	rs.logger.Info("URL Path: %s", r.URL.Path)
+	// rs.logger.Info("=== DELETE AGENT REQUEST ===")
+	// rs.logger.Info("Method: %s", r.Method)
+	// rs.logger.Info("URL Path: %s", r.URL.Path)
 
 	// Extract agent ID from URL path
 	urlPath := r.URL.Path
