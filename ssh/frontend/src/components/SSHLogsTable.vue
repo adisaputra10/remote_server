@@ -37,7 +37,6 @@
               <th>CLIENT</th>
               <th>USER@HOST:PORT</th>
               <th>DIRECTION</th>
-              <th>COMMAND</th>
               <th>DATA</th>
             </tr>
           </thead>
@@ -60,7 +59,6 @@
                   {{ log.direction }}
                 </span>
               </td>
-              <td class="command-cell">{{ log.command }}</td>
               <td class="data-cell">
                 <div class="data-content" :title="log.data">
                   {{ truncateData(log.data, 100) }}
@@ -399,18 +397,9 @@ export default {
 }
 
 .table th:nth-child(7), /* DATA */
-.table td:nth-child(7) {
-  width: 25%;
+.table td:nth-child(6) {
+  width: 30%;
   min-width: 200px;
-}
-
-.command-cell {
-  font-family: 'Courier New', monospace;
-  background: var(--surface-alt);
-  padding: 0.5rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  max-width: none; /* Remove max-width limit */
 }
 
 .data-cell {
