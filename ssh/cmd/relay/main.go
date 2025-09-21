@@ -2381,9 +2381,9 @@ func (rs *RelayServer) handleAddClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs *RelayServer) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
-	rs.logger.Info("=== DELETE CLIENT REQUEST ===")
-	rs.logger.Info("Method: %s", r.Method)
-	rs.logger.Info("URL Path: %s", r.URL.Path)
+	// rs.logger.Info("=== DELETE CLIENT REQUEST ===")
+	// rs.logger.Info("Method: %s", r.Method)
+	// rs.logger.Info("URL Path: %s", r.URL.Path)
 
 	// Extract client ID from URL path
 	urlPath := r.URL.Path
@@ -3022,7 +3022,7 @@ func (rs *RelayServer) handleAPISettings(w http.ResponseWriter, r *http.Request)
 
 // handleGetSettings returns current server settings
 func (rs *RelayServer) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	rs.logger.Info("=== GET SETTINGS REQUEST ===")
+	// rs.logger.Info("=== GET SETTINGS REQUEST ===")
 
 	settings := make(map[string]interface{})
 
