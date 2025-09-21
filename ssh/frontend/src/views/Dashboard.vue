@@ -160,13 +160,17 @@
             <label for="agentToken">Agent Token</label>
             <div class="token-input-group">
               <input 
-                type="password" 
+                :type="showToken ? 'text' : 'password'" 
                 id="agentToken" 
                 v-model="newAgent.token" 
                 placeholder="Enter agent authentication token or generate one"
                 required
                 class="form-input"
               />
+              <button type="button" @click="toggleTokenVisibility" class="btn btn-secondary btn-show">
+                <i class="fas" :class="showToken ? 'fa-eye-slash' : 'fa-eye'"></i>
+                {{ showToken ? 'Hide' : 'Show' }}
+              </button>
               <button type="button" @click="generateToken" class="btn btn-secondary btn-generate">
                 <i class="fas fa-random"></i>
                 Generate
@@ -227,6 +231,7 @@ export default {
     // Add Agent Modal State
     const showAddAgentModal = ref(false)
     const addingAgent = ref(false)
+    const showToken = ref(false)
     const newAgent = ref({
       agentId: '',
       token: ''
@@ -336,9 +341,15 @@ export default {
       newAgent.value.token = generateRandomToken()
     }
 
+    const toggleTokenVisibility = () => {
+      showToken.value = !showToken.value
+      console.log('Token visibility toggled:', showToken.value ? 'visible' : 'hidden')
+    }
+
     const closeAddAgentModal = () => {
       console.log('Closing Add Agent Modal...')
       showAddAgentModal.value = false
+      showToken.value = false
       newAgent.value = {
         agentId: '',
         token: ''
@@ -444,11 +455,13 @@ export default {
       // Add Agent Modal
       showAddAgentModal,
       addingAgent,
+      showToken,
       newAgent,
       openAddAgentModal,
       closeAddAgentModal,
       submitAgent,
       generateToken,
+      toggleTokenVisibility,
       // Other functions
       toggleSidebar,
       toggleUserMenu,
@@ -930,16 +943,35 @@ export default {
   flex: 1;
 }
 
-.btn-generate {
+.btn-show, .btn-generate {
   white-space: nowrap;
   padding: 0.75rem 1rem;
   min-width: auto;
   font-size: 0.875rem;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.btn-show {
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-show:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.btn-generate {
+  background: var(--color-primary);
+  color: white;
+  border: 1px solid var(--color-primary);
 }
 
 .btn-generate:hover {
-  background: var(--surface-alt);
-  border-color: var(--border-color);
+  background: var(--color-primary-dark);
+  border-color: var(--color-primary-dark);
   transform: translateY(-1px);
 }
 </style>
