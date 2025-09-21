@@ -62,11 +62,6 @@ type UniversalClient struct {
 	sessionID    string
 	httpClient   *http.Client
 	lastCommand  string // Store last command for OUTPUT logging
-	
-	// Output buffering for database logging
-	outputBuffer []string
-	bufferTimer  *time.Timer
-	bufferMutex  sync.Mutex
 }
 
 // SSH log request structure
@@ -117,60 +112,17 @@ func (lw *LoggingWriter) Write(p []byte) (n int, err error) {
 		if data != "" && !strings.Contains(data, "INFO:") {
 			// Log to file
 			lw.logger.Info("%s: %s", lw.prefix, data)
-			// Add to buffer for database logging
-			lw.addToBuffer(data)
+			// Send to database immediately (parallel)
+			go lw.sendToDatabase(data)
 		}
 	}
 	// Forward to original writer for clean display
 	return lw.original.Write(p)
 }
 
-func (lw *LoggingWriter) addToBuffer(data string) {
-	if lw.client == nil {
-		return
-	}
-	
-	lw.client.bufferMutex.Lock()
-	defer lw.client.bufferMutex.Unlock()
-	
-	// Add data to buffer
-	lw.client.outputBuffer = append(lw.client.outputBuffer, data)
-	
-	// Reset or create timer
-	if lw.client.bufferTimer != nil {
-		lw.client.bufferTimer.Stop()
-	}
-	
-	// Send buffer to database after 2 seconds of no new output
-	lw.client.bufferTimer = time.AfterFunc(2*time.Second, func() {
-		lw.flushBuffer()
-	})
-}
-
-func (lw *LoggingWriter) flushBuffer() {
-	if lw.client == nil {
-		return
-	}
-	
-	lw.client.bufferMutex.Lock()
-	defer lw.client.bufferMutex.Unlock()
-	
-	if len(lw.client.outputBuffer) == 0 {
-		return
-	}
-	
-	// Combine all buffered output
-	combinedOutput := strings.Join(lw.client.outputBuffer, "\n")
-	
-	// Send to database
-	go lw.sendToDatabase(combinedOutput)
-	
-	// Clear buffer
-	lw.client.outputBuffer = []string{}
-}
-
 func (lw *LoggingWriter) sendToDatabase(data string) {
 	if lw.client == nil || lw.client.tunnelConn == nil {
+		lw.logger.Debug("Cannot send to database: client or connection is nil")
 		return
 	}
 	
@@ -204,7 +156,13 @@ func (lw *LoggingWriter) sendToDatabase(data string) {
 	// Convert to JSON and send
 	if logData, err := json.Marshal(logRequest); err == nil {
 		logMsg.Data = logData
-		lw.client.tunnelConn.WriteJSON(logMsg)
+		if err := lw.client.tunnelConn.WriteJSON(logMsg); err != nil {
+			lw.logger.Debug("Failed to send SSH log to server: %v", err)
+		} else {
+			lw.logger.Debug("SSH log sent to server: %s (%d bytes)", lw.prefix, len(data))
+		}
+	} else {
+		lw.logger.Debug("Failed to marshal SSH log: %v", err)
 	}
 }
 
@@ -402,7 +360,6 @@ func main() {
 				sshUser:     sshUser,
 				sshPassword: sshPassword,
 				httpClient:  &http.Client{Timeout: 5 * time.Second},
-				outputBuffer: make([]string, 0),
 			}
 
 			// Debug: Log token status

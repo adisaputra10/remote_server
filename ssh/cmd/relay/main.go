@@ -1435,11 +1435,16 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 	data := getString(logRequest, "data")
 	isBase64 := getBool(logRequest, "is_base64")
 
+	// Log received data for debugging
+	rs.logger.Info("SSH Log received: SessionID=%s, Direction=%s, IsBase64=%v, DataSize=%d", 
+		sessionID, direction, isBase64, len(data))
+
 	// Decode base64 data if needed
 	actualData := data
 	if isBase64 {
 		if decodedBytes, err := base64.StdEncoding.DecodeString(data); err == nil {
 			actualData = string(decodedBytes)
+			rs.logger.Debug("Decoded base64 data: %.50s...", actualData)
 		} else {
 			rs.logger.Error("Failed to decode base64 data: %v", err)
 		}
@@ -1461,7 +1466,7 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 		Timestamp: time.Now(),
 	})
 
-	rs.logger.Debug("SSH log processed: %s@%s - %s", user, host, direction)
+	rs.logger.Info("SSH log processed and batched: %s@%s - %s (%.30s)", user, host, direction, actualData)
 }
 
 // Helper function to safely get string from map
