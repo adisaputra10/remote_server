@@ -1439,11 +1439,11 @@ func (rs *RelayServer) handleSSHLog(conn *websocket.Conn, msg *common.Message) {
 
 	// Get username from client token
 	username := "unknown"
-	rs.clientsMutex.RLock()
+	rs.mutex.RLock()
 	if client, exists := rs.clients[clientID]; exists {
 		username = getUsernameFromToken(client.Token)
 	}
-	rs.clientsMutex.RUnlock()
+	rs.mutex.RUnlock()
 
 	// Decode base64 data if needed
 	actualData := data
@@ -1723,11 +1723,15 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
 	http.HandleFunc("/api/clients/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients))) // Handle /api/clients/{id}
 	http.HandleFunc("/api/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjects)))
-	http.HandleFunc("/api/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjects))) // Handle /api/projects/{id}
+	http.HandleFunc("/api/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjectsWithSubpaths))) // Handle /api/projects/{id} and subpaths
+	http.HandleFunc("/api/user/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUserProjects))) // Handle user-specific projects
+	http.HandleFunc("/api/user/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUserProjectsWithSubpaths))) // Handle user project agents
 	http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
 	http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
 	http.HandleFunc("/api/ssh-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHLogs)))
 	http.HandleFunc("/api/settings", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISettings)))
+	http.HandleFunc("/api/users", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers)))
+	http.HandleFunc("/api/users/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers))) // Handle /api/users/{id}
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
 
@@ -1894,9 +1898,9 @@ func (rs *RelayServer) getUserProjects(username string) ([]int, error) {
 	// Regular users - get assigned projects only
 	var projects []int
 	rows, err := rs.db.Query(`
-		SELECT DISTINCT upa.project_id FROM user_project_assignments upa 
-		JOIN users u ON upa.user_id = u.id 
-		WHERE u.username = ? AND upa.status = 'active'`, username)
+		SELECT DISTINCT pu.project_id FROM project_users pu 
+		JOIN users u ON pu.user_id = u.id 
+		WHERE u.username = ?`, username)
 	if err != nil {
 		return nil, err
 	}
@@ -2054,20 +2058,63 @@ func (rs *RelayServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // Logout Handler
 func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("tunnel-session")
-	if err == nil {
-		delete(rs.webSessions, cookie.Value)
-		// Clear cookie
-		cookie := &http.Cookie{
+	// Handle both GET (web) and POST (API) requests
+	if r.Method == "POST" {
+		// API logout - return JSON response
+		// Clean up session from cookie
+		cookie, err := r.Cookie("tunnel-session")
+		if err == nil && cookie.Value != "" {
+			delete(rs.webSessions, cookie.Value)
+		}
+		
+		// Also clean up any Basic Auth session if present
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Basic ") {
+			// Decode and get username to potentially clean up any user-specific sessions
+			payload := strings.TrimPrefix(authHeader, "Basic ")
+			if data, err := base64.StdEncoding.DecodeString(payload); err == nil {
+				credentials := strings.SplitN(string(data), ":", 2)
+				if len(credentials) == 2 {
+					username := credentials[0]
+					rs.logger.Info("User %s logged out via API", username)
+				}
+			}
+		}
+		
+		// Clear cookie in response
+		clearCookie := &http.Cookie{
 			Name:     "tunnel-session",
 			Value:    "",
 			Path:     "/",
 			MaxAge:   -1,
 			HttpOnly: true,
 		}
-		http.SetCookie(w, cookie)
+		http.SetCookie(w, clearCookie)
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Logged out successfully",
+		})
+	} else {
+		// Web logout - redirect to login page
+		cookie, err := r.Cookie("tunnel-session")
+		if err == nil && cookie.Value != "" {
+			delete(rs.webSessions, cookie.Value)
+		}
+		
+		// Clear cookie
+		clearCookie := &http.Cookie{
+			Name:     "tunnel-session",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+		}
+		http.SetCookie(w, clearCookie)
+		
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	}
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 // Dashboard Handler
@@ -2509,6 +2556,33 @@ func (rs *RelayServer) handleDeleteClient(w http.ResponseWriter, r *http.Request
 }
 
 // Project Management Handlers
+func (rs *RelayServer) handleAPIProjectsWithSubpaths(w http.ResponseWriter, r *http.Request) {
+	// Parse the URL path to determine routing
+	path := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	pathParts := strings.Split(path, "/")
+
+	// Handle /api/projects/{id} (basic project CRUD)
+	if len(pathParts) == 1 && pathParts[0] != "" {
+		rs.handleAPIProjects(w, r)
+		return
+	}
+
+	// Handle /api/projects/{id}/users
+	if len(pathParts) >= 2 && pathParts[1] == "users" {
+		rs.handleProjectUsers(w, r)
+		return
+	}
+
+	// Handle /api/projects/{id}/agents
+	if len(pathParts) >= 2 && pathParts[1] == "agents" {
+		rs.handleProjectAgents(w, r)
+		return
+	}
+
+	// If no matching subpath, fall back to basic project handler
+	rs.handleAPIProjects(w, r)
+}
+
 func (rs *RelayServer) handleAPIProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
@@ -2522,6 +2596,120 @@ func (rs *RelayServer) handleAPIProjects(w http.ResponseWriter, r *http.Request)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// Handle user-specific projects endpoint (GET only)
+func (rs *RelayServer) handleAPIUserProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Reuse the existing handleGetProjects logic
+	rs.handleGetProjects(w, r)
+}
+
+// Handle user project subpaths like /api/user/projects/{id}/agents
+func (rs *RelayServer) handleAPIUserProjectsWithSubpaths(w http.ResponseWriter, r *http.Request) {
+	// Parse the URL path to determine routing
+	path := strings.TrimPrefix(r.URL.Path, "/api/user/projects/")
+	pathParts := strings.Split(path, "/")
+	
+	if len(pathParts) < 2 || pathParts[0] == "" {
+		http.Error(w, "Invalid request path", http.StatusBadRequest)
+		return
+	}
+	
+	projectID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+	
+	// Verify user has access to this project
+	username := r.Header.Get("X-Username")
+	userProjects, err := rs.getUserProjects(username)
+	if err != nil {
+		http.Error(w, "Failed to verify project access", http.StatusInternalServerError)
+		return
+	}
+	
+	hasAccess := false
+	for _, pid := range userProjects {
+		if pid == projectID {
+			hasAccess = true
+			break
+		}
+	}
+	
+	if !hasAccess {
+		http.Error(w, "Access denied to this project", http.StatusForbidden)
+		return
+	}
+	
+	// Handle different subpaths
+	if len(pathParts) >= 2 && pathParts[1] == "agents" {
+		rs.handleUserProjectAgents(w, r, projectID)
+	} else {
+		http.Error(w, "Invalid request path", http.StatusBadRequest)
+	}
+}
+
+// Handle user access to project agents (read-only)
+func (rs *RelayServer) handleUserProjectAgents(w http.ResponseWriter, r *http.Request, projectID int) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Get agents assigned to this project
+	query := `
+		SELECT pa.agent_id, pa.access_type, a.agent_name, a.status, a.last_ping, a.connected_at
+		FROM project_agents pa
+		LEFT JOIN agents a ON pa.agent_id = a.agent_id
+		WHERE pa.project_id = ?
+		ORDER BY pa.assigned_at DESC
+	`
+	
+	rows, err := rs.db.Query(query, projectID)
+	if err != nil {
+		rs.logger.Error("Failed to query project agents: %v", err)
+		http.Error(w, "Failed to get project agents", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	
+	var agents []map[string]interface{}
+	for rows.Next() {
+		var agentID, accessType sql.NullString
+		var name, status sql.NullString
+		var lastPing, connectedAt sql.NullTime
+		
+		err := rows.Scan(&agentID, &accessType, &name, &status, &lastPing, &connectedAt)
+		if err != nil {
+			rs.logger.Error("Failed to scan agent row: %v", err)
+			continue
+		}
+		
+		agent := map[string]interface{}{
+			"agent_id":     agentID.String,
+			"access_type":  accessType.String,
+			"name":         name.String,
+			"status":       status.String,
+		}
+		
+		if lastPing.Valid {
+			agent["last_ping"] = lastPing.Time
+		}
+		if connectedAt.Valid {
+			agent["connected_at"] = connectedAt.Time
+		}
+		
+		agents = append(agents, agent)
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agents)
 }
 
 func (rs *RelayServer) handleGetProjects(w http.ResponseWriter, r *http.Request) {
@@ -2580,12 +2768,29 @@ func (rs *RelayServer) handleGetProjects(w http.ResponseWriter, r *http.Request)
 		project := map[string]interface{}{
 			"id":           id,
 			"project_name": projectName.String,
+			"name":         projectName.String, // Frontend compatibility
 			"description":  description.String,
 			"created_by":   createdBy.String,
 			"status":       status.String,
 			"created_at":   createdAt.Time,
 			"updated_at":   updatedAt.Time,
 		}
+
+		// Get user count for this project
+		var userCount int
+		err = rs.db.QueryRow("SELECT COUNT(*) FROM project_users WHERE project_id = ?", id).Scan(&userCount)
+		if err != nil {
+			userCount = 0 // Default to 0 if error
+		}
+		project["user_count"] = userCount
+
+		// Get agent count for this project  
+		var agentCount int
+		err = rs.db.QueryRow("SELECT COUNT(*) FROM project_agents WHERE project_id = ?", id).Scan(&agentCount)
+		if err != nil {
+			agentCount = 0 // Default to 0 if error
+		}
+		project["agent_count"] = agentCount
 
 		projects = append(projects, project)
 	}
@@ -2667,8 +2872,84 @@ func (rs *RelayServer) handleUpdateProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Implementation for updating projects
-	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+	// Extract project ID from URL path
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/projects/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	projectID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	// Parse JSON body
+	var projectData struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Status      string `json:"status"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&projectData); err != nil {
+		rs.logger.Error("Failed to decode project data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if strings.TrimSpace(projectData.Name) == "" {
+		http.Error(w, "Project name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate status
+	if projectData.Status != "active" && projectData.Status != "inactive" {
+		projectData.Status = "active" // Default to active
+	}
+
+	// Check if project exists
+	var existingID int
+	err = rs.db.QueryRow("SELECT id FROM projects WHERE id = ?", projectID).Scan(&existingID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Project not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		rs.logger.Error("Failed to check project existence: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Update project in database
+	_, err = rs.db.Exec(`
+		UPDATE projects 
+		SET project_name = ?, description = ?, status = ?, updated_at = NOW() 
+		WHERE id = ?
+	`, projectData.Name, projectData.Description, projectData.Status, projectID)
+
+	if err != nil {
+		rs.logger.Error("Failed to update project: %v", err)
+		http.Error(w, "Failed to update project", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Project updated successfully: ID=%d, Name=%s, Status=%s", projectID, projectData.Name, projectData.Status)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Project updated successfully",
+		"project": map[string]interface{}{
+			"id":          projectID,
+			"name":        projectData.Name,
+			"description": projectData.Description,
+			"status":      projectData.Status,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (rs *RelayServer) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
@@ -2679,8 +2960,572 @@ func (rs *RelayServer) handleDeleteProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Implementation for deleting projects
-	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+	// Extract project ID from URL path
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/projects/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	projectID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	// Check if project exists and get its name for logging
+	var projectName string
+	err = rs.db.QueryRow("SELECT project_name FROM projects WHERE id = ?", projectID).Scan(&projectName)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Project not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		rs.logger.Error("Failed to check project existence: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Begin transaction for cascade deletion
+	tx, err := rs.db.Begin()
+	if err != nil {
+		rs.logger.Error("Failed to begin transaction: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// Delete project users first (foreign key constraint)
+	_, err = tx.Exec("DELETE FROM project_users WHERE project_id = ?", projectID)
+	if err != nil {
+		rs.logger.Error("Failed to delete project users: %v", err)
+		http.Error(w, "Failed to delete project users", http.StatusInternalServerError)
+		return
+	}
+
+	// Delete project agents
+	_, err = tx.Exec("DELETE FROM project_agents WHERE project_id = ?", projectID)
+	if err != nil {
+		rs.logger.Error("Failed to delete project agents: %v", err)
+		http.Error(w, "Failed to delete project agents", http.StatusInternalServerError)
+		return
+	}
+
+	// Finally delete the project
+	_, err = tx.Exec("DELETE FROM projects WHERE id = ?", projectID)
+	if err != nil {
+		rs.logger.Error("Failed to delete project: %v", err)
+		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
+		return
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		rs.logger.Error("Failed to commit transaction: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Project deleted successfully: ID=%d, Name=%s", projectID, projectName)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Project '%s' deleted successfully", projectName),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Project Users Management
+func (rs *RelayServer) handleProjectUsers(w http.ResponseWriter, r *http.Request) {
+	// Only admin can manage project users
+	userRole := r.Header.Get("X-User-Role")
+	if userRole != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	// Extract project ID from URL path
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/projects/"), "/")
+	if len(pathParts) < 2 || pathParts[0] == "" {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	projectID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		rs.handleGetProjectUsers(w, r, projectID)
+	case "POST":
+		rs.handleAddUserToProject(w, r, projectID)
+	case "PATCH":
+		// Handle /api/projects/{id}/users/{userId} for role updates
+		if len(pathParts) >= 3 && pathParts[2] != "" {
+			userID, err := strconv.Atoi(pathParts[2])
+			if err != nil {
+				http.Error(w, "Invalid user ID", http.StatusBadRequest)
+				return
+			}
+			rs.handleUpdateProjectUserRole(w, r, projectID, userID)
+		} else {
+			http.Error(w, "User ID required", http.StatusBadRequest)
+		}
+	case "DELETE":
+		// Handle /api/projects/{id}/users/{userId} for user removal
+		if len(pathParts) >= 3 && pathParts[2] != "" {
+			userID, err := strconv.Atoi(pathParts[2])
+			if err != nil {
+				http.Error(w, "Invalid user ID", http.StatusBadRequest)
+				return
+			}
+			rs.handleRemoveUserFromProject(w, r, projectID, userID)
+		} else {
+			http.Error(w, "User ID required", http.StatusBadRequest)
+		}
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (rs *RelayServer) handleGetProjectUsers(w http.ResponseWriter, r *http.Request, projectID int) {
+	query := `
+		SELECT u.id, u.username, u.role as user_role, pu.role as project_role, pu.assigned_at
+		FROM users u
+		JOIN project_users pu ON u.id = pu.user_id
+		WHERE pu.project_id = ?
+		ORDER BY pu.assigned_at DESC
+	`
+
+	rows, err := rs.db.Query(query, projectID)
+	if err != nil {
+		rs.logger.Error("Failed to get project users: %v", err)
+		http.Error(w, "Failed to get project users", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []map[string]interface{}
+	for rows.Next() {
+		var userID int
+		var username, userRole, projectRole string
+		var assignedAt time.Time
+
+		err := rows.Scan(&userID, &username, &userRole, &projectRole, &assignedAt)
+		if err != nil {
+			rs.logger.Error("Failed to scan project user: %v", err)
+			continue
+		}
+
+		// Map database role back to frontend expected values
+		frontendRole := projectRole
+		if projectRole == "member" {
+			frontendRole = "user" // Map 'member' back to 'user' for frontend
+		}
+
+		users = append(users, map[string]interface{}{
+			"id":           userID,
+			"user_id":      userID, // Frontend expects user_id
+			"username":     username,
+			"user_role":    userRole,
+			"project_role": frontendRole,
+			"role":         frontendRole, // Template also uses just 'role'
+			"assigned_at":  assignedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(users)
+}
+
+func (rs *RelayServer) handleAddUserToProject(w http.ResponseWriter, r *http.Request, projectID int) {
+	var userData struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&userData); err != nil {
+		rs.logger.Error("Failed to decode user data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if strings.TrimSpace(userData.Username) == "" {
+		http.Error(w, "Username is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate role
+	if userData.Role != "admin" && userData.Role != "user" {
+		userData.Role = "user" // Default to user
+	}
+
+	// Get user ID from username
+	var userID int
+	err := rs.db.QueryRow("SELECT id FROM users WHERE username = ?", userData.Username).Scan(&userID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		rs.logger.Error("Failed to get user ID: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if user is already in project
+	var existingID int
+	err = rs.db.QueryRow("SELECT user_id FROM project_users WHERE project_id = ? AND user_id = ?", projectID, userID).Scan(&existingID)
+	if err == nil {
+		http.Error(w, "User is already assigned to this project", http.StatusConflict)
+		return
+	} else if err != sql.ErrNoRows {
+		rs.logger.Error("Failed to check existing project user: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Map frontend role to database enum values
+	dbRole := userData.Role
+	if dbRole == "user" {
+		dbRole = "member" // Map 'user' to 'member' in database
+	}
+
+	// Add user to project
+	_, err = rs.db.Exec(`
+		INSERT INTO project_users (project_id, user_id, role, assigned_at) 
+		VALUES (?, ?, ?, NOW())
+	`, projectID, userID, dbRole)
+
+	if err != nil {
+		rs.logger.Error("Failed to add user to project: %v", err)
+		http.Error(w, "Failed to add user to project", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("User added to project successfully: ProjectID=%d, UserID=%d, Username=%s, Role=%s", projectID, userID, userData.Username, userData.Role)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("User '%s' added to project successfully", userData.Username),
+		"user": map[string]interface{}{
+			"id":       userID,
+			"username": userData.Username,
+			"role":     userData.Role,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleUpdateProjectUserRole(w http.ResponseWriter, r *http.Request, projectID, userID int) {
+	var roleData struct {
+		Role string `json:"role"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&roleData); err != nil {
+		rs.logger.Error("Failed to decode role data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate role
+	if roleData.Role != "admin" && roleData.Role != "user" {
+		http.Error(w, "Invalid role. Must be 'admin' or 'user'", http.StatusBadRequest)
+		return
+	}
+
+	// Map frontend role to database enum values
+	dbRole := roleData.Role
+	if dbRole == "user" {
+		dbRole = "member" // Map 'user' to 'member' in database
+	}
+
+	// Update user role in project
+	result, err := rs.db.Exec(`
+		UPDATE project_users 
+		SET role = ? 
+		WHERE project_id = ? AND user_id = ?
+	`, dbRole, projectID, userID)
+
+	if err != nil {
+		rs.logger.Error("Failed to update user role: %v", err)
+		http.Error(w, "Failed to update user role", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "User not found in project", http.StatusNotFound)
+		return
+	}
+
+	rs.logger.Info("Project user role updated: ProjectID=%d, UserID=%d, Role=%s", projectID, userID, roleData.Role)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "User role updated successfully",
+		"role":    roleData.Role,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleRemoveUserFromProject(w http.ResponseWriter, r *http.Request, projectID, userID int) {
+	// Remove user from project
+	result, err := rs.db.Exec("DELETE FROM project_users WHERE project_id = ? AND user_id = ?", projectID, userID)
+	if err != nil {
+		rs.logger.Error("Failed to remove user from project: %v", err)
+		http.Error(w, "Failed to remove user from project", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "User not found in project", http.StatusNotFound)
+		return
+	}
+
+	rs.logger.Info("User removed from project: ProjectID=%d, UserID=%d", projectID, userID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "User removed from project successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Project Agents Management
+func (rs *RelayServer) handleProjectAgents(w http.ResponseWriter, r *http.Request) {
+	// Only admin can manage project agents
+	userRole := r.Header.Get("X-User-Role")
+	if userRole != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	// Extract project ID from URL path
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/projects/"), "/")
+	if len(pathParts) < 2 || pathParts[0] == "" {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	projectID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		rs.handleGetProjectAgents(w, r, projectID)
+	case "POST":
+		rs.handleAddAgentToProject(w, r, projectID)
+	case "PATCH":
+		// Handle /api/projects/{id}/agents/{agentId} for access type updates
+		if len(pathParts) >= 3 && pathParts[2] != "" {
+			rs.handleUpdateProjectAgent(w, r, projectID, pathParts[2])
+		} else {
+			http.Error(w, "Agent ID required", http.StatusBadRequest)
+		}
+	case "DELETE":
+		// Handle /api/projects/{id}/agents/{agentId}
+		if len(pathParts) >= 3 && pathParts[2] != "" {
+			rs.handleRemoveAgentFromProject(w, r, projectID, pathParts[2])
+		} else {
+			http.Error(w, "Agent ID required", http.StatusBadRequest)
+		}
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (rs *RelayServer) handleGetProjectAgents(w http.ResponseWriter, r *http.Request, projectID int) {
+	query := `
+		SELECT pa.agent_id, pa.access_type, pa.assigned_at
+		FROM project_agents pa
+		WHERE pa.project_id = ?
+		ORDER BY pa.assigned_at DESC
+	`
+
+	rows, err := rs.db.Query(query, projectID)
+	if err != nil {
+		rs.logger.Error("Failed to get project agents: %v", err)
+		http.Error(w, "Failed to get project agents", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var agents []map[string]interface{}
+	for rows.Next() {
+		var agentID, accessType string
+		var assignedAt time.Time
+
+		err := rows.Scan(&agentID, &accessType, &assignedAt)
+		if err != nil {
+			rs.logger.Error("Failed to scan project agent: %v", err)
+			continue
+		}
+
+		agents = append(agents, map[string]interface{}{
+			"agent_id":    agentID,
+			"access_type": accessType,
+			"assigned_at": assignedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agents)
+}
+
+func (rs *RelayServer) handleAddAgentToProject(w http.ResponseWriter, r *http.Request, projectID int) {
+	var agentData struct {
+		AgentID string `json:"agent_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&agentData); err != nil {
+		rs.logger.Error("Failed to decode agent data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if strings.TrimSpace(agentData.AgentID) == "" {
+		http.Error(w, "Agent ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if agent is already in project
+	var existingAgentID string
+	err := rs.db.QueryRow("SELECT agent_id FROM project_agents WHERE project_id = ? AND agent_id = ?", projectID, agentData.AgentID).Scan(&existingAgentID)
+	if err == nil {
+		http.Error(w, "Agent is already assigned to this project", http.StatusConflict)
+		return
+	} else if err != sql.ErrNoRows {
+		rs.logger.Error("Failed to check existing project agent: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Add agent to project
+	_, err = rs.db.Exec(`
+		INSERT INTO project_agents (project_id, agent_id, assigned_at) 
+		VALUES (?, ?, NOW())
+	`, projectID, agentData.AgentID)
+
+	if err != nil {
+		rs.logger.Error("Failed to add agent to project: %v", err)
+		http.Error(w, "Failed to add agent to project", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Agent added to project successfully: ProjectID=%d, AgentID=%s", projectID, agentData.AgentID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Agent '%s' added to project successfully", agentData.AgentID),
+		"agent": map[string]interface{}{
+			"agent_id": agentData.AgentID,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleRemoveAgentFromProject(w http.ResponseWriter, r *http.Request, projectID int, agentID string) {
+	// Remove agent from project
+	result, err := rs.db.Exec("DELETE FROM project_agents WHERE project_id = ? AND agent_id = ?", projectID, agentID)
+	if err != nil {
+		rs.logger.Error("Failed to remove agent from project: %v", err)
+		http.Error(w, "Failed to remove agent from project", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Agent not found in project", http.StatusNotFound)
+		return
+	}
+
+	rs.logger.Info("Agent removed from project: ProjectID=%d, AgentID=%s", projectID, agentID)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Agent removed from project successfully",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (rs *RelayServer) handleUpdateProjectAgent(w http.ResponseWriter, r *http.Request, projectID int, agentID string) {
+	var agentData struct {
+		AccessType string `json:"access_type"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&agentData); err != nil {
+		rs.logger.Error("Failed to decode agent data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate access type
+	if agentData.AccessType != "ssh" && agentData.AccessType != "database" && agentData.AccessType != "both" {
+		agentData.AccessType = "both" // Default to both
+	}
+
+	// Check if agent exists in project
+	var existingAgentID string
+	err := rs.db.QueryRow("SELECT agent_id FROM project_agents WHERE project_id = ? AND agent_id = ?", projectID, agentID).Scan(&existingAgentID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Agent not found in project", http.StatusNotFound)
+		return
+	} else if err != nil {
+		rs.logger.Error("Failed to check project agent: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Update agent access type
+	_, err = rs.db.Exec(`
+		UPDATE project_agents 
+		SET access_type = ? 
+		WHERE project_id = ? AND agent_id = ?
+	`, agentData.AccessType, projectID, agentID)
+
+	if err != nil {
+		rs.logger.Error("Failed to update agent access: %v", err)
+		http.Error(w, "Failed to update agent access", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Agent access updated: ProjectID=%d, AgentID=%s, AccessType=%s", projectID, agentID, agentData.AccessType)
+
+	// Return success response
+	response := map[string]interface{}{
+		"success":     true,
+		"message":     "Agent access updated successfully",
+		"access_type": agentData.AccessType,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (rs *RelayServer) handleAPILogs(w http.ResponseWriter, r *http.Request) {
@@ -2925,7 +3770,7 @@ func (rs *RelayServer) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -3228,6 +4073,308 @@ func (rs *RelayServer) handleUpdateSettings(w http.ResponseWriter, r *http.Reque
 			"serverPort": updateData.ServerPort,
 		},
 	})
+}
+
+// Users API Handler
+func (rs *RelayServer) handleAPIUsers(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetUsers(w, r)
+	case "POST":
+		rs.handleCreateUser(w, r)
+	case "PUT":
+		rs.handleUpdateUser(w, r)
+	case "PATCH":
+		rs.handleUpdateUserRole(w, r)
+	case "DELETE":
+		rs.handleDeleteUser(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Get all users
+func (rs *RelayServer) handleGetUsers(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== GET USERS REQUEST ===")
+
+	rows, err := rs.db.Query(`
+		SELECT id, username, role, token, created_at 
+		FROM users 
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		rs.logger.Error("Failed to query users: %v", err)
+		http.Error(w, "Failed to retrieve users", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var username, role, token, createdAt string
+
+		if err := rows.Scan(&id, &username, &role, &token, &createdAt); err != nil {
+			rs.logger.Error("Failed to scan user: %v", err)
+			continue
+		}
+
+		user := map[string]interface{}{
+			"id":         id,
+			"username":   username,
+			"role":       role,
+			"token":      token,
+			"created_at": createdAt,
+		}
+		users = append(users, user)
+	}
+
+	rs.logger.Info("Retrieved %d users", len(users))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(users)
+}
+
+// Create new user
+func (rs *RelayServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== CREATE USER REQUEST ===")
+
+	var userData struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+		Token    string `json:"token"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&userData); err != nil {
+		rs.logger.Error("Failed to decode user data: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if userData.Username == "" || userData.Password == "" {
+		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Set default role if not provided
+	if userData.Role == "" {
+		userData.Role = "user"
+	}
+
+	// Generate token if not provided
+	if userData.Token == "" {
+		userData.Token = rs.generateSecureToken()
+	}
+
+	// Check if username already exists
+	var count int
+	err := rs.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", userData.Username).Scan(&count)
+	if err != nil {
+		rs.logger.Error("Failed to check username uniqueness: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if count > 0 {
+		http.Error(w, "Username already exists", http.StatusConflict)
+		return
+	}
+
+	// Insert new user
+	result, err := rs.db.Exec(`
+		INSERT INTO users (username, password, role, token) 
+		VALUES (?, ?, ?, ?)
+	`, userData.Username, userData.Password, userData.Role, userData.Token)
+
+	if err != nil {
+		rs.logger.Error("Failed to create user: %v", err)
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	userID, _ := result.LastInsertId()
+	rs.logger.Info("Created user %s with ID %d", userData.Username, userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "User created successfully",
+		"data": map[string]interface{}{
+			"id":       userID,
+			"username": userData.Username,
+			"role":     userData.Role,
+			"token":    userData.Token,
+		},
+	})
+}
+
+// Update existing user
+func (rs *RelayServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== UPDATE USER REQUEST ===")
+
+	// Extract user ID from URL path
+	urlPath := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	userID, err := strconv.Atoi(urlPath)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var userData struct {
+		Username string `json:"username"`
+		Password string `json:"password,omitempty"`
+		Role     string `json:"role"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&userData); err != nil {
+		rs.logger.Error("Failed to decode user data: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Build update query dynamically
+	setParts := []string{}
+	args := []interface{}{}
+
+	if userData.Username != "" {
+		setParts = append(setParts, "username = ?")
+		args = append(args, userData.Username)
+	}
+	if userData.Password != "" {
+		setParts = append(setParts, "password = ?")
+		args = append(args, userData.Password)
+	}
+	if userData.Role != "" {
+		setParts = append(setParts, "role = ?")
+		args = append(args, userData.Role)
+	}
+
+	if len(setParts) == 0 {
+		http.Error(w, "No fields to update", http.StatusBadRequest)
+		return
+	}
+
+	// Add user ID to args
+	args = append(args, userID)
+
+	query := fmt.Sprintf("UPDATE users SET %s WHERE id = ?", strings.Join(setParts, ", "))
+	_, err = rs.db.Exec(query, args...)
+
+	if err != nil {
+		rs.logger.Error("Failed to update user: %v", err)
+		http.Error(w, "Failed to update user", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Updated user ID %d", userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "User updated successfully",
+	})
+}
+
+// Update user role
+func (rs *RelayServer) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== UPDATE USER ROLE REQUEST ===")
+
+	// Extract user ID from URL path
+	urlPath := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	parts := strings.Split(urlPath, "/")
+	if len(parts) < 2 || parts[1] != "role" {
+		http.Error(w, "Invalid URL path", http.StatusBadRequest)
+		return
+	}
+
+	userID, err := strconv.Atoi(parts[0])
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var roleData struct {
+		Role string `json:"role"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&roleData); err != nil {
+		rs.logger.Error("Failed to decode role data: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if roleData.Role != "user" && roleData.Role != "admin" {
+		http.Error(w, "Invalid role. Must be 'user' or 'admin'", http.StatusBadRequest)
+		return
+	}
+
+	_, err = rs.db.Exec("UPDATE users SET role = ? WHERE id = ?", roleData.Role, userID)
+	if err != nil {
+		rs.logger.Error("Failed to update user role: %v", err)
+		http.Error(w, "Failed to update user role", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Updated role for user ID %d to %s", userID, roleData.Role)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "User role updated successfully",
+	})
+}
+
+// Delete user
+func (rs *RelayServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== DELETE USER REQUEST ===")
+
+	// Extract user ID from URL path
+	urlPath := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	userID, err := strconv.Atoi(urlPath)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	// Don't allow deleting admin user
+	var username string
+	err = rs.db.QueryRow("SELECT username FROM users WHERE id = ?", userID).Scan(&username)
+	if err != nil {
+		rs.logger.Error("Failed to find user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	if username == "admin" {
+		http.Error(w, "Cannot delete admin user", http.StatusForbidden)
+		return
+	}
+
+	_, err = rs.db.Exec("DELETE FROM users WHERE id = ?", userID)
+	if err != nil {
+		rs.logger.Error("Failed to delete user: %v", err)
+		http.Error(w, "Failed to delete user", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Deleted user %s (ID %d)", username, userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "User deleted successfully",
+	})
+}
+
+// Generate secure token for users
+func (rs *RelayServer) generateSecureToken() string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	token := make([]byte, 32)
+	for i := range token {
+		token[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+	}
+	return string(token)
 }
 
 func main() {

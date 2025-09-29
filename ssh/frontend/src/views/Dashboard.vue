@@ -6,7 +6,7 @@
         <button class="mobile-menu-toggle" @click="toggleSidebar">
           <i class="fas fa-bars"></i>
         </button>
-        <h1 class="dashboard-title">Welcome back, Admin</h1>
+        <h1 class="dashboard-title">Welcome back, {{ currentUser?.username || 'User' }}</h1>
       </div>
       
       <div class="header-actions">
@@ -17,8 +17,9 @@
         
         <div class="user-menu">
           <button class="user-button" @click="toggleUserMenu">
-            <div class="user-avatar">A</div>
-            <span>Admin User</span>
+            <div class="user-avatar">{{ currentUser?.username?.charAt(0).toUpperCase() || 'U' }}</div>
+            <span>{{ currentUser?.username || 'User' }}</span>
+            <span class="user-role">({{ currentUser?.role?.toUpperCase() || 'USER' }})</span>
             <i class="fas fa-chevron-down"></i>
           </button>
           <div v-show="showUserMenu" class="dropdown-menu">
@@ -44,58 +45,12 @@
       <!-- Sidebar -->
       <nav class="sidebar" :class="{ 'open': sidebarOpen }">
         <ul class="sidebar-menu">
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'agents' }" @click="switchTab('agents')">
-              <i class="fas fa-server"></i>
-              <span>Agents</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'project' }" @click="switchTab('project')">
-              <i class="fas fa-project-diagram"></i>
-              <span>Project</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'remoteSSH' }" @click="switchTab('remoteSSH')">
-              <i class="fas fa-server"></i>
-              <span>Remote SSH Management</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'clients' }" @click="switchTab('clients')">
-              <i class="fas fa-users"></i>
-              <span>History Client</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'logs' }" @click="switchTab('logs')">
-              <i class="fas fa-list-alt"></i>
-              <span>Connection Logs</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'database' }" @click="switchTab('database')">
-              <i class="fas fa-database"></i>
-              <span>Database Queries</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'ssh' }" @click="switchTab('ssh')">
-              <i class="fas fa-terminal"></i>
-              <span>SSH Commands</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'userManagement' }" @click="switchTab('userManagement')">
-              <i class="fas fa-user-cog"></i>
-              <span>User Management</span>
-            </a>
-          </li>
-          <li class="sidebar-item">
-            <a href="#" class="sidebar-link" :class="{ 'active': activeTab === 'settings' }" @click="switchTab('settings')">
-              <i class="fas fa-cog"></i>
-              <span>Settings</span>
+          <li v-for="menuItem in visibleMenuItems" :key="menuItem.route" class="sidebar-item">
+            <a href="#" class="sidebar-link" 
+               :class="{ 'active': activeTab === menuItem.route }" 
+               @click="switchTab(menuItem.route)">
+              <i class="fas" :class="menuItem.icon"></i>
+              <span>{{ menuItem.name }}</span>
             </a>
           </li>
         </ul>
@@ -147,14 +102,14 @@
 
         <!-- Tab Content -->
         <div class="tab-content">
-          <AgentsTable v-if="activeTab === 'agents'" @open-add-agent-modal="openAddAgentModal" />
+                    <AgentsTable v-if="activeTab === 'agents' && isAdmin" @open-add-agent-modal="openAddAgentModal" />
           <ClientsTable v-if="activeTab === 'clients'" />
           <LogsTable v-if="activeTab === 'logs'" />
-          <QueriesTable v-if="activeTab === 'database'" />
-          <SSHLogsTable v-if="activeTab === 'ssh'" />
+          <QueriesTable v-if="activeTab === 'queries'" />
+          <SSHLogsTable v-if="activeTab === 'sshLogs'" />
           <RemoteSSHManagement v-if="activeTab === 'remoteSSH'" />
           <UserManagement v-if="activeTab === 'userManagement'" />
-          <ProjectManagement v-if="activeTab === 'project'" />
+          <ProjectManagement v-if="activeTab === 'projects'" />
           <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
@@ -224,7 +179,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import AgentsTable from '../components/AgentsTable.vue'
 import ClientsTable from '../components/ClientsTable.vue'
@@ -236,6 +191,7 @@ import RemoteSSHManagement from '../components/RemoteSSHManagement.vue'
 import UserManagement from '../components/UserManagement.vue'
 import ProjectManagement from '../components/ProjectManagement.vue'
 import { apiService } from '../config/api.js'
+import { currentUser, clearUser, getVisibleMenuItems, hasPermission, isAdmin } from '../utils/auth.js'
 
 export default {
   name: 'Dashboard',
@@ -252,7 +208,9 @@ export default {
   },
   setup() {
     const router = useRouter()
-    const activeTab = ref('agents')
+    // Set default tab based on user role
+    const defaultTab = isAdmin.value ? 'agents' : 'projects'
+    const activeTab = ref(defaultTab)
     const sidebarOpen = ref(false)
     const showUserMenu = ref(false)
     const isDark = ref(false)
@@ -262,6 +220,11 @@ export default {
       activeClients: 0,
       totalConnections: 0,
       dataTransferred: '0GB'
+    })
+
+    // Role-based menu items using auth utility
+    const visibleMenuItems = computed(() => {
+      return getVisibleMenuItems()
     })
 
     // Add Agent Modal State
@@ -347,6 +310,14 @@ export default {
     }
 
     const switchTab = (tab) => {
+      // Check if user has permission to access this tab
+      const adminOnlyTabs = ['agents', 'clients', 'logs', 'queries', 'sshLogs', 'remoteSSH', 'userManagement', 'settings']
+      
+      if (adminOnlyTabs.includes(tab) && !isAdmin.value) {
+        console.warn('Access denied: Admin privileges required for this tab')
+        return
+      }
+      
       activeTab.value = tab
       showUserMenu.value = false
     }
@@ -451,23 +422,47 @@ export default {
     }
 
     const logout = async () => {
+      // Set flag to prevent auto-login in development
+      localStorage.setItem('logging_out', 'true')
+      
       try {
         await apiService.logout()
       } catch (error) {
         console.error('Logout error:', error)
         // Continue with logout even if API call fails
       } finally {
-        localStorage.removeItem('auth_token')
-        localStorage.removeItem('user_name')
+        clearUser()
         router.push('/login')
       }
     }
 
     onMounted(() => {
+      // Check authentication first
+      const isAuthenticated = localStorage.getItem('auth_token')
+      if (!isAuthenticated) {
+        console.log('No authentication token found, redirecting to login')
+        router.push('/login')
+        return
+      }
+      
+      // Verify token is valid by checking if user data exists
+      const userName = localStorage.getItem('user_name')
+      if (!userName) {
+        console.log('Invalid authentication data, redirecting to login')
+        clearUser()
+        router.push('/login')
+        return
+      }
+      
       const savedTheme = localStorage.getItem('theme')
       if (savedTheme === 'dark') {
         isDark.value = true
         document.documentElement.setAttribute('data-theme', 'dark')
+      }
+      
+      // Set default tab based on user role
+      if (!isAdmin.value) {
+        activeTab.value = 'projects'
       }
       
       // Fetch initial dashboard stats from API
@@ -487,6 +482,8 @@ export default {
       showUserMenu,
       isDark,
       stats,
+      currentUser,
+      visibleMenuItems,
       fetchDashboardStats,
       // Add Agent Modal
       showAddAgentModal,
@@ -504,7 +501,8 @@ export default {
       toggleTheme,
       switchTab,
       showToast,
-      logout
+      logout,
+      isAdmin
     }
   }
 }
@@ -607,6 +605,12 @@ export default {
 .user-button:hover {
   background: var(--surface-alt);
   border-color: var(--primary-color);
+}
+
+.user-role {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .user-avatar {

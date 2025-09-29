@@ -67,6 +67,7 @@
 import { defineComponent, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiService } from '../config/api.js'
+import { setUser } from '../utils/auth.js'
 
 export default defineComponent({
   name: 'Login',
@@ -89,14 +90,28 @@ export default defineComponent({
         // Encode credentials for Basic Auth
         const credentials = btoa(`${form.value.username}:${form.value.password}`)
         
-        await apiService.login({
+        const response = await apiService.login({
           username: form.value.username,
           password: form.value.password
         })
         
-        // Store auth token and username
-        localStorage.setItem('auth_token', credentials)
-        localStorage.setItem('user_name', form.value.username)
+        // Get user role from response or default to 'user'
+        let userRole = 'user'
+        if (response.data && response.data.role) {
+          userRole = response.data.role
+        } else {
+          // If no role in response, assume admin for 'admin' username, user for others
+          userRole = form.value.username === 'admin' ? 'admin' : 'user'
+        }
+        
+        // Set user in auth store
+        setUser({
+          username: form.value.username,
+          role: userRole,
+          token: credentials
+        })
+        
+        console.log(`User ${form.value.username} logged in with role: ${userRole}`)
         
         // Redirect to dashboard
         router.push('/dashboard')

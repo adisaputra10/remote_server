@@ -133,6 +133,95 @@ export const apiService = {
 
   saveSettings(settings) {
     return api.put('/api/settings', settings)
+  },
+
+  // User Management
+  getUsers() {
+    return api.get('/api/users')
+  },
+
+  addUser(userData) {
+    return api.post('/api/users', userData)
+  },
+
+  updateUser(userId, userData) {
+    return api.put(`/api/users/${userId}`, userData)
+  },
+
+  deleteUser(userId) {
+    return api.delete(`/api/users/${userId}`)
+  },
+
+  updateUserRole(userId, role) {
+    return api.patch(`/api/users/${userId}/role`, { role })
+  },
+
+  // Project Management
+  getProjects() {
+    return api.get('/api/projects')
+  },
+
+  getUserProjects() {
+    return api.get('/api/user/projects')
+  },
+
+  getUserProjectAgents(projectId) {
+    return api.get(`/api/user/projects/${projectId}/agents`)
+  },
+
+  getProject(projectId) {
+    return api.get(`/api/projects/${projectId}`)
+  },
+
+  addProject(projectData) {
+    return api.post('/api/projects', projectData)
+  },
+
+  updateProject(projectId, projectData) {
+    return api.put(`/api/projects/${projectId}`, projectData)
+  },
+
+  deleteProject(projectId) {
+    return api.delete(`/api/projects/${projectId}`)
+  },
+
+  // Project Users
+  getProjectUsers(projectId) {
+    return api.get(`/api/projects/${projectId}/users`)
+  },
+
+  addUserToProject(projectId, userData) {
+    return api.post(`/api/projects/${projectId}/users`, userData)
+  },
+
+  updateProjectUserRole(projectId, userId, role) {
+    return api.patch(`/api/projects/${projectId}/users/${userId}`, { role })
+  },
+
+  removeUserFromProject(projectId, userId) {
+    return api.delete(`/api/projects/${projectId}/users/${userId}`)
+  },
+
+  // Project Agents
+  getProjectAgents(projectId) {
+    return api.get(`/api/projects/${projectId}/agents`)
+  },
+
+  addAgentToProject(projectId, agentData) {
+    return api.post(`/api/projects/${projectId}/agents`, agentData)
+  },
+
+  updateProjectAgent(projectId, agentId, agentData) {
+    return api.patch(`/api/projects/${projectId}/agents/${agentId}`, agentData)
+  },
+
+  removeAgentFromProject(projectId, agentId) {
+    return api.delete(`/api/projects/${projectId}/agents/${agentId}`)
+  },
+
+  // User Projects (for getting projects a user has access to)
+  getUserProjects() {
+    return api.get('/api/user/projects')
   }
 }
 

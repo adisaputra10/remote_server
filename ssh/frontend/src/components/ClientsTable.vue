@@ -1,12 +1,8 @@
 ﻿<template>
   <div class="clients-table-container">
-    <div class="table-header">
+        <div class="table-header">
       <h2 class="table-title">History Client</h2>
       <div class="table-actions">
-        <button class="btn btn-success" @click="openAddClientModal">
-          <i class="fas fa-plus"></i>
-          Add Client
-        </button>
         <button class="btn btn-primary" @click="refreshData">
           <i class="fas fa-sync-alt"></i>
           Refresh
@@ -69,84 +65,12 @@
         </table>
       </div>
       
-      <Pagination
+            <Pagination
         :current-page="currentPage"
         :total-items="allClients.length"
         :items-per-page="itemsPerPage"
         @page-changed="handlePageChange"
       />
-    </div>
-
-    <!-- Add Client Modal -->
-    <div v-if="showAddModal" class="modal-overlay" @click="closeAddClientModal">
-      <div class="modal" @click.stop>
-        <div class="modal-header">
-          <h3>Add New Client</h3>
-          <button class="btn-close" @click="closeAddClientModal">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-        
-        <form @submit.prevent="submitClient" class="modal-body">
-          <div class="form-group">
-            <label for="clientId">Client ID *</label>
-            <input
-              id="clientId"
-              v-model="newClient.clientId"
-              type="text"
-              class="form-input"
-              placeholder="Enter client ID (e.g., mysql-client)"
-              required
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="clientName">Name *</label>
-            <input
-              id="clientName"
-              v-model="newClient.name"
-              type="text"
-              class="form-input"
-              placeholder="Enter client name (e.g., MySQL Database Tunnel)"
-              required
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="clientToken">Token *</label>
-            <div class="token-input-group">
-              <input
-                id="clientToken"
-                v-model="newClient.token"
-                :type="showToken ? 'text' : 'password'"
-                class="form-input"
-                placeholder="Enter authentication token or generate one"
-                required
-              />
-              <button type="button" @click="toggleTokenVisibility" class="btn btn-secondary btn-show">
-                <i class="fas" :class="showToken ? 'fa-eye-slash' : 'fa-eye'"></i>
-                {{ showToken ? 'Hide' : 'Show' }}
-              </button>
-              <button type="button" @click="generateToken" class="btn btn-secondary btn-generate">
-                <i class="fas fa-random"></i>
-                Generate
-              </button>
-            </div>
-            <small class="form-help">Authentication token for client connection (auto-generated or custom)</small>
-          </div>
-          
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" @click="closeAddClientModal">
-              Cancel
-            </button>
-            <button type="submit" class="btn btn-success" :disabled="submitting">
-              <i class="fas fa-spinner fa-spin" v-if="submitting"></i>
-              <i class="fas fa-plus" v-else></i>
-              {{ submitting ? 'Adding...' : 'Add Client' }}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
 
     <!-- Delete Client Confirmation Modal -->
@@ -201,16 +125,6 @@ export default {
     const error = ref(null)
     const currentPage = ref(1)
     const itemsPerPage = ref(20)
-
-    // Add Client Modal Data
-    const showAddModal = ref(false)
-    const submitting = ref(false)
-    const showToken = ref(false)
-    const newClient = ref({
-      clientId: '',
-      name: '',
-      token: ''
-    })
 
     // Delete Modal Data  
     const showDeleteModal = ref(false)
@@ -326,95 +240,6 @@ export default {
       currentPage.value = page
     }
 
-    // Add Client Modal Functions
-    const openAddClientModal = () => {
-      console.log('Opening Add Client modal')
-      showAddModal.value = true
-      // Reset form with auto-generated token
-      newClient.value = {
-        clientId: '',
-        name: '',
-        token: generateRandomToken()
-      }
-      showToken.value = false
-    }
-
-    const generateRandomToken = () => {
-      // Generate a secure random token (32 characters)
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-      let result = ''
-      for (let i = 0; i < 32; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length))
-      }
-      return result
-    }
-
-    const generateToken = () => {
-      console.log('Generating new token...')
-      newClient.value.token = generateRandomToken()
-    }
-
-    const toggleTokenVisibility = () => {
-      showToken.value = !showToken.value
-      console.log('Token visibility toggled:', showToken.value ? 'visible' : 'hidden')
-    }
-
-    const closeAddClientModal = () => {
-      console.log('Closing Add Client modal')
-      showAddModal.value = false
-      submitting.value = false
-      showToken.value = false
-      // Reset form
-      newClient.value = {
-        clientId: '',
-        name: '',
-        token: ''
-      }
-    }
-
-    const submitClient = async () => {
-      console.log('=== SUBMITTING NEW CLIENT ===')
-      console.log('Client data:', newClient.value)
-      
-      if (!newClient.value.clientId || !newClient.value.name || !newClient.value.token) {
-        alert('Please fill in all required fields')
-        return
-      }
-      
-      submitting.value = true
-      
-      try {
-        console.log('Adding client via API:', newClient.value)
-        
-        const response = await apiService.addClient({
-          client_id: newClient.value.clientId,
-          client_name: newClient.value.name,
-          token: newClient.value.token,
-          status: 'disconnected'
-        })
-        
-        console.log('Client added successfully:', response.data)
-        
-        // Show success message
-        alert(`Client "${newClient.value.name}" added successfully!\n\nClient ID: ${newClient.value.clientId}\nName: ${newClient.value.name}`)
-        
-        // Close modal and refresh data
-        closeAddClientModal()
-        fetchClients()
-        
-      } catch (error) {
-        console.error('Error adding client:', error)
-        if (error.response) {
-          console.error('Response error:', error.response.data)
-          alert(`Failed to add client: ${error.response.data.error || error.message}`)
-        } else {
-          alert('Failed to add client. Please try again.')
-        }
-      } finally {
-        submitting.value = false
-      }
-    }
-
     // Delete Functions
     const showDelete = (clientId) => {
       console.log(`Showing delete confirmation for client: ${clientId}`)
@@ -474,10 +299,6 @@ export default {
       error,
       currentPage,
       itemsPerPage,
-      showAddModal,
-      submitting,
-      showToken,
-      newClient,
       showDeleteModal,
       clientToDelete,
       serverSettings,
@@ -486,11 +307,6 @@ export default {
       disconnectClient,
       handlePageChange,
       getStatusText,
-      openAddClientModal,
-      closeAddClientModal,
-      submitClient,
-      generateToken,
-      toggleTokenVisibility,
       showDelete,
       closeDeleteModal,
       deleteClient
