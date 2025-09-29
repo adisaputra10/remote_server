@@ -98,7 +98,7 @@ const canAccessPage = (pageName) => {
     'logs',
     'queries',
     'sshLogs',
-    'project' // Allow users to access project page
+    'projects' // Allow users to access projects page
   ]
   
   // Admin-only pages
@@ -124,14 +124,14 @@ const getVisibleMenuItems = () => {
   // For regular users, only show Projects menu
   if (role === 'user') {
     return [
-      { name: 'Projects', route: 'project', permission: 'view_projects', icon: 'fa-project-diagram' }
+      { name: 'Projects', route: 'projects', permission: 'view_projects', icon: 'fa-project-diagram' }
     ]
   }
   
   // For admin users, show all menus
   const allMenuItems = [
     { name: 'Agents', route: 'agents', permission: 'view_agents', icon: 'fa-server' },
-    { name: 'Projects', route: 'project', permission: 'manage_projects', icon: 'fa-project-diagram' },
+    { name: 'Projects', route: 'projects', permission: 'manage_projects', icon: 'fa-project-diagram' },
     { name: 'Remote SSH Management', route: 'remoteSSH', permission: 'manage_ssh', icon: 'fa-terminal' },
     { name: 'History Client', route: 'clients', permission: 'view_clients', icon: 'fa-users' },
     { name: 'Connection Logs', route: 'logs', permission: 'view_logs', icon: 'fa-list-alt' },
