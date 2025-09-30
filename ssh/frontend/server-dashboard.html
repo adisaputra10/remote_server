@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ServerHub Pro - Management Dashboard</title>
+    <title>zconnect - Management Dashboard</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
@@ -1199,9 +1199,27 @@
         <div class="login-card">
             <div class="logo">
                 <div class="logo-icon">
-                    <i class="fas fa-server"></i>
+                    <svg width="48" height="48" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="20" cy="20" r="20" fill="url(#gradient)"/>
+                        <path d="M12 14H28V17L17 26H28V30H12V27L23 18H12V14Z" fill="white" stroke="white" stroke-width="0.5"/>
+                        <circle cx="10" cy="10" r="2" fill="white" opacity="0.8"/>
+                        <circle cx="30" cy="10" r="2" fill="white" opacity="0.8"/>
+                        <circle cx="10" cy="30" r="2" fill="white" opacity="0.8"/>
+                        <circle cx="30" cy="30" r="2" fill="white" opacity="0.8"/>
+                        <line x1="10" y1="10" x2="15" y2="15" stroke="white" stroke-width="1" opacity="0.6"/>
+                        <line x1="30" y1="10" x2="25" y2="15" stroke="white" stroke-width="1" opacity="0.6"/>
+                        <line x1="10" y1="30" x2="15" y2="25" stroke="white" stroke-width="1" opacity="0.6"/>
+                        <line x1="30" y1="30" x2="25" y2="25" stroke="white" stroke-width="1" opacity="0.6"/>
+                        <defs>
+                            <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#6366f1"/>
+                                <stop offset="50%" stop-color="#8b5cf6"/>
+                                <stop offset="100%" stop-color="#a855f7"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
                 </div>
-                <h1>ServerHub Pro</h1>
+                <h1>zconnect</h1>
                 <p>Professional Management Dashboard</p>
             </div>
             
@@ -1722,7 +1740,7 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>© 2024 ServerHub Pro. Enterprise Management Dashboard v2.1.0</p>
+            <p>© 2024 zconnect. Enterprise Management Dashboard v2.1.0</p>
         </footer>
     </div>
 
@@ -1779,7 +1797,7 @@
                         localStorage.setItem('rememberedUser', username);
                     }
                     
-                    showToast('Login Successful', 'Welcome back to ServerHub Pro!', 'success');
+                    showToast('Login Successful', 'Welcome back to zconnect!', 'success');
                     simulateRealTimeData();
                 } else {
                     const errorMessage = document.getElementById('errorMessage');

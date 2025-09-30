@@ -73,7 +73,8 @@ const hasPermission = (permission) => {
       'view_clients', 
       'view_logs',
       'view_ssh_commands',
-      'view_projects' // Add projects permission for users
+      'view_projects', // Add projects permission for users
+      'view_ssh' // Add SSH management permission for users
     ]
     return userPermissions.includes(permission)
   }
@@ -98,7 +99,8 @@ const canAccessPage = (pageName) => {
     'logs',
     'queries',
     'sshLogs',
-    'projects' // Allow users to access projects page
+    'projects', // Allow users to access projects page
+    'sshManagement' // Allow users to access SSH Management page
   ]
   
   // Admin-only pages
@@ -121,18 +123,19 @@ const getVisibleMenuItems = () => {
   
   const role = currentUser.value?.role
   
-  // For regular users, only show Projects menu
+  // For regular users, show Projects and SSH Management
   if (role === 'user') {
     return [
-      { name: 'Projects', route: 'projects', permission: 'view_projects', icon: 'fa-project-diagram' }
+      { name: 'Projects', route: 'projects', permission: 'view_projects', icon: 'fa-project-diagram' },
+      { name: 'SSH Management', route: 'sshManagement', permission: 'view_ssh', icon: 'fa-key' }
     ]
   }
   
-  // For admin users, show all menus
+  // For admin users, show all menus except Remote SSH Management
   const allMenuItems = [
     { name: 'Agents', route: 'agents', permission: 'view_agents', icon: 'fa-server' },
     { name: 'Projects', route: 'projects', permission: 'manage_projects', icon: 'fa-project-diagram' },
-    { name: 'Remote SSH Management', route: 'remoteSSH', permission: 'manage_ssh', icon: 'fa-terminal' },
+    { name: 'SSH Management', route: 'sshManagement', permission: 'manage_ssh', icon: 'fa-key' },
     { name: 'History Client', route: 'clients', permission: 'view_clients', icon: 'fa-users' },
     { name: 'Connection Logs', route: 'logs', permission: 'view_logs', icon: 'fa-list-alt' },
     { name: 'Database Queries', route: 'queries', permission: 'view_logs', icon: 'fa-database' },

@@ -1,4 +1,4 @@
-# SSH Tunnel System - Dokumentasi
+# zconnect System - Dokumentasi
 
 ## Deskripsi
 Sistem ini adalah implementasi lengkap untuk manajemen tunnel SSH yang terdiri dari tiga komponen utama:

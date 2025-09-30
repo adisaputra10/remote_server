@@ -1,6 +1,6 @@
-# SSH Tunnel Dashboard Frontend
+# zconnect Dashboard Frontend
 
-Vue.js 3 frontend untuk SSH Tunnel Dashboard dengan Vite build system.
+Vue.js 3 frontend untuk zconnect Dashboard dengan Vite build system.
 
 ## Features
 

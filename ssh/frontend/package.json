@@ -1,7 +1,7 @@
 {
-  "name": "ssh-tunnel-dashboard",
+  "name": "zconnect-dashboard",
   "version": "1.0.0",
-  "description": "SSH Tunnel Dashboard Vue.js Frontend",
+  "description": "Zconnect Dashboard Vue.js Frontend",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

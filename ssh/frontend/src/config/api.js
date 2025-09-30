@@ -222,6 +222,35 @@ export const apiService = {
   // User Projects (for getting projects a user has access to)
   getUserProjects() {
     return api.get('/api/user/projects')
+  },
+
+  // SSH Management
+  getSSHManagement() {
+    return api.get('/api/ssh-management')
+  },
+
+  updateSSHManagement(agentId, sshManagement) {
+    return api.put('/api/ssh-management', {
+      agent_id: agentId,
+      ssh_management: sshManagement
+    })
+  },
+
+  // SSH Connections
+  getSSHConnections() {
+    return api.get('/api/ssh-connections')
+  },
+
+  addSSHConnection(sshData) {
+    return api.post('/api/ssh-connections', sshData)
+  },
+
+  updateSSHConnection(id, sshData) {
+    return api.put(`/api/ssh-connections/${id}`, sshData)
+  },
+
+  deleteSSHConnection(id) {
+    return api.delete(`/api/ssh-connections/${id}`)
   }
 }
 

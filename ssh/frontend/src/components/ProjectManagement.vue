@@ -109,41 +109,68 @@
       
       <!-- User Access Section -->
       <div v-if="!isAdmin" class="dashboard-section">
-        <h3>{{ selectedProject.project_name }} Project</h3>
+        <h3>Available Connections</h3>
         
-        <div v-if="dashboardAgents.length === 0" class="user-project-message">
-          <i class="fas fa-info-circle"></i>
-          <p>You have access to this project, but no agents are currently available. Contact your administrator for agent access.</p>
+        <div v-if="dashboardAgents.length === 0" class="empty-message">
+          No agents available in this project
         </div>
         
-        <div v-else class="available-agents">
-          <h4>Available Connections</h4>
-          <div class="agents-grid">
-            <div v-for="agent in dashboardAgents" :key="agent.agent_id" class="agent-card">
-              <div class="agent-header">
-                <h5>{{ agent.agent_id }}</h5>
-                <span class="status" :class="agent.status">{{ agent.status }}</span>
-              </div>
-              <div class="agent-details">
-                <p><strong>Access Type:</strong> {{ agent.access_type }}</p>
-                <div v-if="agent.status === 'connected'" class="agent-actions">
-                  <button v-if="agent.access_type === 'ssh' || agent.access_type === 'both'" 
-                          class="btn-action ssh" 
-                          @click="connectSSH(agent.agent_id)">
-                    <i class="fas fa-terminal"></i> SSH
-                  </button>
-                  <button v-if="agent.access_type === 'database' || agent.access_type === 'both'" 
-                          class="btn-action tunnel" 
-                          @click="openDatabaseTunnel(agent.agent_id)">
-                    <i class="fas fa-database"></i> Database
-                  </button>
-                </div>
-                <div v-else class="agent-offline">
-                  <i class="fas fa-exclamation-triangle"></i> Agent offline
-                </div>
-              </div>
-            </div>
-          </div>
+        <div v-else class="dashboard-table-container">
+          <table class="dashboard-table">
+            <thead>
+              <tr>
+                <th><i class="fas fa-server"></i> Agent ID</th>
+                <th><i class="fas fa-key"></i> Access Type</th>
+                <th><i class="fas fa-wifi"></i> Status</th>
+                <th><i class="fas fa-cogs"></i> Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="agent in dashboardAgents" :key="agent.agent_id" class="agent-row">
+                <td class="agent-id-cell">
+                  <div class="agent-id-info">
+                    <i class="fas fa-server agent-icon"></i>
+                    <span class="agent-name">{{ agent.agent_id }}</span>
+                  </div>
+                </td>
+                <td class="access-type-cell">
+                  <span :class="['access-badge', 'access-' + getAccessTypeBadgeClass(agent.access_type)]">
+                    <i :class="getAccessTypeIcon(agent.access_type)"></i>
+                    {{ formatAccessType(agent.access_type) }}
+                  </span>
+                </td>
+                <td class="status-cell">
+                  <span :class="['status-badge', isAgentOnline(agent.agent_id) ? 'status-online' : 'status-offline']">
+                    <i :class="['fas', isAgentOnline(agent.agent_id) ? 'fa-circle' : 'fa-exclamation-triangle']"></i>
+                    {{ isAgentOnline(agent.agent_id) ? 'Online' : 'Offline' }}
+                  </span>
+                </td>
+                <td class="actions-cell">
+                  <div class="action-buttons">
+                    <button 
+                      v-if="agent.access_type === 'ssh' || agent.access_type === 'both'"
+                      class="action-btn ssh-btn"
+                      @click="connectSSH(agent.agent_id)"
+                      :disabled="!isAgentOnline(agent.agent_id)"
+                      title="SSH Connect">
+                      <i class="fas fa-terminal"></i>
+                      <span>SSH</span>
+                    </button>
+                    
+                    <button 
+                      v-if="agent.access_type === 'database' || agent.access_type === 'both'"
+                      class="action-btn tunnel-btn"
+                      @click="openDatabaseTunnel(agent.agent_id)"
+                      :disabled="!isAgentOnline(agent.agent_id)"
+                      title="Database Tunnel">
+                      <i class="fas fa-database"></i>
+                      <span>Tunnel</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
       
@@ -2562,6 +2589,31 @@ export default {
   background: rgba(139, 92, 246, 0.1);
   color: var(--color-info);
   border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+/* Status badges for online/offline */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.status-online {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--color-success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-offline {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-danger);
+  border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
 .connection-type-badge {

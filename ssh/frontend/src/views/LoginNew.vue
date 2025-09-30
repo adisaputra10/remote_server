@@ -3,9 +3,9 @@
     <div class="login-box">
       <div class="logo">
         <div class="logo-icon">
-          <i class="fas fa-server"></i>
+          <img :src="ZconnectLogo" alt="zconnect" class="logo-image" />
         </div>
-        <h1>ServerHub Pro</h1>
+        <h1>zconnect</h1>
         <p>Professional Management Dashboard</p>
       </div>
       
@@ -68,6 +68,7 @@ import { defineComponent, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiService } from '../config/api.js'
 import { setUser } from '../utils/auth.js'
+import ZconnectLogo from '../assets/zconnect-logo.svg?url'
 
 export default defineComponent({
   name: 'Login',
@@ -145,7 +146,8 @@ export default defineComponent({
       isLoading,
       errorMessage,
       handleLogin,
-      showForgotPassword
+      showForgotPassword,
+      ZconnectLogo
     }
   }
 })
@@ -207,6 +209,13 @@ export default defineComponent({
   color: white;
   font-size: 28px;
   box-shadow: var(--shadow-lg);
+  padding: 8px;
+}
+
+.logo-image {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
 }
 
 .logo h1 {

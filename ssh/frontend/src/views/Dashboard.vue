@@ -6,6 +6,9 @@
         <button class="mobile-menu-toggle" @click="toggleSidebar">
           <i class="fas fa-bars"></i>
         </button>
+        <div class="dashboard-logo">
+          <img :src="ZconnectLogo" alt="zconnect" class="logo-image" />
+        </div>
         <h1 class="dashboard-title">Welcome back, {{ currentUser?.username || 'User' }}</h1>
       </div>
       
@@ -110,6 +113,7 @@
           <RemoteSSHManagement v-if="activeTab === 'remoteSSH'" />
           <UserManagement v-if="activeTab === 'userManagement'" />
           <ProjectManagement v-if="activeTab === 'projects'" />
+          <SSHManagement v-if="activeTab === 'sshManagement'" />
           <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
@@ -190,8 +194,10 @@ import Settings from '../components/Settings.vue'
 import RemoteSSHManagement from '../components/RemoteSSHManagement.vue'
 import UserManagement from '../components/UserManagement.vue'
 import ProjectManagement from '../components/ProjectManagement.vue'
+import SSHManagement from '../components/SSHManagement.vue'
 import { apiService } from '../config/api.js'
-import { currentUser, clearUser, getVisibleMenuItems, hasPermission, isAdmin } from '../utils/auth.js'
+import { currentUser, clearUser, getVisibleMenuItems, isAdmin } from '../utils/auth.js'
+import ZconnectLogo from '../assets/zconnect-logo.svg?url'
 
 export default {
   name: 'Dashboard',
@@ -204,7 +210,8 @@ export default {
   Settings,
   RemoteSSHManagement,
   UserManagement,
-  ProjectManagement
+  ProjectManagement,
+  SSHManagement
   },
   setup() {
     const router = useRouter()
@@ -502,7 +509,8 @@ export default {
       switchTab,
       showToast,
       logout,
-      isAdmin
+      isAdmin,
+      ZconnectLogo
     }
   }
 }
@@ -533,6 +541,17 @@ export default {
   display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+.dashboard-logo {
+  display: flex;
+  align-items: center;
+}
+
+.dashboard-logo .logo-image {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 .mobile-menu-toggle {

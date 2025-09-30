@@ -338,6 +338,20 @@ func (rs *RelayServer) initDatabase() {
             data_size INT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS ssh_connections (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            host VARCHAR(255) NOT NULL,
+            port INT DEFAULT 22,
+            username VARCHAR(100) NOT NULL,
+            private_key TEXT,
+            status ENUM('active', 'inactive') DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            created_by VARCHAR(100),
+            INDEX idx_name (name),
+            INDEX idx_host (host)
+        )`,
 		`CREATE TABLE IF NOT EXISTS server_settings (
             id INT AUTO_INCREMENT PRIMARY KEY,
             setting_key VARCHAR(100) UNIQUE NOT NULL,
@@ -361,6 +375,7 @@ func (rs *RelayServer) initDatabase() {
 		`ALTER TABLE agents ADD COLUMN token VARCHAR(255) AFTER agent_id`,
 		`ALTER TABLE agents ADD COLUMN agent_name VARCHAR(255) AFTER agent_id`,
 		`ALTER TABLE agents ADD COLUMN project_id INT AFTER agent_name`,
+		`ALTER TABLE agents ADD COLUMN ssh_management BOOLEAN DEFAULT FALSE AFTER project_id`,
 		`ALTER TABLE clients ADD COLUMN token VARCHAR(255) AFTER agent_id`,
 		`ALTER TABLE users ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY FIRST`,
 	}
@@ -1723,15 +1738,16 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/clients", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients)))
 	http.HandleFunc("/api/clients/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIClients))) // Handle /api/clients/{id}
 	http.HandleFunc("/api/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjects)))
-	http.HandleFunc("/api/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjectsWithSubpaths))) // Handle /api/projects/{id} and subpaths
-	http.HandleFunc("/api/user/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUserProjects))) // Handle user-specific projects
+	http.HandleFunc("/api/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIProjectsWithSubpaths)))          // Handle /api/projects/{id} and subpaths
+	http.HandleFunc("/api/user/projects", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUserProjects)))              // Handle user-specific projects
 	http.HandleFunc("/api/user/projects/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUserProjectsWithSubpaths))) // Handle user project agents
 	http.HandleFunc("/api/logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPILogs)))
 	http.HandleFunc("/api/tunnel-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnelLogs)))
 	http.HandleFunc("/api/ssh-logs", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHLogs)))
 	http.HandleFunc("/api/settings", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISettings)))
 	http.HandleFunc("/api/users", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers)))
-	http.HandleFunc("/api/users/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers))) // Handle /api/users/{id}
+	http.HandleFunc("/api/users/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers)))                 // Handle /api/users/{id}
+	http.HandleFunc("/api/ssh-management", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHManagement))) // Handle SSH Management CRUD
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
 
@@ -2066,7 +2082,7 @@ func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		if err == nil && cookie.Value != "" {
 			delete(rs.webSessions, cookie.Value)
 		}
-		
+
 		// Also clean up any Basic Auth session if present
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Basic ") {
@@ -2080,7 +2096,7 @@ func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		// Clear cookie in response
 		clearCookie := &http.Cookie{
 			Name:     "tunnel-session",
@@ -2090,7 +2106,7 @@ func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 			HttpOnly: true,
 		}
 		http.SetCookie(w, clearCookie)
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
@@ -2102,7 +2118,7 @@ func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		if err == nil && cookie.Value != "" {
 			delete(rs.webSessions, cookie.Value)
 		}
-		
+
 		// Clear cookie
 		clearCookie := &http.Cookie{
 			Name:     "tunnel-session",
@@ -2112,7 +2128,7 @@ func (rs *RelayServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 			HttpOnly: true,
 		}
 		http.SetCookie(w, clearCookie)
-		
+
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	}
 }
@@ -2604,7 +2620,7 @@ func (rs *RelayServer) handleAPIUserProjects(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Reuse the existing handleGetProjects logic
 	rs.handleGetProjects(w, r)
 }
@@ -2614,18 +2630,18 @@ func (rs *RelayServer) handleAPIUserProjectsWithSubpaths(w http.ResponseWriter, 
 	// Parse the URL path to determine routing
 	path := strings.TrimPrefix(r.URL.Path, "/api/user/projects/")
 	pathParts := strings.Split(path, "/")
-	
+
 	if len(pathParts) < 2 || pathParts[0] == "" {
 		http.Error(w, "Invalid request path", http.StatusBadRequest)
 		return
 	}
-	
+
 	projectID, err := strconv.Atoi(pathParts[0])
 	if err != nil {
 		http.Error(w, "Invalid project ID", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Verify user has access to this project
 	username := r.Header.Get("X-Username")
 	userProjects, err := rs.getUserProjects(username)
@@ -2633,7 +2649,7 @@ func (rs *RelayServer) handleAPIUserProjectsWithSubpaths(w http.ResponseWriter, 
 		http.Error(w, "Failed to verify project access", http.StatusInternalServerError)
 		return
 	}
-	
+
 	hasAccess := false
 	for _, pid := range userProjects {
 		if pid == projectID {
@@ -2641,12 +2657,12 @@ func (rs *RelayServer) handleAPIUserProjectsWithSubpaths(w http.ResponseWriter, 
 			break
 		}
 	}
-	
+
 	if !hasAccess {
 		http.Error(w, "Access denied to this project", http.StatusForbidden)
 		return
 	}
-	
+
 	// Handle different subpaths
 	if len(pathParts) >= 2 && pathParts[1] == "agents" {
 		rs.handleUserProjectAgents(w, r, projectID)
@@ -2661,7 +2677,7 @@ func (rs *RelayServer) handleUserProjectAgents(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Get agents assigned to this project
 	query := `
 		SELECT pa.agent_id, pa.access_type, a.agent_name, a.status, a.last_ping, a.connected_at
@@ -2670,7 +2686,7 @@ func (rs *RelayServer) handleUserProjectAgents(w http.ResponseWriter, r *http.Re
 		WHERE pa.project_id = ?
 		ORDER BY pa.assigned_at DESC
 	`
-	
+
 	rows, err := rs.db.Query(query, projectID)
 	if err != nil {
 		rs.logger.Error("Failed to query project agents: %v", err)
@@ -2678,36 +2694,36 @@ func (rs *RelayServer) handleUserProjectAgents(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer rows.Close()
-	
+
 	var agents []map[string]interface{}
 	for rows.Next() {
 		var agentID, accessType sql.NullString
 		var name, status sql.NullString
 		var lastPing, connectedAt sql.NullTime
-		
+
 		err := rows.Scan(&agentID, &accessType, &name, &status, &lastPing, &connectedAt)
 		if err != nil {
 			rs.logger.Error("Failed to scan agent row: %v", err)
 			continue
 		}
-		
+
 		agent := map[string]interface{}{
-			"agent_id":     agentID.String,
-			"access_type":  accessType.String,
-			"name":         name.String,
-			"status":       status.String,
+			"agent_id":    agentID.String,
+			"access_type": accessType.String,
+			"name":        name.String,
+			"status":      status.String,
 		}
-		
+
 		if lastPing.Valid {
 			agent["last_ping"] = lastPing.Time
 		}
 		if connectedAt.Valid {
 			agent["connected_at"] = connectedAt.Time
 		}
-		
+
 		agents = append(agents, agent)
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(agents)
 }
@@ -2784,7 +2800,7 @@ func (rs *RelayServer) handleGetProjects(w http.ResponseWriter, r *http.Request)
 		}
 		project["user_count"] = userCount
 
-		// Get agent count for this project  
+		// Get agent count for this project
 		var agentCount int
 		err = rs.db.QueryRow("SELECT COUNT(*) FROM project_agents WHERE project_id = ?", id).Scan(&agentCount)
 		if err != nil {
@@ -4364,6 +4380,102 @@ func (rs *RelayServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "User deleted successfully",
+	})
+}
+
+// SSH Management Handler
+func (rs *RelayServer) handleAPISSHManagement(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetSSHManagement(w, r)
+	case "PUT":
+		rs.handleUpdateSSHManagement(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Get all agents with SSH management status
+func (rs *RelayServer) handleGetSSHManagement(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== GET SSH MANAGEMENT REQUEST ===")
+
+	rows, err := rs.db.Query(`
+		SELECT agent_id, agent_name, status, ssh_management, connected_at, last_ping 
+		FROM agents 
+		ORDER BY agent_name
+	`)
+	if err != nil {
+		rs.logger.Error("Failed to query agents for SSH management: %v", err)
+		http.Error(w, "Failed to retrieve SSH management data", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var agents []map[string]interface{}
+	for rows.Next() {
+		var agentId, agentName, status, connectedAt, lastPing string
+		var sshManagement bool
+
+		if err := rows.Scan(&agentId, &agentName, &status, &sshManagement, &connectedAt, &lastPing); err != nil {
+			rs.logger.Error("Failed to scan agent for SSH management: %v", err)
+			continue
+		}
+
+		agent := map[string]interface{}{
+			"agent_id":       agentId,
+			"agent_name":     agentName,
+			"status":         status,
+			"ssh_management": sshManagement,
+			"connected_at":   connectedAt,
+			"last_ping":      lastPing,
+		}
+
+		agents = append(agents, agent)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agents)
+}
+
+// Update SSH management status for an agent
+func (rs *RelayServer) handleUpdateSSHManagement(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== UPDATE SSH MANAGEMENT REQUEST ===")
+
+	var updateData struct {
+		AgentID       string `json:"agent_id"`
+		SSHManagement bool   `json:"ssh_management"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// If setting SSH management to true, ensure only one agent has SSH management enabled
+	if updateData.SSHManagement {
+		_, err := rs.db.Exec("UPDATE agents SET ssh_management = FALSE WHERE ssh_management = TRUE")
+		if err != nil {
+			rs.logger.Error("Failed to disable SSH management for other agents: %v", err)
+			http.Error(w, "Failed to update SSH management", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Update the specific agent
+	_, err := rs.db.Exec("UPDATE agents SET ssh_management = ? WHERE agent_id = ?",
+		updateData.SSHManagement, updateData.AgentID)
+	if err != nil {
+		rs.logger.Error("Failed to update SSH management for agent %s: %v", updateData.AgentID, err)
+		http.Error(w, "Failed to update SSH management", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Updated SSH management for agent %s to %v", updateData.AgentID, updateData.SSHManagement)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH management updated successfully",
 	})
 }
 
