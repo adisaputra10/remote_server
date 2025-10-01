@@ -49,24 +49,28 @@
                     @click="generateScriptModal(tunnel)"
                     title="Generate SSH Script">
                     <i class="fas fa-code"></i>
+                    <span class="btn-caption">Script</span>
                   </button>
                   <button 
                     class="action-btn web-ssh-btn" 
                     @click="openSSHWeb(tunnel)"
                     title="Open SSH Web Terminal">
-                    <i class="fas fa-terminal"></i>
+                    <i class="fas fa-desktop"></i>
+                    <span class="btn-caption">Web SSH</span>
                   </button>
                   <button 
                     class="action-btn configure-btn" 
                     @click="editTunnel(tunnel)"
                     title="Edit Tunnel">
                     <i class="fas fa-edit"></i>
+                    <span class="btn-caption">Edit</span>
                   </button>
                   <button 
                     class="action-btn delete-btn" 
                     @click="deleteTunnel(tunnel)"
                     title="Delete Tunnel">
                     <i class="fas fa-trash"></i>
+                    <span class="btn-caption">Delete</span>
                   </button>
                 </div>
               </td>
@@ -319,10 +323,16 @@ import Pagination from './Pagination.vue'
 
 export default {
   name: 'SSHManagement',
+  props: {
+    agentId: {
+      type: String,
+      default: null
+    }
+  },
   components: {
     Pagination
   },
-  setup() {
+  setup(props) {
     const router = useRouter()
     const tunnels = ref([])
     const loading = ref(true)
@@ -653,6 +663,12 @@ export default {
 
     onMounted(() => {
       loadTunnels()
+      
+      // If agentId is provided, automatically open SSH Web Terminal
+      if (props.agentId) {
+        // Navigate to SSH Web Terminal with agentId
+        router.push({ name: 'SSHWebTerminal', query: { agentId: props.agentId } })
+      }
     })
 
     return {
@@ -878,38 +894,86 @@ export default {
 .script-btn {
   background: var(--color-primary);
   color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  min-width: 60px;
 }
 
 .script-btn:hover {
   background: var(--color-primary-dark);
 }
 
+.script-btn .btn-caption {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .web-ssh-btn {
   background: #10b981 !important; /* Force green color */
   color: white;
   border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  min-width: 60px;
 }
 
 .web-ssh-btn:hover {
   background: #059669 !important; /* Darker green on hover */
 }
 
+.web-ssh-btn .btn-caption {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .configure-btn {
   background: var(--color-info);
   color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  min-width: 60px;
 }
 
 .configure-btn:hover {
   background: var(--color-info-dark);
 }
 
+.configure-btn .btn-caption {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .delete-btn {
   background: var(--color-danger);
   color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  min-width: 60px;
 }
 
 .delete-btn:hover {
   background: var(--color-danger-dark);
+}
+
+.delete-btn .btn-caption {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .empty-state {

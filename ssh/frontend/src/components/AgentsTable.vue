@@ -59,14 +59,14 @@
                     class="action-btn access-btn with-text" 
                     @click="openAccessModal(agent.id)"
                     title="Access Agent">
-                    <i class="fas fa-terminal"></i>
+                    <i class="fas fa-server"></i>
                     <span>Access</span>
                   </button>
                   <button 
                     class="action-btn ssh-web-btn with-text" 
                     @click="openWebSSH(agent.id)"
                     title="Web SSH Terminal">
-                    <i class="fas fa-globe"></i>
+                    <i class="fas fa-desktop"></i>
                     <span>Web SSH</span>
                   </button>
                   <button 
@@ -229,7 +229,7 @@ chmod +x bin/agent</code></pre>
                 <tr>
                   <td>
                     <div class="service-info">
-                      <i class="fas fa-terminal"></i>
+                      <i class="fas fa-server"></i>
                       <span>SSH Access</span>
                     </div>
                   </td>
@@ -1170,7 +1170,8 @@ export default {
   text-align: center;
 }
 
-.fa-terminal { color: #10b981; }
+.fa-server { color: #10b981; }
+.fa-desktop { color: #3b82f6; }
 .fa-database { color: #3b82f6; }
 .fa-leaf { color: #059669; }
 .fa-cogs { color: #f59e0b; }

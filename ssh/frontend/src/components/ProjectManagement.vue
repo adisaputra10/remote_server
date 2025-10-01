@@ -91,6 +91,15 @@
                     </button>
                     
                     <button 
+                      v-if="agent.access_type === 'ssh' || agent.access_type === 'both'"
+                      class="action-btn web-ssh-btn"
+                      @click="openWebSSH(agent.agent_id)"
+                      title="Web SSH Terminal">
+                      <i class="fas fa-desktop"></i>
+                      <span>Web SSH</span>
+                    </button>
+                    
+                    <button 
                       v-if="agent.access_type === 'database' || agent.access_type === 'both'"
                       class="action-btn tunnel-btn"
                       @click="openDatabaseTunnel(agent.agent_id)"
@@ -155,6 +164,15 @@
                       title="SSH Connect">
                       <i class="fas fa-terminal"></i>
                       <span>SSH</span>
+                    </button>
+                    
+                    <button 
+                      v-if="agent.access_type === 'ssh' || agent.access_type === 'both'"
+                      class="action-btn web-ssh-btn"
+                      @click="openWebSSH(agent.agent_id)"
+                      title="Web SSH Terminal">
+                      <i class="fas fa-desktop"></i>
+                      <span>Web SSH</span>
                     </button>
                     
                     <button 
@@ -282,6 +300,7 @@
                     @click="enterProject(project)"
                     title="Enter Project">
                     <i class="fas fa-sign-in-alt"></i>
+                    <span class="btn-caption">Enter</span>
                   </button>
                   <button 
                     v-if="isAdmin"
@@ -289,6 +308,7 @@
                     @click="openEditProjectModal(project)"
                     title="Edit Project">
                     <i class="fas fa-edit"></i>
+                    <span class="btn-caption">Edit</span>
                   </button>
                   <button 
                     v-if="isAdmin"
@@ -296,6 +316,7 @@
                     @click="openManageUsersModal(project)"
                     title="Manage Users">
                     <i class="fas fa-users"></i>
+                    <span class="btn-caption">Users</span>
                   </button>
                   <button 
                     v-if="isAdmin"
@@ -303,6 +324,7 @@
                     @click="openManageAgentsModal(project)"
                     title="Manage Agents">
                     <i class="fas fa-server"></i>
+                    <span class="btn-caption">Agents</span>
                   </button>
                   <button 
                     v-if="isAdmin && project.project_name !== 'Default Project'"
@@ -310,6 +332,7 @@
                     @click="showDelete(project.id, project.project_name)"
                     title="Delete Project">
                     <i class="fas fa-trash"></i>
+                    <span class="btn-caption">Delete</span>
                   </button>
                 </div>
               </td>
@@ -835,6 +858,7 @@
 
 <script>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { apiService } from '../config/api.js'
 import { currentUser, isAdmin, isUser } from '../utils/auth.js'
 import Pagination from './Pagination.vue'
@@ -845,6 +869,9 @@ export default {
     Pagination
   },
   setup() {
+    // Router
+    const router = useRouter()
+    
     // Main data
     const allProjects = ref([])
     const allUsers = ref([])
@@ -1369,6 +1396,15 @@ export default {
       showAccessOptions.value = true
     }
 
+    const openWebSSH = (agentId) => {
+      // Open SSH Web Terminal in new tab with agentId parameter
+      const routeData = router.resolve({ 
+        name: 'SSHWebTerminal', 
+        query: { agentId: agentId } 
+      })
+      window.open(routeData.href, '_blank', 'noopener,noreferrer')
+    }
+
     const openDatabaseTunnel = async (agentId) => {
       selectedAgentForAccess.value = agentId
       selectedModalAccessType.value = 'tunnel'
@@ -1560,6 +1596,7 @@ export default {
       loadProjectDashboard,
       isAgentOnline,
       connectSSH,
+      openWebSSH,
       openDatabaseTunnel,
       disconnectSession,
       formatConnectionTime,
@@ -1765,11 +1802,12 @@ export default {
 }
 
 .action-btn {
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  gap: 4px;
+  padding: 8px 12px;
   border: none;
   border-radius: var(--radius-lg);
   font-size: 0.875rem;
@@ -1778,10 +1816,18 @@ export default {
   transition: all 0.3s ease;
   text-transform: capitalize;
   letter-spacing: 0.025em;
-  min-width: 90px;
+  min-width: 60px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   position: relative;
   overflow: hidden;
+}
+
+.action-btn .btn-caption {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+  line-height: 1;
 }
 
 .action-btn::before {
@@ -1809,6 +1855,18 @@ export default {
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   transform: translateY(-2px);
   box-shadow: 0 8px 16px rgba(59, 130, 246, 0.3);
+}
+
+.web-ssh-btn {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  color: white;
+  border: 1px solid transparent;
+}
+
+.web-ssh-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6d28d9 0%, #5b21b6 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(139, 92, 246, 0.3);
 }
 
 .tunnel-btn {
@@ -2463,10 +2521,54 @@ export default {
   font-size: 0.85rem;
 }
 
-.action-btn.enter-btn:hover {
-  background: var(--color-info);
+.action-btn.enter-btn {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
   color: white;
-  border-color: var(--color-info);
+}
+
+.action-btn.enter-btn:hover {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  transform: translateY(-1px);
+}
+
+.action-btn.edit-btn {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: white;
+}
+
+.action-btn.edit-btn:hover {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  transform: translateY(-1px);
+}
+
+.action-btn.users-btn {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  color: white;
+}
+
+.action-btn.users-btn:hover {
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  transform: translateY(-1px);
+}
+
+.action-btn.agents-btn {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+}
+
+.action-btn.agents-btn:hover {
+  background: linear-gradient(135deg, #059669, #047857);
+  transform: translateY(-1px);
+}
+
+.action-btn.delete-btn {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: white;
+}
+
+.action-btn.delete-btn:hover {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  transform: translateY(-1px);
 }
 
 .agents-grid {

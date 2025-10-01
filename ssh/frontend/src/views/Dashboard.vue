@@ -113,7 +113,7 @@
           <RemoteSSHManagement v-if="activeTab === 'remoteSSH'" />
           <UserManagement v-if="activeTab === 'userManagement'" />
           <ProjectManagement v-if="activeTab === 'projects'" />
-          <SSHManagement v-if="activeTab === 'sshManagement'" />
+          <SSHManagement v-if="activeTab === 'sshManagement'" :agentId="route.query.agentId" />
           <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
@@ -184,7 +184,7 @@
 
 <script>
 import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import AgentsTable from '../components/AgentsTable.vue'
 import ClientsTable from '../components/ClientsTable.vue'
 import LogsTable from '../components/LogsTable.vue'
@@ -215,6 +215,7 @@ export default {
   },
   setup() {
     const router = useRouter()
+    const route = useRoute()
     // Set default tab based on user role
     const defaultTab = isAdmin.value ? 'agents' : 'projects'
     const activeTab = ref(defaultTab)
@@ -467,8 +468,12 @@ export default {
         document.documentElement.setAttribute('data-theme', 'dark')
       }
       
-      // Set default tab based on user role
-      if (!isAdmin.value) {
+      // Set default tab based on user role or query parameter
+      const route = useRoute()
+      if (route.query.tab) {
+        // If tab is specified in query parameter, use it
+        switchTab(route.query.tab)
+      } else if (!isAdmin.value) {
         activeTab.value = 'projects'
       }
       
