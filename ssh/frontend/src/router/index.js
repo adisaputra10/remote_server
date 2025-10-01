@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginNew from '../views/LoginNew.vue'
 import Dashboard from '../views/Dashboard.vue'
+import SSHWebTerminal from '../components/SSHWebTerminal.vue'
 
 const routes = [
   {
@@ -39,6 +40,12 @@ const routes = [
     path: '/dashboard',
     name: 'Dashboard',
     component: Dashboard,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/ssh-terminal',
+    name: 'SSHWebTerminal',
+    component: SSHWebTerminal,
     meta: { requiresAuth: true }
   }
 ]

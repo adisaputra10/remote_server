@@ -63,6 +63,13 @@
                     <span>Access</span>
                   </button>
                   <button 
+                    class="action-btn ssh-web-btn with-text" 
+                    @click="openWebSSH(agent.id)"
+                    title="Web SSH Terminal">
+                    <i class="fas fa-globe"></i>
+                    <span>Web SSH</span>
+                  </button>
+                  <button 
                     class="action-btn setup-btn with-text" 
                     @click="openSetupModal(agent.id)"
                     title="Setup Agent">
@@ -354,6 +361,7 @@ chmod +x bin/agent</code></pre>
 
 <script>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { apiService } from '../config/api.js'
 import Pagination from './Pagination.vue'
 
@@ -364,6 +372,7 @@ export default {
   },
   emits: ['open-add-agent-modal'],
   setup(props, { emit }) {
+    const router = useRouter()
     const allAgents = ref([])
     const loading = ref(false)
     const error = ref(null)
@@ -540,6 +549,17 @@ export default {
     const closeAccessModal = () => {
       console.log('Closing Access Modal...')
       showAccessModal.value = false
+    }
+
+    // Web SSH Functions
+    const openWebSSH = (agentId) => {
+      console.log('Opening Web SSH for agent:', agentId)
+      // Open SSH web terminal in new tab dengan parameter agent ID
+      const route = router.resolve({
+        name: 'SSHWebTerminal',
+        query: { agentId: agentId }
+      })
+      window.open(route.href, '_blank')
     }
 
     // Command Generation Functions
@@ -720,6 +740,7 @@ export default {
       closeSetupModal,
       openAccessModal,
       closeAccessModal,
+      openWebSSH,
       generateSSHCommand,
       generateMySQLCommand,
       generatePostgreSQLCommand,
@@ -1251,5 +1272,14 @@ export default {
 
 .access-btn:hover {
   background: #059669;
+}
+
+.ssh-web-btn {
+  background: #3b82f6;
+  color: white;
+}
+
+.ssh-web-btn:hover {
+  background: #2563eb;
 }
 </style>

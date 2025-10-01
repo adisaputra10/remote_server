@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
 )
 
 type RelayServer struct {
@@ -142,6 +145,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow connections from any origin
 	},
+	ReadBufferSize:  1024, // Smaller read buffer for faster processing
+	WriteBufferSize: 1024, // Smaller write buffer for faster send
 }
 
 func NewRelayServer() *RelayServer {
@@ -1750,6 +1755,9 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/ssh-management", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHManagement))) // Handle SSH Management CRUD
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
+
+	// SSH WebSocket endpoint
+	http.HandleFunc("/ssh-ws", rs.corsMiddleware(rs.handleSSHWebSocket))
 
 	// Health endpoint
 	http.HandleFunc("/health", rs.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -4487,6 +4495,413 @@ func (rs *RelayServer) generateSecureToken() string {
 		token[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 	}
 	return string(token)
+}
+
+// SSH WebSocket handler for web-based SSH terminal
+// filterAnsiEscapeSequences removes problematic ANSI escape sequences for web terminal
+func filterAnsiEscapeSequences(input string) string {
+	// ANSI escape sequences to filter
+	ansiEscapeSequences := []string{
+		"\x1b[?2004h", // Bracketed paste mode start
+		"\x1b[?2004l", // Bracketed paste mode end
+		"\x1b]0;",     // Set window title start
+		"\x07",        // BEL character (often used to end window title)
+		"\x1b[0m",     // Reset color
+		"\x1b[01;34m", // Bold blue
+		"\x1b[01;32m", // Bold green
+		"\x1b[01;31m", // Bold red
+		"\x1b[01;33m", // Bold yellow
+		"\x1b[01;35m", // Bold magenta
+		"\x1b[01;36m", // Bold cyan
+		"\x1b[01m",    // Bold
+		"undefined",   // Remove undefined text
+		"\x1b7",       // Cursor save
+		"\x1b8",       // Cursor restore
+		"\x1b[?1049h", // Alt screen buffer start
+		"\x1b[?1049l", // Alt screen buffer end
+		"\x1b[?47h",   // Alt screen buffer start
+		"\x1b[?47l",   // Alt screen buffer end
+		"\x1b[?1000h", // Mouse tracking start
+		"\x1b[?1000l", // Mouse tracking end
+		"\x1b[?1002h", // Mouse tracking start
+		"\x1b[?1002l", // Mouse tracking end
+		"\x1b[?1003h", // Mouse tracking start
+		"\x1b[?1003l", // Mouse tracking end
+		"\x1b=",       // Application keypad
+		"\x1b>",       // Normal keypad
+	}
+
+	// Filter out ANSI escape sequences using optimized replace
+	for _, seq := range ansiEscapeSequences {
+		input = replaceAllString(input, seq, "")
+	}
+
+	// Remove duplicate prompts
+	// Look for pattern like "root@hostname:~root@hostname:~# " and replace with "root@hostname:~# "
+	if len(input) > 20 {
+		// Find the position of the second prompt
+		for i := 0; i < len(input)-20; i++ {
+			// Check if we have a prompt pattern
+			if input[i] == ':' && input[i+1] == '~' && i+2 < len(input) && input[i+2] == 'r' {
+				// Look for the start of the first prompt
+				for j := i - 1; j >= 0 && j > i-20; j-- {
+					if input[j] == ' ' {
+						// Found a space, check if what follows is a username@hostname pattern
+						if j+1 < len(input) && input[j+1] == 'r' && j+2 < len(input) && input[j+2] == 'o' {
+							// This looks like a duplicate prompt, remove everything from the space to the current position
+							input = input[:j+1] + input[i+2:]
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return input
+}
+
+// Simple string replace function for better performance than strings.ReplaceAll
+func replaceAllString(s, old, new string) string {
+	result := ""
+	for i := 0; i < len(s); {
+		if i+len(old) <= len(s) && s[i:i+len(old)] == old {
+			result += new
+			i += len(old)
+		} else {
+			result += string(s[i])
+			i++
+		}
+	}
+	return result
+}
+
+// logSSHCommandToFile logs SSH commands to file for auditing (optimized version from ssh-web)
+func (rs *RelayServer) logSSHCommandToFile(host, username, command string) {
+	timestamp := time.Now().Format(time.RFC3339)
+	logEntry := fmt.Sprintf("[%s] [%s@%s] %s\n", timestamp, username, host, command)
+
+	// Create logs directory if it doesn't exist
+	logDir := "logs"
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		os.Mkdir(logDir, 0755)
+	}
+
+	// Append to log file
+	logFile := filepath.Join(logDir, "ssh_commands.log")
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		rs.logger.Error("Error opening SSH command log file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(logEntry); err != nil {
+		rs.logger.Error("Error writing to SSH command log file: %v", err)
+	}
+}
+
+func (rs *RelayServer) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins for development
+		},
+		ReadBufferSize:  512, // Small read buffer for low latency
+		WriteBufferSize: 512, // Small write buffer for low latency
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		rs.logger.Error("Failed to upgrade SSH WebSocket connection: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	// Optimize WebSocket for minimal latency
+	conn.SetReadDeadline(time.Time{})  // No read timeout
+	conn.SetWriteDeadline(time.Time{}) // No write timeout
+	conn.EnableWriteCompression(false) // Disable compression for lower latency
+
+	rs.logger.Info("New SSH WebSocket connection established from %s with low-latency settings", r.RemoteAddr)
+
+	// Handle SSH WebSocket session
+	rs.handleSSHSession(conn)
+}
+
+// Handle SSH session through WebSocket
+func (rs *RelayServer) handleSSHSession(conn *websocket.Conn) {
+	var sshClient *ssh.Client
+	var session *ssh.Session
+	var stdin io.WriteCloser
+	var isConnected bool
+	var commandBuffer string
+	var connectionInfo struct {
+		Host     string
+		Username string
+	}
+
+	for {
+		var msg map[string]interface{}
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			rs.logger.Error("Error reading SSH WebSocket message: %v", err)
+			break
+		}
+
+		msgType, ok := msg["type"].(string)
+		if !ok {
+			continue
+		}
+
+		switch msgType {
+		case "connect":
+			if isConnected {
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": "Already connected to an SSH server",
+				})
+				continue
+			}
+
+			host, _ := msg["host"].(string)
+			portFloat, _ := msg["port"].(float64)
+			port := int(portFloat)
+			username, _ := msg["username"].(string)
+			password, _ := msg["password"].(string)
+
+			if host == "" || port == 0 || username == "" || password == "" {
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": "Missing connection parameters",
+				})
+				continue
+			}
+
+			// Store connection info for logging
+			connectionInfo.Host = host
+			connectionInfo.Username = username
+
+			// Connect to SSH server with compatible settings
+			config := &ssh.ClientConfig{
+				User: username,
+				Auth: []ssh.AuthMethod{
+					ssh.Password(password),
+				},
+				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				Timeout:         10 * time.Second,
+				// Use default SSH config for better compatibility
+				Config: ssh.Config{
+					// Use broader range of algorithms for compatibility
+					Ciphers: []string{
+						"aes128-ctr", "aes192-ctr", "aes256-ctr",
+						"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
+						"chacha20-poly1305@openssh.com",
+						"aes128-cbc", "aes192-cbc", "aes256-cbc",
+					},
+					MACs: []string{
+						"hmac-sha2-256-etm@openssh.com", "hmac-sha2-256",
+						"hmac-sha2-512-etm@openssh.com", "hmac-sha2-512",
+						"hmac-sha1", "hmac-sha1-96",
+					},
+					KeyExchanges: []string{
+						"curve25519-sha256", "curve25519-sha256@libssh.org",
+						"ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
+						"diffie-hellman-group16-sha512", "diffie-hellman-group14-sha256",
+						"diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1",
+					},
+				},
+			}
+
+			sshClient, err = ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), config)
+			if err != nil {
+				// Try with minimal/legacy configuration as fallback
+				rs.logger.Info("Primary SSH config failed, trying legacy config: %v", err)
+
+				legacyConfig := &ssh.ClientConfig{
+					User: username,
+					Auth: []ssh.AuthMethod{
+						ssh.Password(password),
+					},
+					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+					Timeout:         15 * time.Second,
+					// No custom config - use Go SSH defaults
+				}
+
+				sshClient, err = ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), legacyConfig)
+			}
+
+			if err != nil {
+				rs.logger.Error("Failed to connect to SSH server %s:%d: %v", host, port, err)
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to connect: %v", err),
+				})
+				continue
+			}
+
+			// Create a session
+			session, err = sshClient.NewSession()
+			if err != nil {
+				rs.logger.Error("Failed to create SSH session: %v", err)
+				sshClient.Close()
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to create session: %v", err),
+				})
+				continue
+			}
+
+			// Set up terminal modes for proper terminal display with fast response
+			modes := ssh.TerminalModes{
+				ssh.ECHO:          1,      // Enable echo for proper display
+				ssh.TTY_OP_ISPEED: 115200, // High speed for responsiveness
+				ssh.TTY_OP_OSPEED: 115200, // High speed for responsiveness
+				ssh.IGNCR:         0,      // Don't ignore CR
+				ssh.ICRNL:         1,      // Map CR to NL for proper line endings
+				ssh.OPOST:         1,      // Enable output processing for formatting
+				ssh.ONLCR:         1,      // Map NL to CR-NL for proper display
+				ssh.ICANON:        0,      // Raw mode for immediate input
+				ssh.ISIG:          1,      // Enable signals (Ctrl+C, etc)
+				ssh.IEXTEN:        1,      // Enable extended input processing for proper terminal behavior
+				ssh.IXON:          0,      // Disable XON/XOFF flow control
+				ssh.IXOFF:         0,      // Disable XON/XOFF flow control
+			}
+
+			// Request pseudo terminal with proper size and modes
+			if err := session.RequestPty("xterm-256color", 120, 30, modes); err != nil {
+				rs.logger.Error("Failed to request pty: %v", err)
+				session.Close()
+				sshClient.Close()
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to request pty: %v", err),
+				})
+				continue
+			}
+
+			// Get session stdin/stdout
+			stdin, err = session.StdinPipe()
+			if err != nil {
+				rs.logger.Error("Failed to get stdin pipe: %v", err)
+				session.Close()
+				sshClient.Close()
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to get stdin: %v", err),
+				})
+				continue
+			}
+
+			stdout, err := session.StdoutPipe()
+			if err != nil {
+				rs.logger.Error("Failed to get stdout pipe: %v", err)
+				session.Close()
+				sshClient.Close()
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to get stdout: %v", err),
+				})
+				continue
+			}
+
+			// Set environment variables for cleaner terminal
+			session.Setenv("TERM", "xterm")
+			session.Setenv("PS1", "$ ") // Simple prompt
+			session.Setenv("DEBIAN_FRONTEND", "noninteractive")
+
+			// Start shell
+			if err := session.Shell(); err != nil {
+				rs.logger.Error("Failed to start shell: %v", err)
+				session.Close()
+				sshClient.Close()
+				conn.WriteJSON(map[string]interface{}{
+					"type":    "error",
+					"message": fmt.Sprintf("Failed to start shell: %v", err),
+				})
+				continue
+			}
+
+			isConnected = true
+			rs.logger.Info("SSH connection established to %s@%s:%d", username, host, port)
+
+			// Send connected message
+			conn.WriteJSON(map[string]interface{}{
+				"type": "connected",
+			})
+
+			// Handle output from SSH server with optimized latency and clean formatting
+			go func() {
+				// Use optimal buffer size - not too small (causes fragmentation) not too large (adds latency)
+				buffer := make([]byte, 64) // Optimal size for responsiveness + proper formatting
+
+				for {
+					// Direct read without bufio for minimal latency
+					n, err := stdout.Read(buffer)
+					if err != nil {
+						if err != io.EOF {
+							rs.logger.Error("Error reading from SSH stdout: %v", err)
+						}
+						break
+					}
+
+					// Process data with ANSI filtering for clean terminal display
+					if n > 0 {
+						data := string(buffer[:n])
+						// Apply ANSI filtering for proper terminal formatting
+						cleanedData := filterAnsiEscapeSequences(data)
+
+						// Send with optimized JSON encoding
+						if err := conn.WriteJSON(map[string]interface{}{
+							"type": "data",
+							"data": cleanedData,
+						}); err != nil {
+							rs.logger.Error("Error writing to WebSocket: %v", err)
+							break
+						}
+					}
+				}
+				// Connection closed
+				isConnected = false
+				conn.WriteJSON(map[string]interface{}{
+					"type": "disconnected",
+				})
+			}()
+
+			// ULTRA-FAST input handling - no separate goroutine to reduce context switching
+			// This handles input in the main message loop for minimum latency
+
+		case "data":
+			if data, ok := msg["data"].(string); ok && isConnected && stdin != nil {
+				// Write to stdin IMMEDIATELY with zero processing overhead
+				stdin.Write([]byte(data))
+				
+				// Async command logging (non-blocking)
+				go func(input string) {
+					if input == "\b" || input == "\x7f" {
+						if len(commandBuffer) > 0 {
+							commandBuffer = commandBuffer[:len(commandBuffer)-1]
+						}
+					} else if strings.Contains(input, "\n") || strings.Contains(input, "\r") {
+						if cmd := strings.TrimSpace(commandBuffer); cmd != "" {
+							go rs.logSSHCommandToFile(connectionInfo.Host, connectionInfo.Username, cmd)
+						}
+						commandBuffer = ""
+					} else if len(input) == 1 && input >= " " && input <= "~" {
+						commandBuffer += input
+					}
+				}(data)
+			}
+		}
+	}
+
+	// Cleanup
+	if session != nil {
+		session.Close()
+	}
+	if sshClient != nil {
+		sshClient.Close()
+	}
+	rs.logger.Info("SSH WebSocket connection closed")
 }
 
 func main() {

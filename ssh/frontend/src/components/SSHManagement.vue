@@ -27,7 +27,6 @@
             <tr>
               <th>TUNNEL ID</th>
               <th>TUNNEL NAME</th>
-              <th>STATUS</th>
               <th>SSH HOST</th>
               <th>SSH PORT</th>
               <th>SSH USERNAME</th>
@@ -39,16 +38,6 @@
             <tr v-for="tunnel in paginatedTunnels" :key="tunnel.id">
               <td>{{ tunnel.id }}</td>
               <td>{{ tunnel.name || '-' }}</td>
-              <td>
-                <span 
-                  class="status-badge" 
-                  :class="{
-                    'status-connected': tunnel.status === 'CONNECTED',
-                    'status-disconnected': tunnel.status === 'DISCONNECTED'
-                  }">
-                  {{ tunnel.status?.toUpperCase() || 'UNKNOWN' }}
-                </span>
-              </td>
               <td>{{ tunnel.host || '-' }}</td>
               <td>{{ tunnel.port || '-' }}</td>
               <td>{{ tunnel.username || '-' }}</td>
@@ -60,6 +49,12 @@
                     @click="generateScriptModal(tunnel)"
                     title="Generate SSH Script">
                     <i class="fas fa-code"></i>
+                  </button>
+                  <button 
+                    class="action-btn web-ssh-btn" 
+                    @click="openSSHWeb(tunnel)"
+                    title="Open SSH Web Terminal">
+                    <i class="fas fa-terminal"></i>
                   </button>
                   <button 
                     class="action-btn configure-btn" 
@@ -318,6 +313,7 @@
 
 <script>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { apiService } from '../config/api.js'
 import Pagination from './Pagination.vue'
 
@@ -327,6 +323,7 @@ export default {
     Pagination
   },
   setup() {
+    const router = useRouter()
     const tunnels = ref([])
     const loading = ref(true)
     const error = ref('')
@@ -419,6 +416,22 @@ export default {
       showScriptModal.value = true
     }
 
+    const openSSHWeb = (tunnel) => {
+      // Navigate to SSH web terminal route with tunnel parameters
+      const routeData = router.resolve({
+        path: '/ssh-terminal',
+        query: {
+          host: tunnel.host,
+          port: tunnel.port,
+          username: tunnel.username,
+          tunnel_id: tunnel.id
+        }
+      })
+      
+      // Open SSH web terminal in a new tab
+      window.open(routeData.href, '_blank')
+    }
+
     const closeScriptModal = () => {
       showScriptModal.value = false
       selectedTunnel.value = null
@@ -455,11 +468,11 @@ export default {
       
       switch (selectedScriptType.value) {
         case 'bash':
-          return `tunnel_${tunnelName}_command.txt`
+          return `tunnel_${tunnelName}_command.sh`
         case 'powershell':
-          return `tunnel_${tunnelName}_command.txt`
+          return `tunnel_${tunnelName}_command.ps1`
         case 'cmd':
-          return `tunnel_${tunnelName}_command.txt`
+          return `tunnel_${tunnelName}_command.bat`
         default:
           return `tunnel_${tunnelName}_command.txt`
       }
@@ -657,6 +670,7 @@ export default {
       showScriptModal,
       selectedScriptType,
       generateScriptModal,
+      openSSHWeb,
       closeScriptModal,
       generateScript,
       getScriptFilename,
@@ -812,30 +826,6 @@ export default {
   font-size: 0.875rem;
 }
 
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.75rem;
-  border-radius: var(--radius-md);
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.025em;
-}
-
-.status-connected {
-  background: rgba(16, 185, 129, 0.1);
-  color: var(--color-success);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-}
-
-.status-disconnected {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--color-danger);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-}
-
 .ssh-status {
   padding: 6px 12px;
   border-radius: 20px;
@@ -892,6 +882,16 @@ export default {
 
 .script-btn:hover {
   background: var(--color-primary-dark);
+}
+
+.web-ssh-btn {
+  background: #10b981 !important; /* Force green color */
+  color: white;
+  border: none;
+}
+
+.web-ssh-btn:hover {
+  background: #059669 !important; /* Darker green on hover */
 }
 
 .configure-btn {
