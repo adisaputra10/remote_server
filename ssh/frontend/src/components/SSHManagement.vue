@@ -8,10 +8,16 @@
             Manage SSH connections for virtual machines. Configure VM SSH access to remote servers.
           </p>
         </div>
-        <button class="add-vm-ssh-btn" @click="openAddTunnelModal">
-          <i class="fas fa-plus"></i>
-          Add VM SSH
-        </button>
+        <div class="header-actions">
+          <button class="manage-groups-btn" @click="openManageGroupsModal">
+            <i class="fas fa-layer-group"></i>
+            Manage Groups
+          </button>
+          <button class="add-vm-ssh-btn" @click="openAddTunnelModal">
+            <i class="fas fa-plus"></i>
+            Add VM SSH
+          </button>
+        </div>
       </div>
     </div>
 
@@ -21,12 +27,29 @@
     </div>
 
     <div v-else-if="tunnels && tunnels.length > 0" class="table-wrapper">
+      <!-- Group Filter -->
+      <div class="group-filter-container">
+        <div class="filter-group">
+          <label for="groupFilter">Filter by Group:</label>
+          <select id="groupFilter" v-model="selectedGroup" class="group-filter">
+            <option value="">All Groups</option>
+            <option value="Default">Default</option>
+            <option v-for="group in allGroups" :key="group.id" :value="group.name">{{ group.name }}</option>
+          </select>
+        </div>
+        <div class="group-stats">
+          <span>{{ filteredTunnels.length }} connections</span>
+          <span v-if="selectedGroup">in "{{ selectedGroup }}" group</span>
+        </div>
+      </div>
+      
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
               <th>VM ID</th>
               <th>VM NAME</th>
+              <th>GROUP</th>
               <th>SSH HOST</th>
               <th>SSH PORT</th>
               <th>SSH USERNAME</th>
@@ -38,6 +61,11 @@
             <tr v-for="tunnel in paginatedTunnels" :key="tunnel.id">
               <td>{{ tunnel.id }}</td>
               <td>{{ tunnel.name || '-' }}</td>
+              <td>
+                <span class="group-badge" :class="getGroupClass(tunnel.group_name)">
+                  {{ tunnel.group_name || 'Default' }}
+                </span>
+              </td>
               <td>{{ tunnel.host || '-' }}</td>
               <td>{{ tunnel.port || '-' }}</td>
               <td>{{ tunnel.username || '-' }}</td>
@@ -145,6 +173,21 @@
               placeholder="Enter SSH password" 
               required>
           </div>
+
+          <div class="form-group">
+            <label for="ssh_group">Group:</label>
+            <select 
+              v-model="sshConfig.group_name" 
+              id="ssh_group" 
+              class="form-control">
+              <option value="">Select Group</option>
+              <option value="Default">Default</option>
+              <option v-for="group in allGroups" :key="group.id" :value="group.name">
+                {{ group.name }}
+              </option>
+            </select>
+            <small class="field-hint">Group helps organize SSH connections</small>
+          </div>
           
           <div class="form-actions">
             <button type="button" class="btn btn-secondary" @click="closeConfigModal">
@@ -229,6 +272,21 @@
               placeholder="Description of this VM SSH connection..."
               rows="3">
             </textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="tunnel_group">Group:</label>
+            <select 
+              v-model="newTunnel.group_name" 
+              id="tunnel_group" 
+              class="form-control">
+              <option value="">Select Group</option>
+              <option value="Default">Default</option>
+              <option v-for="group in allGroups" :key="group.id" :value="group.name">
+                {{ group.name }}
+              </option>
+            </select>
+            <small class="field-hint">Group helps organize SSH connections</small>
           </div>
           
           <div class="form-actions">
@@ -332,6 +390,161 @@
         </div>
       </div>
     </div>
+
+    <!-- Groups Management Modal -->
+    <div v-if="showManageGroupsModal" class="modal-overlay" @click="closeManageGroupsModal">
+      <div class="modal-content groups-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Manage SSH Groups</h3>
+          <button class="close-btn" @click="closeManageGroupsModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <div class="groups-management">
+          <!-- Add New Group Section -->
+          <div class="add-group-section">
+            <h4>Add New Group</h4>
+            <form @submit.prevent="addGroup" class="add-group-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="group_name">Group Name:</label>
+                  <input 
+                    v-model="newGroup.name" 
+                    type="text" 
+                    id="group_name" 
+                    placeholder="Enter group name"
+                    required>
+                </div>
+                <div class="form-group">
+                  <label for="group_color">Color:</label>
+                  <select v-model="newGroup.color" id="group_color">
+                    <option value="primary">Primary (Blue)</option>
+                    <option value="secondary">Secondary (Gray)</option>
+                    <option value="success">Success (Green)</option>
+                    <option value="warning">Warning (Orange)</option>
+                    <option value="info">Info (Teal)</option>
+                    <option value="danger">Danger (Red)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="group_description">Description:</label>
+                <textarea 
+                  v-model="newGroup.description" 
+                  id="group_description" 
+                  placeholder="Optional description for this group"
+                  rows="2">
+                </textarea>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                  <i class="fas fa-plus"></i>
+                  Add Group
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Existing Groups List -->
+          <div class="groups-list-section">
+            <h4>Existing Groups</h4>
+            <div v-if="groupsLoading" class="loading-state">
+              <i class="fas fa-spinner fa-spin"></i>
+              Loading groups...
+            </div>
+            <div v-else-if="groups.length === 0" class="empty-state">
+              <i class="fas fa-layer-group"></i>
+              <p>No groups found. Create your first group above.</p>
+            </div>
+            <div v-else class="groups-list">
+              <div v-for="group in groups" :key="group.id" class="group-item">
+                <div class="group-info">
+                  <div class="group-header">
+                    <span class="group-badge" :class="group.color">{{ group.name }}</span>
+                    <span class="group-usage">{{ getGroupUsageCount(group.name) }} connections</span>
+                  </div>
+                  <p v-if="group.description" class="group-description">{{ group.description }}</p>
+                  <div class="group-meta">
+                    <small>Created by {{ group.created_by || 'system' }} on {{ formatDate(group.created_at) }}</small>
+                  </div>
+                </div>
+                <div class="group-actions">
+                  <button 
+                    class="action-btn edit-btn" 
+                    @click="editGroup(group)"
+                    title="Edit Group">
+                    <i class="fas fa-edit"></i>
+                  </button>
+                  <button 
+                    class="action-btn delete-btn" 
+                    @click="deleteGroup(group)"
+                    :disabled="getGroupUsageCount(group.name) > 0"
+                    :title="getGroupUsageCount(group.name) > 0 ? 'Cannot delete group with active connections' : 'Delete Group'">
+                    <i class="fas fa-trash"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Group Modal -->
+    <div v-if="showEditGroupModal" class="modal-overlay" @click="closeEditGroupModal">
+      <div class="modal-content edit-group-modal" @click.stop>
+        <div class="modal-header">
+          <h3>Edit Group: {{ editingGroup?.name }}</h3>
+          <button class="close-btn" @click="closeEditGroupModal">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        
+        <form @submit.prevent="updateGroup" class="edit-group-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="edit_group_name">Group Name:</label>
+              <input 
+                v-model="editGroupData.name" 
+                type="text" 
+                id="edit_group_name" 
+                placeholder="Enter group name"
+                required>
+            </div>
+            <div class="form-group">
+              <label for="edit_group_color">Color:</label>
+              <select v-model="editGroupData.color" id="edit_group_color">
+                <option value="primary">Primary (Blue)</option>
+                <option value="secondary">Secondary (Gray)</option>
+                <option value="success">Success (Green)</option>
+                <option value="warning">Warning (Orange)</option>
+                <option value="info">Info (Teal)</option>
+                <option value="danger">Danger (Red)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="edit_group_description">Description:</label>
+            <textarea 
+              v-model="editGroupData.description" 
+              id="edit_group_description" 
+              placeholder="Optional description for this group"
+              rows="2">
+            </textarea>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary" @click="closeEditGroupModal">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save"></i>
+              Update Group
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -365,7 +578,8 @@ export default {
       host: '',
       port: 22,
       username: 'root',
-      password: ''
+      password: '',
+      group_name: 'Default'
     })
 
     // Add tunnel modal states
@@ -376,20 +590,60 @@ export default {
       port: 22,
       username: 'root',
       password: '',
-      description: ''
+      description: '',
+      group_name: 'Default'
     })
 
+    // Group filtering states
+    const selectedGroup = ref('')
+    
     // Script generation modal states
     const showScriptModal = ref(false)
     const selectedScriptType = ref('bash')
 
+    // Groups management modal states
+    const showManageGroupsModal = ref(false)
+    const showEditGroupModal = ref(false)
+    const groups = ref([])
+    const groupsLoading = ref(false)
+    const newGroup = ref({
+      name: '',
+      description: '',
+      color: 'primary'
+    })
+    const editingGroup = ref(null)
+    const editGroupData = ref({
+      name: '',
+      description: '',
+      color: 'primary'
+    })
+
+    // Computed properties for grouping and filtering
+    const availableGroups = computed(() => {
+      const groups = [...new Set(tunnels.value.map(tunnel => tunnel.group_name).filter(Boolean))]
+      return groups.length > 0 ? groups : ['Default']
+    })
+
+    // All groups from database (for dropdown selections)
+    const allGroups = computed(() => {
+      console.log('allGroups computed - groups.value:', groups.value)
+      return groups.value || []
+    })
+
+    const filteredTunnels = computed(() => {
+      if (!selectedGroup.value) {
+        return tunnels.value
+      }
+      return tunnels.value.filter(tunnel => tunnel.group_name === selectedGroup.value)
+    })
+
     const paginatedTunnels = computed(() => {
-      if (!tunnels.value || !Array.isArray(tunnels.value)) {
+      if (!filteredTunnels.value || !Array.isArray(filteredTunnels.value)) {
         return []
       }
       const start = (currentPage.value - 1) * itemsPerPage.value
       const end = start + itemsPerPage.value
-      return tunnels.value.slice(start, end)
+      return filteredTunnels.value.slice(start, end)
     })
 
     const loadTunnels = async () => {
@@ -549,12 +803,18 @@ export default {
 
     const editTunnel = (tunnel) => {
       selectedTunnel.value = tunnel
+      console.log('Editing tunnel:', tunnel)
+      console.log('Current group_name:', tunnel.group_name)
+      
       sshConfig.value = {
         host: tunnel.host || '',
         port: tunnel.port || 22,
         username: tunnel.username || 'root',
-        password: tunnel.password || ''
+        password: tunnel.password || '',
+        group_name: tunnel.group_name || 'Default'
       }
+      
+      console.log('SSH Config set to:', sshConfig.value)
       showConfigModal.value = true
     }
 
@@ -577,7 +837,8 @@ export default {
           host: sshConfig.value.host,
           port: parseInt(sshConfig.value.port),
           username: sshConfig.value.username,
-          password: sshConfig.value.password
+          password: sshConfig.value.password,
+          group_name: sshConfig.value.group_name || 'Default'
         }
 
         await apiService.updateTunnel(selectedTunnel.value.id, updateData)
@@ -648,12 +909,152 @@ export default {
       return new Date(dateString).toLocaleString()
     }
 
+    const getGroupClass = (groupName) => {
+      // Generate consistent color classes based on group name
+      const colors = ['primary', 'secondary', 'success', 'warning', 'info', 'danger']
+      const hash = groupName ? groupName.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : 0
+      return colors[hash % colors.length]
+    }
+
     const handlePageChange = (page) => {
       currentPage.value = page
     }
 
+    // Groups management functions
+    const loadGroups = async () => {
+      try {
+        groupsLoading.value = true
+        console.log('Loading groups...')
+        const response = await apiService.getGroups()
+        console.log('Groups API Response:', response)
+        
+        if (response.data && Array.isArray(response.data.data)) {
+          groups.value = response.data.data
+          console.log('Groups loaded (format 1):', groups.value)
+        } else if (response.data && Array.isArray(response.data)) {
+          groups.value = response.data
+          console.log('Groups loaded (format 2):', groups.value)
+        } else {
+          console.error('Unexpected groups response format:', response.data)
+          groups.value = []
+        }
+      } catch (err) {
+        console.error('Error loading groups:', err)
+        console.error('Error details:', err.response?.data)
+        groups.value = []
+      } finally {
+        groupsLoading.value = false
+      }
+    }
+
+    const openManageGroupsModal = async () => {
+      showManageGroupsModal.value = true
+      await loadGroups()
+    }
+
+    const closeManageGroupsModal = () => {
+      showManageGroupsModal.value = false
+      newGroup.value = {
+        name: '',
+        description: '',
+        color: 'primary'
+      }
+    }
+
+    const addGroup = async () => {
+      try {
+        if (!newGroup.value.name.trim()) {
+          alert('Group name is required')
+          return
+        }
+
+        await apiService.createGroup(newGroup.value)
+        alert('Group created successfully!')
+        await loadGroups()
+        
+        // Reset form
+        newGroup.value = {
+          name: '',
+          description: '',
+          color: 'primary'
+        }
+        
+        // Reload tunnels to refresh available groups
+        await loadTunnels()
+      } catch (err) {
+        console.error('Error creating group:', err)
+        const errorMsg = err.response?.data?.message || err.message || 'Failed to create group'
+        alert(`Error: ${errorMsg}`)
+      }
+    }
+
+    const editGroup = (group) => {
+      editingGroup.value = group
+      editGroupData.value = {
+        name: group.name,
+        description: group.description || '',
+        color: group.color || 'primary'
+      }
+      showEditGroupModal.value = true
+    }
+
+    const closeEditGroupModal = () => {
+      showEditGroupModal.value = false
+      editingGroup.value = null
+      editGroupData.value = {
+        name: '',
+        description: '',
+        color: 'primary'
+      }
+    }
+
+    const updateGroup = async () => {
+      try {
+        if (!editGroupData.value.name.trim()) {
+          alert('Group name is required')
+          return
+        }
+
+        await apiService.updateGroup(editingGroup.value.id, editGroupData.value)
+        alert('Group updated successfully!')
+        await loadGroups()
+        await loadTunnels() // Refresh tunnels to update group names
+        closeEditGroupModal()
+      } catch (err) {
+        console.error('Error updating group:', err)
+        const errorMsg = err.response?.data?.message || err.message || 'Failed to update group'
+        alert(`Error: ${errorMsg}`)
+      }
+    }
+
+    const deleteGroup = async (group) => {
+      const usageCount = getGroupUsageCount(group.name)
+      if (usageCount > 0) {
+        alert(`Cannot delete group "${group.name}": ${usageCount} SSH connections are using this group. Please move or delete those connections first.`)
+        return
+      }
+
+      if (confirm(`Are you sure you want to delete group "${group.name}"?`)) {
+        try {
+          await apiService.deleteGroup(group.id)
+          alert('Group deleted successfully!')
+          await loadGroups()
+          await loadTunnels() // Refresh tunnels
+        } catch (err) {
+          console.error('Error deleting group:', err)
+          const errorMsg = err.response?.data?.message || err.message || 'Failed to delete group'
+          alert(`Error: ${errorMsg}`)
+        }
+      }
+    }
+
+    const getGroupUsageCount = (groupName) => {
+      return tunnels.value.filter(tunnel => tunnel.group_name === groupName).length
+    }
+
     onMounted(() => {
       loadTunnels()
+      loadGroups() // Load groups for dropdown selections
       
       // If agentId is provided, automatically open SSH Web Terminal
       if (props.agentId) {
@@ -669,6 +1070,10 @@ export default {
       currentPage,
       itemsPerPage,
       paginatedTunnels,
+      filteredTunnels,
+      availableGroups,
+      allGroups,
+      selectedGroup,
       showConfigModal,
       selectedTunnel,
       sshConfig,
@@ -691,8 +1096,25 @@ export default {
       closeAddTunnelModal,
       addNewTunnel,
       formatDate,
+      getGroupClass,
       handlePageChange,
-      loadTunnels
+      loadTunnels,
+      // Groups management
+      showManageGroupsModal,
+      showEditGroupModal,
+      groups,
+      groupsLoading,
+      newGroup,
+      editingGroup,
+      editGroupData,
+      openManageGroupsModal,
+      closeManageGroupsModal,
+      addGroup,
+      editGroup,
+      closeEditGroupModal,
+      updateGroup,
+      deleteGroup,
+      getGroupUsageCount
     }
   }
 }
@@ -1113,8 +1535,25 @@ export default {
   min-height: 100px;
 }
 
+.form-group select,
+.form-control {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1.5px solid #6B7280;
+  border-radius: 10px;
+  background: #2D3748;
+  color: #F7FAFC;
+  font-size: 15px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
 .form-group input:focus,
-.form-group textarea:focus {
+.form-group textarea:focus,
+.form-group select:focus,
+.form-control:focus {
   outline: none;
   border-color: var(--primary-color);
   box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
@@ -1437,6 +1876,267 @@ export default {
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
+}
+
+/* Group Filter Styles */
+.group-filter-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--surface-color);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.filter-group label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.group-filter {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--background-color);
+  color: var(--text-primary);
+  font-size: 14px;
+  min-width: 150px;
+}
+
+.group-stats {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* Group Badge Styles */
+.group-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.group-badge.primary {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.group-badge.secondary {
+  background: rgba(107, 114, 128, 0.15);
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.3);
+}
+
+.group-badge.success {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.group-badge.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.group-badge.info {
+  background: rgba(20, 184, 166, 0.15);
+  color: #14b8a6;
+  border: 1px solid rgba(20, 184, 166, 0.3);
+}
+
+.group-badge.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.field-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* Header Actions Styles */
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.manage-groups-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.manage-groups-btn:hover {
+  background: var(--surface-alt);
+  border-color: var(--primary-color);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.manage-groups-btn i {
+  font-size: 12px;
+}
+
+/* Groups Management Modal Styles */
+.groups-modal {
+  max-width: 800px;
+  width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.groups-management {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.add-group-section,
+.groups-list-section {
+  padding: 20px;
+  background: var(--surface-color);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.add-group-section h4,
+.groups-list-section h4 {
+  margin: 0 0 16px 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.add-group-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--background-color);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.group-item:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.group-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.group-usage {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-color);
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.group-description {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.group-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.group-actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.group-actions .action-btn {
+  padding: 8px;
+  min-width: 36px;
+  border-radius: 6px;
+}
+
+.group-actions .action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.group-actions .action-btn:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Edit Group Modal Styles */
+.edit-group-modal {
+  max-width: 500px;
+  width: 90vw;
+}
+
+.edit-group-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 /* Dark theme support */

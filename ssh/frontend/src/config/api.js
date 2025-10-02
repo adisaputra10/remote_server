@@ -268,6 +268,23 @@ export const apiService = {
 
   deleteTunnel(id) {
     return api.delete(`/api/tunnels/${id}`)
+  },
+
+  // SSH Groups
+  getGroups() {
+    return api.get('/api/ssh-groups')
+  },
+
+  createGroup(groupData) {
+    return api.post('/api/ssh-groups', groupData)
+  },
+
+  updateGroup(id, groupData) {
+    return api.put(`/api/ssh-groups/${id}`, groupData)
+  },
+
+  deleteGroup(id) {
+    return api.delete(`/api/ssh-groups/${id}`)
   }
 }
 

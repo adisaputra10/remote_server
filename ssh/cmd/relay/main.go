@@ -124,8 +124,19 @@ type SSHTunnel struct {
 	Username    string    `json:"username" db:"username"`
 	Password    string    `json:"password" db:"password"`
 	Description string    `json:"description" db:"description"`
+	GroupName   string    `json:"group_name" db:"group_name"`
 	Status      string    `json:"status" db:"status"`
 	SSHEnabled  bool      `json:"ssh_enabled" db:"ssh_enabled"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	CreatedBy   string    `json:"created_by" db:"created_by"`
+}
+
+type SSHGroup struct {
+	ID          int       `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	Description string    `json:"description" db:"description"`
+	Color       string    `json:"color" db:"color"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
 	CreatedBy   string    `json:"created_by" db:"created_by"`
@@ -394,6 +405,16 @@ func (rs *RelayServer) initDatabase() {
             INDEX idx_name (name),
             INDEX idx_host (host)
         )`,
+		`CREATE TABLE IF NOT EXISTS ssh_groups (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) UNIQUE NOT NULL,
+            description TEXT,
+            color VARCHAR(20) DEFAULT 'primary',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            created_by VARCHAR(100),
+            INDEX idx_name (name)
+        )`,
 	}
 
 	for _, query := range queries {
@@ -415,6 +436,7 @@ func (rs *RelayServer) initDatabase() {
 		`ALTER TABLE clients ADD COLUMN token VARCHAR(255) AFTER agent_id`,
 		`ALTER TABLE users ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY FIRST`,
 		`ALTER TABLE ssh_tunnels ADD COLUMN password VARCHAR(255) NOT NULL DEFAULT '' AFTER username`,
+		`ALTER TABLE ssh_tunnels ADD COLUMN group_name VARCHAR(100) DEFAULT 'Default' AFTER description`,
 	}
 
 	for _, query := range alterQueries {
@@ -549,6 +571,31 @@ func (rs *RelayServer) initDatabase() {
 				rs.logger.Error("Failed to create default setting %s: %v", key, err)
 			} else {
 				rs.logger.Info("Created default setting: %s = %s", key, value)
+			}
+		}
+	}
+
+	// Insert default SSH groups if table is empty
+	var groupCount int
+	rs.db.QueryRow("SELECT COUNT(*) FROM ssh_groups").Scan(&groupCount)
+	if groupCount == 0 {
+		defaultGroups := []map[string]interface{}{
+			{"name": "Production", "description": "Production servers", "color": "danger", "created_by": "system"},
+			{"name": "Development", "description": "Development servers", "color": "warning", "created_by": "system"},
+			{"name": "Testing", "description": "Testing and staging servers", "color": "info", "created_by": "system"},
+			{"name": "Database", "description": "Database servers", "color": "success", "created_by": "system"},
+		}
+
+		for _, group := range defaultGroups {
+			_, err := rs.db.Exec(`
+				INSERT INTO ssh_groups (name, description, color, created_at, updated_at, created_by)
+				VALUES (?, ?, ?, NOW(), NOW(), ?)
+			`, group["name"], group["description"], group["color"], group["created_by"])
+			
+			if err != nil {
+				rs.logger.Error("Failed to create default SSH group %s: %v", group["name"], err)
+			} else {
+				rs.logger.Info("Created default SSH group: %s", group["name"])
 			}
 		}
 	}
@@ -1787,6 +1834,8 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/ssh-management", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHManagement))) // Handle SSH Management CRUD
 	http.HandleFunc("/api/tunnels", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnels)))               // Handle SSH Tunnels CRUD
 	http.HandleFunc("/api/tunnels/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnels)))              // Handle /api/tunnels/{id}
+	http.HandleFunc("/api/ssh-groups", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHGroups)))           // Handle SSH Groups CRUD
+	http.HandleFunc("/api/ssh-groups/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHGroups)))          // Handle /api/ssh-groups/{id}
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
 
@@ -1819,34 +1868,41 @@ func (rs *RelayServer) requireAPIAuth(handler http.HandlerFunc) http.HandlerFunc
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Basic ") {
 			// Parse Basic Auth
+			// rs.logger.Info("Found Basic Auth header")
 			payload := strings.TrimPrefix(authHeader, "Basic ")
 			data, err := base64.StdEncoding.DecodeString(payload)
 			if err != nil {
+				rs.logger.Error("Failed to decode Basic Auth: %v", err)
 				http.Error(w, "Invalid authentication", http.StatusUnauthorized)
 				return
 			}
 
 			credentials := strings.SplitN(string(data), ":", 2)
 			if len(credentials) != 2 {
+				rs.logger.Error("Invalid Basic Auth format")
 				http.Error(w, "Invalid authentication", http.StatusUnauthorized)
 				return
 			}
 
 			username, password := credentials[0], credentials[1]
+			// rs.logger.Info("Basic Auth - Username: %s", username)
 
 			// Validate credentials against database
 			var storedPassword, role string
 			err = rs.db.QueryRow("SELECT password, role FROM users WHERE username = ?", username).Scan(&storedPassword, &role)
 			if err != nil {
+				rs.logger.Error("Database auth query failed: %v", err)
 				http.Error(w, "Invalid authentication", http.StatusUnauthorized)
 				return
 			}
 
 			if storedPassword != password {
+				rs.logger.Error("Password mismatch for user: %s", username)
 				http.Error(w, "Invalid authentication", http.StatusUnauthorized)
 				return
 			}
 
+			// rs.logger.Info("Basic Auth SUCCESS - User: %s, Role: %s", username, role)
 			// Set user info in headers for handler
 			r.Header.Set("X-User-Role", role)
 			r.Header.Set("X-Username", username)
@@ -1855,19 +1911,23 @@ func (rs *RelayServer) requireAPIAuth(handler http.HandlerFunc) http.HandlerFunc
 			return
 		}
 
+		// rs.logger.Info("No Basic Auth header, checking cookie auth")
 		// Fallback to cookie-based auth (for web interface)
 		cookie, err := r.Cookie("tunnel-session")
 		if err != nil || cookie.Value == "" {
+			// rs.logger.Error("No session cookie found")
 			http.Error(w, "Authentication required", http.StatusUnauthorized)
 			return
 		}
 
 		session, exists := rs.webSessions[cookie.Value]
 		if !exists {
+			rs.logger.Error("Invalid session cookie")
 			http.Error(w, "Invalid session", http.StatusUnauthorized)
 			return
 		}
 
+		// rs.logger.Info("Cookie Auth SUCCESS - User: %s, Role: %s", session.Username, session.Role)
 		// Store user info in request context for later use
 		r.Header.Set("X-User-Role", session.Role)
 		r.Header.Set("X-Username", session.Username)
@@ -4550,12 +4610,12 @@ func (rs *RelayServer) handleAPITunnels(w http.ResponseWriter, r *http.Request) 
 
 // Get all SSH tunnels
 func (rs *RelayServer) handleGetTunnels(w http.ResponseWriter, r *http.Request) {
-	rs.logger.Info("=== GET TUNNELS REQUEST ===")
+	// rs.logger.Info("=== GET TUNNELS REQUEST ===")
 
 	rows, err := rs.db.Query(`
-		SELECT id, name, host, port, username, password, description, status, ssh_enabled, created_at, updated_at, created_by 
+		SELECT id, name, host, port, username, password, description, group_name, status, ssh_enabled, created_at, updated_at, created_by 
 		FROM ssh_tunnels 
-		ORDER BY created_at DESC
+		ORDER BY group_name, created_at DESC
 	`)
 	if err != nil {
 		rs.logger.Error("Failed to query SSH tunnels: %v", err)
@@ -4567,10 +4627,10 @@ func (rs *RelayServer) handleGetTunnels(w http.ResponseWriter, r *http.Request) 
 	var tunnels []SSHTunnel
 	for rows.Next() {
 		var tunnel SSHTunnel
-		var description, createdBy sql.NullString
+		var description, groupName, createdBy sql.NullString
 		
 		err := rows.Scan(&tunnel.ID, &tunnel.Name, &tunnel.Host, &tunnel.Port, &tunnel.Username, 
-			&tunnel.Password, &description, &tunnel.Status, &tunnel.SSHEnabled, &tunnel.CreatedAt, &tunnel.UpdatedAt, &createdBy)
+			&tunnel.Password, &description, &groupName, &tunnel.Status, &tunnel.SSHEnabled, &tunnel.CreatedAt, &tunnel.UpdatedAt, &createdBy)
 		if err != nil {
 			rs.logger.Error("Failed to scan SSH tunnel row: %v", err)
 			continue
@@ -4578,6 +4638,11 @@ func (rs *RelayServer) handleGetTunnels(w http.ResponseWriter, r *http.Request) 
 		
 		if description.Valid {
 			tunnel.Description = description.String
+		}
+		if groupName.Valid {
+			tunnel.GroupName = groupName.String
+		} else {
+			tunnel.GroupName = "Default"
 		}
 		if createdBy.Valid {
 			tunnel.CreatedBy = createdBy.String
@@ -4608,7 +4673,11 @@ func (rs *RelayServer) handleCreateTunnel(w http.ResponseWriter, r *http.Request
 	if tunnel.Port == 0 {
 		tunnel.Port = 22
 	}
+	if tunnel.GroupName == "" {
+		tunnel.GroupName = "Default"
+	}
 	tunnel.SSHEnabled = true
+	tunnel.ID = fmt.Sprintf("tunnel_%d", time.Now().UnixNano())
 	tunnel.CreatedAt = time.Now()
 	tunnel.UpdatedAt = time.Now()
 
@@ -4627,9 +4696,9 @@ func (rs *RelayServer) handleCreateTunnel(w http.ResponseWriter, r *http.Request
 	tunnel.CreatedBy = username
 
 	_, err := rs.db.Exec(`
-		INSERT INTO ssh_tunnels (id, name, host, port, username, password, description, status, ssh_enabled, created_at, updated_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, tunnel.ID, tunnel.Name, tunnel.Host, tunnel.Port, tunnel.Username, tunnel.Password, tunnel.Description, 
+		INSERT INTO ssh_tunnels (id, name, host, port, username, password, description, group_name, status, ssh_enabled, created_at, updated_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, tunnel.ID, tunnel.Name, tunnel.Host, tunnel.Port, tunnel.Username, tunnel.Password, tunnel.Description, tunnel.GroupName,
 		tunnel.Status, tunnel.SSHEnabled, tunnel.CreatedAt, tunnel.UpdatedAt, tunnel.CreatedBy)
 
 	if err != nil {
@@ -4693,6 +4762,10 @@ func (rs *RelayServer) handleUpdateTunnel(w http.ResponseWriter, r *http.Request
 		setParts = append(setParts, "description = ?")
 		args = append(args, description)
 	}
+	if group_name, ok := updateData["group_name"]; ok {
+		setParts = append(setParts, "group_name = ?")
+		args = append(args, group_name)
+	}
 	if status, ok := updateData["status"]; ok {
 		setParts = append(setParts, "status = ?")
 		args = append(args, status)
@@ -4751,6 +4824,211 @@ func (rs *RelayServer) handleDeleteTunnel(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "SSH tunnel deleted successfully",
+	})
+}
+
+// SSH Groups CRUD handlers
+func (rs *RelayServer) handleAPISSHGroups(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetSSHGroups(w, r)
+	case "POST":
+		rs.handleCreateSSHGroup(w, r)
+	case "PUT":
+		rs.handleUpdateSSHGroup(w, r)
+	case "DELETE":
+		rs.handleDeleteSSHGroup(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Get all SSH groups
+func (rs *RelayServer) handleGetSSHGroups(w http.ResponseWriter, r *http.Request) {
+	// rs.logger.Info("=== GET SSH GROUPS REQUEST ===")
+
+	rows, err := rs.db.Query(`
+		SELECT id, name, description, color, created_at, updated_at, created_by 
+		FROM ssh_groups 
+		ORDER BY name ASC
+	`)
+	if err != nil {
+		rs.logger.Error("Failed to query SSH groups: %v", err)
+		http.Error(w, "Failed to retrieve SSH groups", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var groups []SSHGroup
+	for rows.Next() {
+		var group SSHGroup
+		var description, createdBy sql.NullString
+		
+		err := rows.Scan(&group.ID, &group.Name, &description, &group.Color, 
+			&group.CreatedAt, &group.UpdatedAt, &createdBy)
+		if err != nil {
+			rs.logger.Error("Failed to scan SSH group row: %v", err)
+			continue
+		}
+		
+		if description.Valid {
+			group.Description = description.String
+		}
+		if createdBy.Valid {
+			group.CreatedBy = createdBy.String
+		}
+		
+		groups = append(groups, group)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": groups,
+	})
+}
+
+// Create new SSH group
+func (rs *RelayServer) handleCreateSSHGroup(w http.ResponseWriter, r *http.Request) {
+	var group SSHGroup
+	if err := json.NewDecoder(r.Body).Decode(&group); err != nil {
+		rs.logger.Error("Failed to decode group data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if group.Name == "" {
+		http.Error(w, "Group name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults
+	if group.Color == "" {
+		group.Color = "primary"
+	}
+	group.CreatedAt = time.Now()
+	group.UpdatedAt = time.Now()
+
+	// Get username from basic auth header
+	username := "system"
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Basic ") {
+		payload := strings.TrimPrefix(authHeader, "Basic ")
+		if data, err := base64.StdEncoding.DecodeString(payload); err == nil {
+			credentials := strings.SplitN(string(data), ":", 2)
+			if len(credentials) == 2 {
+				username = credentials[0]
+			}
+		}
+	}
+	group.CreatedBy = username
+
+	result, err := rs.db.Exec(`
+		INSERT INTO ssh_groups (name, description, color, created_at, updated_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, group.Name, group.Description, group.Color, group.CreatedAt, group.UpdatedAt, group.CreatedBy)
+
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") {
+			http.Error(w, "Group name already exists", http.StatusConflict)
+		} else {
+			rs.logger.Error("Failed to create SSH group: %v", err)
+			http.Error(w, "Failed to create SSH group", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	groupID, _ := result.LastInsertId()
+	group.ID = int(groupID)
+
+	rs.logger.Info("Created SSH group %s by user %s", group.Name, username)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(group)
+}
+
+// Update SSH group
+func (rs *RelayServer) handleUpdateSSHGroup(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/ssh-groups/")
+	groupID := strings.Split(path, "/")[0]
+
+	if groupID == "" {
+		http.Error(w, "Group ID is required", http.StatusBadRequest)
+		return
+	}
+
+	var group SSHGroup
+	if err := json.NewDecoder(r.Body).Decode(&group); err != nil {
+		rs.logger.Error("Failed to decode group data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if group.Name == "" {
+		http.Error(w, "Group name is required", http.StatusBadRequest)
+		return
+	}
+
+	group.UpdatedAt = time.Now()
+
+	_, err := rs.db.Exec(`
+		UPDATE ssh_groups 
+		SET name = ?, description = ?, color = ?, updated_at = ?
+		WHERE id = ?
+	`, group.Name, group.Description, group.Color, group.UpdatedAt, groupID)
+
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") {
+			http.Error(w, "Group name already exists", http.StatusConflict)
+		} else {
+			rs.logger.Error("Failed to update SSH group %s: %v", groupID, err)
+			http.Error(w, "Failed to update SSH group", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	rs.logger.Info("Updated SSH group %s", groupID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH group updated successfully",
+	})
+}
+
+// Delete SSH group
+func (rs *RelayServer) handleDeleteSSHGroup(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/ssh-groups/")
+	groupID := strings.Split(path, "/")[0]
+
+	if groupID == "" {
+		http.Error(w, "Group ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if group is being used by any tunnels
+	var count int
+	rs.db.QueryRow("SELECT COUNT(*) FROM ssh_tunnels WHERE group_name = (SELECT name FROM ssh_groups WHERE id = ?)", groupID).Scan(&count)
+	
+	if count > 0 {
+		http.Error(w, fmt.Sprintf("Cannot delete group: %d SSH tunnels are using this group", count), http.StatusConflict)
+		return
+	}
+
+	_, err := rs.db.Exec("DELETE FROM ssh_groups WHERE id = ?", groupID)
+	if err != nil {
+		rs.logger.Error("Failed to delete SSH group %s: %v", groupID, err)
+		http.Error(w, "Failed to delete SSH group", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Deleted SSH group %s", groupID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH group deleted successfully",
 	})
 }
 
@@ -4834,9 +5112,9 @@ func replaceAllString(s, old, new string) string {
 }
 
 // logSSHCommandToFile logs SSH commands to file for auditing (optimized version from ssh-web)
-func (rs *RelayServer) logSSHCommandToFile(host, username, command string) {
+func (rs *RelayServer) logSSHCommandToFile(host, sshUsername, command, webUsername string) {
 	timestamp := time.Now().Format(time.RFC3339)
-	logEntry := fmt.Sprintf("[%s] [%s@%s] %s\n", timestamp, username, host, command)
+	logEntry := fmt.Sprintf("[%s] [%s@%s] [web_user:%s] %s\n", timestamp, sshUsername, host, webUsername, command)
 
 	// Create logs directory if it doesn't exist
 	logDir := "logs"
@@ -4856,9 +5134,62 @@ func (rs *RelayServer) logSSHCommandToFile(host, username, command string) {
 	if _, err := f.WriteString(logEntry); err != nil {
 		rs.logger.Error("Error writing to SSH command log file: %v", err)
 	}
+
+	// Also log to database for better querying and management
+	go rs.logSSHCommandToDatabase(host, sshUsername, command, webUsername)
+}
+
+// logSSHCommandToDatabase logs SSH commands to database
+func (rs *RelayServer) logSSHCommandToDatabase(host, sshUsername, command, webUsername string) {
+	// Create session_id with web_ssh prefix and web username format
+	sessionID := fmt.Sprintf("web_ssh_%s_%d", webUsername, time.Now().Unix())
+	
+	// Insert into ssh_logs table
+	_, err := rs.db.Exec(
+		"INSERT INTO ssh_logs (session_id, direction, ssh_user, ssh_host, ssh_port, command, data_size, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID,
+		"input",
+		sshUsername,
+		host,
+		"22",
+		command,
+		len(command),
+		time.Now(),
+	)
+	
+	if err != nil {
+		rs.logger.Error("Failed to log SSH command to database: %v", err)
+	} else {
+		rs.logger.Debug("SSH command logged to database: %s@%s - %s (web user: %s)", sshUsername, host, command, webUsername)
+	}
 }
 
 func (rs *RelayServer) handleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Debug: log all cookies received
+	rs.logger.Info("=== SSH WebSocket Debug ===")
+	rs.logger.Info("Cookies received: %d", len(r.Cookies()))
+	for _, cookie := range r.Cookies() {
+		rs.logger.Info("Cookie: %s = %s", cookie.Name, cookie.Value)
+	}
+	
+	// Get web user session
+	var webUsername string = "anonymous"
+	if cookie, err := r.Cookie("tunnel-session"); err == nil {
+		rs.logger.Info("Found tunnel-session cookie: %s", cookie.Value)
+		if session, exists := rs.webSessions[cookie.Value]; exists {
+			webUsername = session.Username
+			rs.logger.Info("Found web session for user: %s", webUsername)
+		} else {
+			rs.logger.Info("Session not found in webSessions map")
+			rs.logger.Info("Available sessions: %d", len(rs.webSessions))
+			for sid, sess := range rs.webSessions {
+				rs.logger.Info("Session %s -> %s", sid, sess.Username)
+			}
+		}
+	} else {
+		rs.logger.Info("No tunnel-session cookie found: %v", err)
+	}
+	
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Allow all origins for development
@@ -4879,14 +5210,14 @@ func (rs *RelayServer) handleSSHWebSocket(w http.ResponseWriter, r *http.Request
 	conn.SetWriteDeadline(time.Time{}) // No write timeout
 	conn.EnableWriteCompression(false) // Disable compression for lower latency
 
-	rs.logger.Info("New SSH WebSocket connection established from %s with low-latency settings", r.RemoteAddr)
+	rs.logger.Info("New SSH WebSocket connection established from %s with low-latency settings for web user: %s", r.RemoteAddr, webUsername)
 
-	// Handle SSH WebSocket session
-	rs.handleSSHSession(conn)
+	// Handle SSH WebSocket session with web username
+	rs.handleSSHSession(conn, webUsername)
 }
 
 // Handle SSH session through WebSocket
-func (rs *RelayServer) handleSSHSession(conn *websocket.Conn) {
+func (rs *RelayServer) handleSSHSession(conn *websocket.Conn, webUsername string) {
 	var sshClient *ssh.Client
 	var session *ssh.Session
 	var stdin io.WriteCloser
@@ -4896,6 +5227,8 @@ func (rs *RelayServer) handleSSHSession(conn *websocket.Conn) {
 		Host     string
 		Username string
 	}
+	var bufferMutex sync.Mutex
+	var actualWebUser string = webUsername  // Store the actual web user
 
 	for {
 		var msg map[string]interface{}
@@ -4925,6 +5258,12 @@ func (rs *RelayServer) handleSSHSession(conn *websocket.Conn) {
 			port := int(portFloat)
 			username, _ := msg["username"].(string)
 			password, _ := msg["password"].(string)
+			
+			// Get webUser from message if available (override cookie-based username)
+			if webUser, ok := msg["webUser"].(string); ok && webUser != "" {
+				actualWebUser = webUser
+				rs.logger.Info("Using webUser from WebSocket message: %s", actualWebUser)
+			}
 
 			if host == "" || port == 0 || username == "" || password == "" {
 				conn.WriteJSON(map[string]interface{}{
@@ -5132,18 +5471,25 @@ func (rs *RelayServer) handleSSHSession(conn *websocket.Conn) {
 				// Write to stdin IMMEDIATELY with zero processing overhead
 				stdin.Write([]byte(data))
 				
-				// Async command logging (non-blocking)
+				// Thread-safe command logging (non-blocking)
 				go func(input string) {
+					bufferMutex.Lock()
+					defer bufferMutex.Unlock()
+					
 					if input == "\b" || input == "\x7f" {
+						// Backspace handling
 						if len(commandBuffer) > 0 {
 							commandBuffer = commandBuffer[:len(commandBuffer)-1]
 						}
 					} else if strings.Contains(input, "\n") || strings.Contains(input, "\r") {
+						// Enter pressed - log the command
 						if cmd := strings.TrimSpace(commandBuffer); cmd != "" {
-							go rs.logSSHCommandToFile(connectionInfo.Host, connectionInfo.Username, cmd)
+							rs.logger.Debug("SSH Command detected: %s", cmd)
+							go rs.logSSHCommandToFile(connectionInfo.Host, connectionInfo.Username, cmd, actualWebUser)
 						}
 						commandBuffer = ""
 					} else if len(input) == 1 && input >= " " && input <= "~" {
+						// Regular printable character
 						commandBuffer += input
 					}
 				}(data)

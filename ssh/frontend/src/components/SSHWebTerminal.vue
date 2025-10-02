@@ -134,13 +134,17 @@ export default {
         socket.value = new WebSocket(wsUrl)
         
         socket.value.onopen = () => {
+          // Get web user info for logging
+          const webUser = localStorage.getItem('user_name') || 'anonymous'
+          
           // Send connection details to relay server
           const connectData = {
             type: 'connect',
             host: connectHost,
             port: parseInt(connectPort),
             username: connection.username,
-            password: connection.password
+            password: connection.password,
+            webUser: webUser  // Add web username for session logging
           }
           
           // Add agent information if available
