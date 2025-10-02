@@ -251,6 +251,23 @@ export const apiService = {
 
   deleteSSHConnection(id) {
     return api.delete(`/api/ssh-connections/${id}`)
+  },
+
+  // SSH Tunnels
+  getTunnels() {
+    return api.get('/api/tunnels')
+  },
+
+  createTunnel(tunnelData) {
+    return api.post('/api/tunnels', tunnelData)
+  },
+
+  updateTunnel(id, tunnelData) {
+    return api.put(`/api/tunnels/${id}`, tunnelData)
+  },
+
+  deleteTunnel(id) {
+    return api.delete(`/api/tunnels/${id}`)
   }
 }
 

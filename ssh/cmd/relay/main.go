@@ -116,6 +116,21 @@ type Session struct {
 	Created  time.Time
 }
 
+type SSHTunnel struct {
+	ID          string    `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	Host        string    `json:"host" db:"host"`
+	Port        int       `json:"port" db:"port"`
+	Username    string    `json:"username" db:"username"`
+	Password    string    `json:"password" db:"password"`
+	Description string    `json:"description" db:"description"`
+	Status      string    `json:"status" db:"status"`
+	SSHEnabled  bool      `json:"ssh_enabled" db:"ssh_enabled"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	CreatedBy   string    `json:"created_by" db:"created_by"`
+}
+
 type SSHTunnelLogRequest struct {
 	SessionID string `json:"session_id"`
 	ClientID  string `json:"client_id"`
@@ -363,6 +378,22 @@ func (rs *RelayServer) initDatabase() {
             setting_value TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS ssh_tunnels (
+            id VARCHAR(50) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            host VARCHAR(255) NOT NULL,
+            port INT DEFAULT 22,
+            username VARCHAR(100) NOT NULL,
+            password VARCHAR(255) NOT NULL DEFAULT '',
+            description TEXT,
+            status ENUM('CONNECTED', 'DISCONNECTED') DEFAULT 'DISCONNECTED',
+            ssh_enabled BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            created_by VARCHAR(100),
+            INDEX idx_name (name),
+            INDEX idx_host (host)
+        )`,
 	}
 
 	for _, query := range queries {
@@ -383,6 +414,7 @@ func (rs *RelayServer) initDatabase() {
 		`ALTER TABLE agents ADD COLUMN ssh_management BOOLEAN DEFAULT FALSE AFTER project_id`,
 		`ALTER TABLE clients ADD COLUMN token VARCHAR(255) AFTER agent_id`,
 		`ALTER TABLE users ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY FIRST`,
+		`ALTER TABLE ssh_tunnels ADD COLUMN password VARCHAR(255) NOT NULL DEFAULT '' AFTER username`,
 	}
 
 	for _, query := range alterQueries {
@@ -1753,11 +1785,14 @@ func (rs *RelayServer) setupRoutes() {
 	http.HandleFunc("/api/users", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers)))
 	http.HandleFunc("/api/users/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPIUsers)))                 // Handle /api/users/{id}
 	http.HandleFunc("/api/ssh-management", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPISSHManagement))) // Handle SSH Management CRUD
+	http.HandleFunc("/api/tunnels", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnels)))               // Handle SSH Tunnels CRUD
+	http.HandleFunc("/api/tunnels/", rs.corsMiddleware(rs.requireAPIAuth(rs.handleAPITunnels)))              // Handle /api/tunnels/{id}
 	http.HandleFunc("/api/log-query", rs.corsMiddleware(rs.handleAPILogQuery))
 	http.HandleFunc("/api/log-ssh", rs.corsMiddleware(rs.handleAPILogSSH))
 
 	// SSH WebSocket endpoint
 	http.HandleFunc("/ssh-ws", rs.corsMiddleware(rs.handleSSHWebSocket))
+	http.HandleFunc("/ws/ssh", rs.corsMiddleware(rs.handleSSHWebSocket)) // Alternative path for secure terminal
 
 	// Health endpoint
 	http.HandleFunc("/health", rs.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -4495,6 +4530,228 @@ func (rs *RelayServer) generateSecureToken() string {
 		token[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 	}
 	return string(token)
+}
+
+// SSH Tunnels CRUD Handler
+func (rs *RelayServer) handleAPITunnels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rs.handleGetTunnels(w, r)
+	case "POST":
+		rs.handleCreateTunnel(w, r)
+	case "PUT":
+		rs.handleUpdateTunnel(w, r)
+	case "DELETE":
+		rs.handleDeleteTunnel(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Get all SSH tunnels
+func (rs *RelayServer) handleGetTunnels(w http.ResponseWriter, r *http.Request) {
+	rs.logger.Info("=== GET TUNNELS REQUEST ===")
+
+	rows, err := rs.db.Query(`
+		SELECT id, name, host, port, username, password, description, status, ssh_enabled, created_at, updated_at, created_by 
+		FROM ssh_tunnels 
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		rs.logger.Error("Failed to query SSH tunnels: %v", err)
+		http.Error(w, "Failed to retrieve SSH tunnels", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var tunnels []SSHTunnel
+	for rows.Next() {
+		var tunnel SSHTunnel
+		var description, createdBy sql.NullString
+		
+		err := rows.Scan(&tunnel.ID, &tunnel.Name, &tunnel.Host, &tunnel.Port, &tunnel.Username, 
+			&tunnel.Password, &description, &tunnel.Status, &tunnel.SSHEnabled, &tunnel.CreatedAt, &tunnel.UpdatedAt, &createdBy)
+		if err != nil {
+			rs.logger.Error("Failed to scan SSH tunnel row: %v", err)
+			continue
+		}
+		
+		if description.Valid {
+			tunnel.Description = description.String
+		}
+		if createdBy.Valid {
+			tunnel.CreatedBy = createdBy.String
+		}
+		
+		tunnels = append(tunnels, tunnel)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": tunnels,
+	})
+}
+
+// Create new SSH tunnel
+func (rs *RelayServer) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
+	var tunnel SSHTunnel
+	if err := json.NewDecoder(r.Body).Decode(&tunnel); err != nil {
+		rs.logger.Error("Failed to decode tunnel data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults
+	if tunnel.Status == "" {
+		tunnel.Status = "DISCONNECTED"
+	}
+	if tunnel.Port == 0 {
+		tunnel.Port = 22
+	}
+	tunnel.SSHEnabled = true
+	tunnel.CreatedAt = time.Now()
+	tunnel.UpdatedAt = time.Now()
+
+	// Get username from basic auth header
+	username := "system" // default fallback
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Basic ") {
+		payload := strings.TrimPrefix(authHeader, "Basic ")
+		if data, err := base64.StdEncoding.DecodeString(payload); err == nil {
+			credentials := strings.SplitN(string(data), ":", 2)
+			if len(credentials) == 2 {
+				username = credentials[0]
+			}
+		}
+	}
+	tunnel.CreatedBy = username
+
+	_, err := rs.db.Exec(`
+		INSERT INTO ssh_tunnels (id, name, host, port, username, password, description, status, ssh_enabled, created_at, updated_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, tunnel.ID, tunnel.Name, tunnel.Host, tunnel.Port, tunnel.Username, tunnel.Password, tunnel.Description, 
+		tunnel.Status, tunnel.SSHEnabled, tunnel.CreatedAt, tunnel.UpdatedAt, tunnel.CreatedBy)
+
+	if err != nil {
+		rs.logger.Error("Failed to create SSH tunnel: %v", err)
+		http.Error(w, "Failed to create SSH tunnel", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Created SSH tunnel %s by user %s", tunnel.ID, username)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH tunnel created successfully",
+		"data":    tunnel,
+	})
+}
+
+// Update SSH tunnel
+func (rs *RelayServer) handleUpdateTunnel(w http.ResponseWriter, r *http.Request) {
+	// Extract tunnel ID from URL path
+	urlParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/tunnels/"), "/")
+	if len(urlParts) == 0 || urlParts[0] == "" {
+		http.Error(w, "Tunnel ID required", http.StatusBadRequest)
+		return
+	}
+	tunnelID := urlParts[0]
+
+	var updateData map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		rs.logger.Error("Failed to decode update data: %v", err)
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	// Build dynamic update query
+	setParts := []string{}
+	args := []interface{}{}
+	
+	if name, ok := updateData["name"]; ok {
+		setParts = append(setParts, "name = ?")
+		args = append(args, name)
+	}
+	if host, ok := updateData["host"]; ok {
+		setParts = append(setParts, "host = ?")
+		args = append(args, host)
+	}
+	if port, ok := updateData["port"]; ok {
+		setParts = append(setParts, "port = ?")
+		args = append(args, port)
+	}
+	if username, ok := updateData["username"]; ok {
+		setParts = append(setParts, "username = ?")
+		args = append(args, username)
+	}
+	if password, ok := updateData["password"]; ok {
+		setParts = append(setParts, "password = ?")
+		args = append(args, password)
+	}
+	if description, ok := updateData["description"]; ok {
+		setParts = append(setParts, "description = ?")
+		args = append(args, description)
+	}
+	if status, ok := updateData["status"]; ok {
+		setParts = append(setParts, "status = ?")
+		args = append(args, status)
+	}
+
+	if len(setParts) == 0 {
+		http.Error(w, "No fields to update", http.StatusBadRequest)
+		return
+	}
+
+	// Add updated_at
+	setParts = append(setParts, "updated_at = ?")
+	args = append(args, time.Now())
+	
+	// Add tunnel ID for WHERE clause
+	args = append(args, tunnelID)
+
+	query := fmt.Sprintf("UPDATE ssh_tunnels SET %s WHERE id = ?", strings.Join(setParts, ", "))
+	
+	_, err := rs.db.Exec(query, args...)
+	if err != nil {
+		rs.logger.Error("Failed to update SSH tunnel %s: %v", tunnelID, err)
+		http.Error(w, "Failed to update SSH tunnel", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Updated SSH tunnel %s", tunnelID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH tunnel updated successfully",
+	})
+}
+
+// Delete SSH tunnel
+func (rs *RelayServer) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
+	// Extract tunnel ID from URL path
+	urlParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/tunnels/"), "/")
+	if len(urlParts) == 0 || urlParts[0] == "" {
+		http.Error(w, "Tunnel ID required", http.StatusBadRequest)
+		return
+	}
+	tunnelID := urlParts[0]
+
+	_, err := rs.db.Exec("DELETE FROM ssh_tunnels WHERE id = ?", tunnelID)
+	if err != nil {
+		rs.logger.Error("Failed to delete SSH tunnel %s: %v", tunnelID, err)
+		http.Error(w, "Failed to delete SSH tunnel", http.StatusInternalServerError)
+		return
+	}
+
+	rs.logger.Info("Deleted SSH tunnel %s", tunnelID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "SSH tunnel deleted successfully",
+	})
 }
 
 // SSH WebSocket handler for web-based SSH terminal

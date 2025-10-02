@@ -51,7 +51,7 @@
           <li v-for="menuItem in visibleMenuItems" :key="menuItem.route" class="sidebar-item">
             <a href="#" class="sidebar-link" 
                :class="{ 'active': activeTab === menuItem.route }" 
-               @click="switchTab(menuItem.route)">
+               @click.prevent="(e) => { console.log('Menu clicked:', menuItem.route, e); switchTab(menuItem.route); }">
               <i class="fas" :class="menuItem.icon"></i>
               <span>{{ menuItem.name }}</span>
             </a>
@@ -113,7 +113,7 @@
           <RemoteSSHManagement v-if="activeTab === 'remoteSSH'" />
           <UserManagement v-if="activeTab === 'userManagement'" />
           <ProjectManagement v-if="activeTab === 'projects'" />
-          <SSHManagement v-if="activeTab === 'sshManagement'" :agentId="route.query.agentId" />
+          <SSHManagement v-if="activeTab === 'sshManagement'" :agentId="route?.query?.agentId" />
           <Settings v-if="activeTab === 'settings'" />
         </div>
       </main>
@@ -318,16 +318,27 @@ export default {
     }
 
     const switchTab = (tab) => {
-      // Check if user has permission to access this tab
-      const adminOnlyTabs = ['agents', 'clients', 'logs', 'queries', 'sshLogs', 'remoteSSH', 'userManagement', 'settings']
-      
-      if (adminOnlyTabs.includes(tab) && !isAdmin.value) {
-        console.warn('Access denied: Admin privileges required for this tab')
-        return
+      try {
+        console.log('=== START SWITCHTAB DEBUG ===')
+        console.log('Switching to tab:', tab)
+        console.log('Current activeTab:', activeTab.value)
+        console.log('User role:', isAdmin.value ? 'admin' : 'user')
+        
+        const adminOnlyTabs = ['clients', 'logs', 'queries', 'sshLogs', 'userManagement', 'settings']
+        
+        if (adminOnlyTabs.includes(tab) && !isAdmin.value) {
+          console.warn('Access denied: Admin privileges required for this tab')
+          return
+        }
+        
+        console.log('Permission check passed, setting activeTab to:', tab)
+        activeTab.value = tab
+        showUserMenu.value = false
+        console.log('Tab switch completed, activeTab now:', activeTab.value)
+        console.log('=== END SWITCHTAB DEBUG ===')
+      } catch (error) {
+        console.error('Error in switchTab:', error)
       }
-      
-      activeTab.value = tab
-      showUserMenu.value = false
     }
 
     // Add Agent Modal Functions
@@ -469,8 +480,7 @@ export default {
       }
       
       // Set default tab based on user role or query parameter
-      const route = useRoute()
-      if (route.query.tab) {
+      if (route?.query?.tab) {
         // If tab is specified in query parameter, use it
         switchTab(route.query.tab)
       } else if (!isAdmin.value) {

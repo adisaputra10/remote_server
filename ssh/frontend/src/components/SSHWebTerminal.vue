@@ -4,7 +4,8 @@
       <h2>SSH Web Terminal</h2>
     </div>
     
-    <div class="connection-form">
+    <!-- Hide connection form for secure auto-login -->
+    <div class="connection-form" v-if="false" style="display: none;">
       <div class="form-group">
         <label for="host">Host:</label>
         <input type="text" id="host" v-model="connection.host" placeholder="example.com or IP">
@@ -39,6 +40,9 @@
     
     <div class="status-bar">
       <span :class="['connection-status', connectionStatusClass]">{{ connectionStatusText }}</span>
+      <span v-if="connection.host && connection.username" class="connection-info">
+        {{ connection.username }}@{{ connection.host }}:{{ connection.port }}
+      </span>
     </div>
   </div>
 </template>
@@ -123,7 +127,8 @@ export default {
       
       // Create WebSocket connection to relay server
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.hostname}:8080/ssh-ws`
+      // Use the new secure SSH WebSocket endpoint
+      const wsUrl = `${protocol}//${window.location.hostname}:8080/ws/ssh`
       
       try {
         socket.value = new WebSocket(wsUrl)
@@ -246,6 +251,70 @@ export default {
       if (terminal.value) {
         terminal.value.setAttribute('tabindex', '0')
         focusTerminal()
+      }
+      
+      // Check for secure connection data from session storage (preferred method)
+      const sessionData = sessionStorage.getItem('ssh_connection_data')
+      if (sessionData) {
+        try {
+          const connectionData = JSON.parse(sessionData)
+          sessionStorage.removeItem('ssh_connection_data') // Clean up for security
+          
+          // Pre-fill connection details
+          connection.host = connectionData.host
+          connection.port = connectionData.port || 22
+          connection.username = connectionData.username
+          connection.password = connectionData.password || ''
+          
+          appendToTerminal(`🔒 Secure SSH Terminal - Auto-Login Mode\r\n`)
+          appendToTerminal(`Target: ${connectionData.host}:${connectionData.port}\r\n`)
+          appendToTerminal(`User: ${connectionData.username}\r\n`)
+          appendToTerminal(`Establishing secure connection...\r\n\r\n`)
+          
+          // Auto-connect if password is provided
+          if (connectionData.password) {
+            setTimeout(() => {
+              connect()
+            }, 1000) // Small delay to show the connection info
+          } else {
+            appendToTerminal(`Please enter password and click Connect.\r\n\r\n`)
+          }
+          
+          return // Exit early if session data was found
+        } catch (error) {
+          console.error('Error parsing session connection data:', error)
+          appendToTerminal(`Error parsing connection data: ${error.message}\r\n\r\n`)
+        }
+      }
+      
+      // Fallback: Check URL parameters (less secure)
+      const urlParams = new URLSearchParams(window.location.search)
+      const hostParam = urlParams.get('host')
+      const usernameParam = urlParams.get('username')
+      const passwordParam = urlParams.get('password')
+      const portParam = urlParams.get('port')
+      
+      if (hostParam && usernameParam) {
+        connection.host = hostParam
+        connection.port = portParam || 22
+        connection.username = usernameParam
+        connection.password = passwordParam || ''
+        
+        appendToTerminal(`SSH Web Terminal - URL Parameters Mode\r\n`)
+        appendToTerminal(`Target: ${hostParam}:${portParam || 22}\r\n`)
+        appendToTerminal(`User: ${usernameParam}\r\n\r\n`)
+        
+        // Auto-connect if password is provided
+        if (passwordParam) {
+          appendToTerminal(`Auto-connecting with provided credentials...\r\n\r\n`)
+          setTimeout(() => {
+            connect()
+          }, 1000)
+        } else {
+          appendToTerminal(`Please enter password and click Connect.\r\n\r\n`)
+        }
+        
+        return
       }
       
       // Check if agentId is provided in query parameter
@@ -386,7 +455,7 @@ export default {
 }
 
 .terminal-container {
-  height: 450px;
+  height: calc(100vh - 120px); /* Expand terminal height since form is hidden */
   overflow-y: auto;
   background: linear-gradient(135deg, #0f172a, #1e293b);
 }
@@ -446,6 +515,12 @@ export default {
 
 .connection-status.connecting {
   color: #eab308;
+}
+
+.connection-info {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 /* Custom scrollbar for terminal */

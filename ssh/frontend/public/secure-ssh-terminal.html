@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure SSH Terminal</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            font-family: 'Courier New', monospace;
+            color: #00ff41;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 100%;
+        }
+
+        .header {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px 20px;
+            border-bottom: 2px solid #00ff41;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            margin: 0;
+            color: #00ff41;
+            font-size: 1.5rem;
+            text-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+        }
+
+        .connection-info {
+            display: flex;
+            gap: 20px;
+            font-size: 0.9rem;
+            color: #00ff41;
+        }
+
+        .connection-info span {
+            background: rgba(0, 255, 65, 0.1);
+            padding: 5px 10px;
+            border-radius: 5px;
+            border: 1px solid rgba(0, 255, 65, 0.3);
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff4444;
+            box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.connected {
+            background: #00ff41;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .terminal-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #terminal {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #00ff41;
+            font-size: 1.2rem;
+        }
+
+        .loading .spinner {
+            border: 3px solid rgba(0, 255, 65, 0.3);
+            border-top: 3px solid #00ff41;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 68, 68, 0.1);
+            border: 2px solid #ff4444;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            color: #ff4444;
+            max-width: 500px;
+        }
+
+        .retry-btn {
+            background: #ff4444;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-family: inherit;
+        }
+
+        .retry-btn:hover {
+            background: #ff6666;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 255, 65, 0.5);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 255, 65, 0.7);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔒 Secure SSH Terminal</h1>
+            <div class="connection-info">
+                <span id="host-info">Host: --</span>
+                <span id="user-info">User: --</span>
+                <span id="port-info">Port: --</span>
+            </div>
+            <div class="status">
+                <div class="status-indicator" id="status-indicator"></div>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </div>
+        
+        <div class="terminal-container">
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <div>Establishing secure connection...</div>
+                <div style="font-size: 0.8rem; margin-top: 10px; opacity: 0.7;">
+                    Auto-login in progress
+                </div>
+            </div>
+            
+            <div class="error-message" id="error-message" style="display: none;">
+                <h3>Connection Failed</h3>
+                <p id="error-text"></p>
+                <button class="retry-btn" onclick="connectSSH()">Retry Connection</button>
+            </div>
+            
+            <div id="terminal"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://unpkg.com/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    
+    <script>
+        let terminal;
+        let ws;
+        let fitAddon;
+        let isConnected = false;
+        let sshConfig = {};
+
+        // Parse connection data from session storage or POST data
+        function getConnectionData() {
+            // Try to get from session storage first (set by POST request)
+            const sessionData = sessionStorage.getItem('ssh_connection_data');
+            if (sessionData) {
+                sessionStorage.removeItem('ssh_connection_data'); // Clean up
+                return JSON.parse(sessionData);
+            }
+            
+            // Fallback to URL parameters (less secure)
+            const urlParams = new URLSearchParams(window.location.search);
+            return {
+                host: urlParams.get('host'),
+                port: urlParams.get('port') || '22',
+                username: urlParams.get('username'),
+                password: urlParams.get('password') || '',
+                tunnel_id: urlParams.get('tunnel_id')
+            };
+        }
+
+        function initTerminal() {
+            // Get connection data
+            sshConfig = getConnectionData();
+            
+            if (!sshConfig.host || !sshConfig.username) {
+                showError('Invalid connection parameters. Missing host or username.');
+                return;
+            }
+
+            // Update header info
+            document.getElementById('host-info').textContent = `Host: ${sshConfig.host}`;
+            document.getElementById('user-info').textContent = `User: ${sshConfig.username}`;
+            document.getElementById('port-info').textContent = `Port: ${sshConfig.port}`;
+
+            // Initialize terminal
+            terminal = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: '"Courier New", monospace',
+                theme: {
+                    background: 'transparent',
+                    foreground: '#00ff41',
+                    cursor: '#00ff41',
+                    cursorAccent: '#001100',
+                    selection: 'rgba(0, 255, 65, 0.3)',
+                    black: '#000000',
+                    red: '#ff6b6b',
+                    green: '#51cf66',
+                    yellow: '#ffd43b',
+                    blue: '#74c0fc',
+                    magenta: '#f06292',
+                    cyan: '#4dd0e1',
+                    white: '#ffffff',
+                    brightBlack: '#495057',
+                    brightRed: '#ff8a80',
+                    brightGreen: '#69f0ae',
+                    brightYellow: '#ffff8d',
+                    brightBlue: '#82b1ff',
+                    brightMagenta: '#ff80ab',
+                    brightCyan: '#84ffff',
+                    brightWhite: '#ffffff'
+                },
+                allowTransparency: true,
+                convertEol: true,
+                scrollback: 1000,
+                tabStopWidth: 4
+            });
+
+            fitAddon = new FitAddon.FitAddon();
+            const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            
+            terminal.loadAddon(fitAddon);
+            terminal.loadAddon(webLinksAddon);
+            
+            terminal.open(document.getElementById('terminal'));
+            fitAddon.fit();
+
+            // Auto-connect
+            connectSSH();
+        }
+
+        function connectSSH() {
+            hideError();
+            showLoading();
+            updateStatus('Connecting...', false);
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/ssh`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                
+                // Send connection request with auto-login
+                const connectMsg = {
+                    type: 'connect',
+                    host: sshConfig.host,
+                    port: parseInt(sshConfig.port),
+                    username: sshConfig.username,
+                    password: sshConfig.password, // Auto-login with stored password
+                    auto_login: true
+                };
+                
+                ws.send(JSON.stringify(connectMsg));
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'connected') {
+                        hideLoading();
+                        updateStatus('Connected', true);
+                        isConnected = true;
+                        
+                        // Focus terminal for immediate typing
+                        terminal.focus();
+                        
+                        // Show welcome message
+                        terminal.writeln('\r\n\x1b[32m✓ Connected successfully!\x1b[0m');
+                        terminal.writeln('\x1b[36mSecure SSH session established\x1b[0m\r\n');
+                        
+                    } else if (data.type === 'error') {
+                        showError(`Connection failed: ${data.message}`);
+                        updateStatus('Connection Failed', false);
+                        
+                    } else if (data.type === 'data') {
+                        if (data.data) {
+                            terminal.write(data.data);
+                        }
+                    } else if (data.type === 'disconnect') {
+                        showError('SSH session disconnected');
+                        updateStatus('Disconnected', false);
+                        isConnected = false;
+                    }
+                } catch (e) {
+                    // Handle raw data
+                    terminal.write(event.data);
+                }
+            };
+
+            ws.onclose = () => {
+                if (isConnected) {
+                    showError('Connection lost');
+                    updateStatus('Disconnected', false);
+                    isConnected = false;
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                showError('Failed to establish WebSocket connection');
+                updateStatus('Connection Error', false);
+            };
+
+            // Handle terminal input
+            terminal.onData((data) => {
+                if (ws && ws.readyState === WebSocket.OPEN && isConnected) {
+                    ws.send(JSON.stringify({
+                        type: 'input',
+                        data: data
+                    }));
+                }
+            });
+
+            // Handle terminal resize
+            terminal.onResize((size) => {
+                if (ws && ws.readyState === WebSocket.OPEN && isConnected) {
+                    ws.send(JSON.stringify({
+                        type: 'resize',
+                        cols: size.cols,
+                        rows: size.rows
+                    }));
+                }
+            });
+        }
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('terminal').style.display = 'none';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('terminal').style.display = 'block';
+        }
+
+        function showError(message) {
+            document.getElementById('error-text').textContent = message;
+            document.getElementById('error-message').style.display = 'block';
+            document.getElementById('terminal').style.display = 'none';
+            hideLoading();
+        }
+
+        function hideError() {
+            document.getElementById('error-message').style.display = 'none';
+        }
+
+        function updateStatus(text, connected) {
+            document.getElementById('status-text').textContent = text;
+            const indicator = document.getElementById('status-indicator');
+            
+            if (connected) {
+                indicator.classList.add('connected');
+            } else {
+                indicator.classList.remove('connected');
+            }
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (fitAddon) {
+                fitAddon.fit();
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.close();
+            }
+        });
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initTerminal);
+    </script>
+</body>
+</html>

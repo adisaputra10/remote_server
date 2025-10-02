@@ -5,19 +5,19 @@
         <div class="header-text">
           <h2>SSH Management</h2>
           <p class="page-description">
-            Manage SSH tunnels for agents. Configure which agents can provide SSH access to remote servers.
+            Manage SSH connections for virtual machines. Configure VM SSH access to remote servers.
           </p>
         </div>
-        <button class="add-tunnel-btn" @click="openAddTunnelModal">
+        <button class="add-vm-ssh-btn" @click="openAddTunnelModal">
           <i class="fas fa-plus"></i>
-          Add Tunnel
+          Add VM SSH
         </button>
       </div>
     </div>
 
     <div v-if="loading" class="loading-state">
       <i class="fas fa-spinner fa-spin"></i>
-      Loading tunnels...
+      Loading VM SSH connections...
     </div>
 
     <div v-else-if="tunnels && tunnels.length > 0" class="table-wrapper">
@@ -25,8 +25,8 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th>TUNNEL ID</th>
-              <th>TUNNEL NAME</th>
+              <th>VM ID</th>
+              <th>VM NAME</th>
               <th>SSH HOST</th>
               <th>SSH PORT</th>
               <th>SSH USERNAME</th>
@@ -82,7 +82,7 @@
 
     <div v-else class="empty-state">
       <i class="fas fa-server"></i>
-      No tunnels available
+      No VM SSH connections available
     </div>
 
     <Pagination
@@ -97,7 +97,7 @@
     <div v-if="showConfigModal" class="modal-overlay" @click="closeConfigModal">
       <div class="modal-content" @click.stop>
         <div class="modal-header">
-          <h3>Edit SSH Tunnel - {{ selectedTunnel?.name }}</h3>
+          <h3>Edit VM SSH - {{ selectedTunnel?.name }}</h3>
           <button class="close-btn" @click="closeConfigModal">
             <i class="fas fa-times"></i>
           </button>
@@ -136,23 +136,33 @@
               required>
           </div>
           
+          <div class="form-group">
+            <label for="ssh_password">SSH Password:</label>
+            <input 
+              v-model="sshConfig.password" 
+              type="password" 
+              id="ssh_password" 
+              placeholder="Enter SSH password" 
+              required>
+          </div>
+          
           <div class="form-actions">
             <button type="button" class="btn btn-secondary" @click="closeConfigModal">
               Cancel
             </button>
             <button type="submit" class="btn btn-primary">
-              Update Tunnel
+              Update VM SSH
             </button>
           </div>
         </form>
       </div>
     </div>
 
-    <!-- Add Tunnel Modal -->
+    <!-- Add VM SSH Modal -->
     <div v-if="showAddTunnelModal" class="modal-overlay" @click="closeAddTunnelModal">
       <div class="modal-content" @click.stop>
         <div class="modal-header">
-          <h3>Add New SSH Tunnel</h3>
+          <h3>Add New VM SSH</h3>
           <button class="close-btn" @click="closeAddTunnelModal">
             <i class="fas fa-times"></i>
           </button>
@@ -160,7 +170,7 @@
         
         <form @submit.prevent="addNewTunnel" class="modal-form">
           <div class="form-group">
-            <label for="tunnel_name">Tunnel Name:</label>
+            <label for="tunnel_name">VM Name:</label>
             <input 
               v-model="newTunnel.name" 
               type="text" 
@@ -202,11 +212,21 @@
           </div>
           
           <div class="form-group">
+            <label for="tunnel_password">SSH Password:</label>
+            <input 
+              v-model="newTunnel.password" 
+              type="password" 
+              id="tunnel_password" 
+              placeholder="Enter SSH password" 
+              required>
+          </div>
+          
+          <div class="form-group">
             <label for="tunnel_description">Description (Optional):</label>
             <textarea 
               v-model="newTunnel.description" 
               id="tunnel_description" 
-              placeholder="Description of this SSH tunnel..."
+              placeholder="Description of this VM SSH connection..."
               rows="3">
             </textarea>
           </div>
@@ -216,7 +236,7 @@
               Cancel
             </button>
             <button type="submit" class="btn btn-primary">
-              Add Tunnel
+              Add VM SSH
             </button>
           </div>
         </form>
@@ -344,7 +364,8 @@ export default {
     const sshConfig = ref({
       host: '',
       port: 22,
-      username: 'root'
+      username: 'root',
+      password: ''
     })
 
     // Add tunnel modal states
@@ -354,6 +375,7 @@ export default {
       host: '',
       port: 22,
       username: 'root',
+      password: '',
       description: ''
     })
 
@@ -374,46 +396,35 @@ export default {
       try {
         loading.value = true
         
-        // Try to load tunnels from API, fallback to mock data if API doesn't exist
-        let response
-        try {
-          response = await apiService.getTunnels()
-        } catch (apiError) {
-          // Fallback to mock data if API doesn't exist
-          console.warn('getTunnels API not available, using mock data:', apiError)
-          response = {
-            data: [
-              {
-                id: 'tunnel1',
-                name: 'Production Server',
-                host: '192.168.1.100',
-                port: 22,
-                username: 'root',
-                status: 'CONNECTED',
-                created_at: '2023-09-01T10:00:00Z'
-              },
-              {
-                id: 'tunnel2',
-                name: 'Development Server',
-                host: '192.168.1.101',
-                port: 22,
-                username: 'ubuntu',
-                status: 'DISCONNECTED',
-                created_at: '2023-09-02T14:30:00Z'
-              }
-            ]
-          }
+        // Load tunnels from database API
+        const response = await apiService.getTunnels()
+        
+        console.log('API Response:', response)
+        console.log('Response data:', response.data)
+        
+        // Handle different response formats
+        let tunnelsData = []
+        if (response.data && Array.isArray(response.data.data)) {
+          // Backend sends { data: [...] }
+          tunnelsData = response.data.data
+        } else if (response.data && Array.isArray(response.data)) {
+          // Backend sends [...] directly
+          tunnelsData = response.data
+        } else {
+          console.error('Unexpected response format:', response.data)
+          tunnelsData = []
         }
         
-        tunnels.value = response.data.map(tunnel => ({
+        tunnels.value = tunnelsData.map(tunnel => ({
           ...tunnel,
           status: tunnel.status || 'DISCONNECTED',
-          ssh_enabled: tunnel.ssh_enabled || false,
+          ssh_enabled: tunnel.ssh_enabled !== false, // default to true
           created_at: tunnel.created_at || new Date().toISOString()
         }))
       } catch (err) {
-        error.value = 'Failed to load tunnels'
+        error.value = 'Failed to load tunnels from database'
         console.error('Error loading tunnels:', err)
+        console.error('Error details:', err.response?.data)
         // Set empty array to prevent length errors
         tunnels.value = []
       } finally {
@@ -427,19 +438,26 @@ export default {
     }
 
     const openSSHWeb = (tunnel) => {
-      // Navigate to SSH web terminal route with tunnel parameters
+      // Create secure connection data for auto-login
+      const connectionData = {
+        host: tunnel.host,
+        port: tunnel.port,
+        username: tunnel.username,
+        password: tunnel.password || '',
+        tunnel_id: tunnel.id
+      };
+      
+      // Store connection data in session storage for security
+      sessionStorage.setItem('ssh_connection_data', JSON.stringify(connectionData));
+      
+      // Open SSH Web Terminal using router path
       const routeData = router.resolve({
         path: '/ssh-terminal',
-        query: {
-          host: tunnel.host,
-          port: tunnel.port,
-          username: tunnel.username,
-          tunnel_id: tunnel.id
-        }
-      })
+        query: {} // No sensitive data in URL
+      });
       
-      // Open SSH web terminal in a new tab
-      window.open(routeData.href, '_blank')
+      // Open in new tab
+      window.open(routeData.href, '_blank');
     }
 
     const closeScriptModal = () => {
@@ -534,7 +552,8 @@ export default {
       sshConfig.value = {
         host: tunnel.host || '',
         port: tunnel.port || 22,
-        username: tunnel.username || 'root'
+        username: tunnel.username || 'root',
+        password: tunnel.password || ''
       }
       showConfigModal.value = true
     }
@@ -542,24 +561,12 @@ export default {
     const deleteTunnel = async (tunnel) => {
       if (confirm(`Are you sure you want to delete tunnel "${tunnel.name}"?`)) {
         try {
-          // Try API call, fallback to mock behavior
-          try {
-            await apiService.deleteTunnel(tunnel.id)
-          } catch (apiError) {
-            console.warn('deleteTunnel API not available, using mock behavior:', apiError)
-            // Mock successful deletion by removing from local array
-            const index = tunnels.value.findIndex(t => t.id === tunnel.id)
-            if (index > -1) {
-              tunnels.value.splice(index, 1)
-            }
-            alert('SSH Tunnel deleted successfully!')
-            return
-          }
+          await apiService.deleteTunnel(tunnel.id)
           await loadTunnels()
-          alert('SSH Tunnel deleted successfully!')
+          alert('VM SSH connection deleted successfully!')
         } catch (err) {
           console.error('Error deleting tunnel:', err)
-          alert('Failed to delete SSH tunnel')
+          alert('Failed to delete VM SSH connection')
         }
       }
     }
@@ -569,23 +576,15 @@ export default {
         const updateData = {
           host: sshConfig.value.host,
           port: parseInt(sshConfig.value.port),
-          username: sshConfig.value.username
+          username: sshConfig.value.username,
+          password: sshConfig.value.password
         }
 
-        // Try API call, fallback to mock behavior
-        try {
-          await apiService.updateTunnel(selectedTunnel.value.id, updateData)
-        } catch (apiError) {
-          console.warn('updateTunnel API not available, using mock behavior:', apiError)
-        }
-        
-        // Update local data
-        selectedTunnel.value.host = updateData.host
-        selectedTunnel.value.port = updateData.port
-        selectedTunnel.value.username = updateData.username
+        await apiService.updateTunnel(selectedTunnel.value.id, updateData)
+        await loadTunnels() // Refresh data from database
         
         closeConfigModal()
-        alert('SSH Tunnel updated successfully!')
+        alert('VM SSH connection updated successfully!')
       } catch (err) {
         console.error('Error saving SSH config:', err)
         alert('Failed to save SSH configuration')
@@ -598,7 +597,8 @@ export default {
       sshConfig.value = {
         host: '',
         port: 22,
-        username: 'root'
+        username: 'root',
+        password: ''
       }
     }
 
@@ -613,6 +613,7 @@ export default {
         host: '',
         port: 22,
         username: 'root',
+        password: '',
         description: ''
       }
     }
@@ -626,29 +627,19 @@ export default {
           host: newTunnel.value.host,
           port: parseInt(newTunnel.value.port),
           username: newTunnel.value.username,
+          password: newTunnel.value.password,
           description: newTunnel.value.description,
-          status: 'DISCONNECTED',
-          created_at: new Date().toISOString()
+          status: 'DISCONNECTED'
         }
 
-        // Try API call, fallback to mock behavior
-        try {
-          await apiService.createTunnel(tunnelData)
-          // Reload tunnels after successful creation
-          await loadTunnels()
-        } catch (apiError) {
-          console.warn('createTunnel API not available, using mock behavior:', apiError)
-          // Mock successful creation by adding to local array
-          tunnels.value.push(tunnelData)
-        }
+        await apiService.createTunnel(tunnelData)
+        await loadTunnels() // Reload tunnels from database
         
         closeAddTunnelModal()
-        
-        // Show success message
-        alert('SSH Tunnel created successfully!')
+        alert('VM SSH connection created successfully!')
       } catch (err) {
         console.error('Error creating SSH tunnel:', err)
-        alert('Failed to create SSH tunnel')
+        alert('Failed to create VM SSH connection')
       }
     }
 
@@ -740,7 +731,7 @@ export default {
   font-size: 14px;
 }
 
-.add-tunnel-btn {
+.add-vm-ssh-btn {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -756,13 +747,13 @@ export default {
   white-space: nowrap;
 }
 
-.add-tunnel-btn:hover {
+.add-vm-ssh-btn:hover {
   background: var(--primary-dark);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
 }
 
-.add-tunnel-btn i {
+.add-vm-ssh-btn i {
   font-size: 12px;
 }
 
@@ -1328,7 +1319,7 @@ export default {
     text-align: center;
   }
   
-  .add-tunnel-btn {
+  .add-vm-ssh-btn {
     width: 100%;
     justify-content: center;
   }
